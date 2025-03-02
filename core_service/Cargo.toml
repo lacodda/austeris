@@ -1,0 +1,15 @@
+[package]
+name = "core_service"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+actix-web = "4.4"
+serde = { version = "1.0", features = ["derive"] }
+tokio = { version = "1.0", features = ["full"] }
+sqlx = { version = "0.8.3", features = ["postgres", "runtime-tokio-native-tls", "time", "chrono"] }
+dotenv = "0.15"
+utoipa = { version = "5.3.1", features = ["actix_extras"] }
+utoipa-swagger-ui = { version = "9", features = ["actix-web", "vendored"] }
+reqwest = { version = "0.12", features = ["blocking"] }
+chrono = { version = "0.4", features = ["serde"] }

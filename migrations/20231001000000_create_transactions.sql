@@ -1,0 +1,8 @@
+CREATE TABLE transactions (
+    id SERIAL PRIMARY KEY,
+    asset VARCHAR(10) NOT NULL,
+    amount FLOAT NOT NULL,
+    price FLOAT NOT NULL,
+    type VARCHAR(4) NOT NULL CHECK (type IN ('BUY', 'SELL')),
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
