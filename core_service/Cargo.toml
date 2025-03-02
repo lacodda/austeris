@@ -6,10 +6,14 @@ edition = "2021"
 [dependencies]
 actix-web = "4.4"
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 tokio = { version = "1.0", features = ["full"] }
-sqlx = { version = "0.8.3", features = ["postgres", "runtime-tokio-native-tls", "time", "chrono"] }
+sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-native-tls", "time", "chrono", "bigdecimal", "uuid"] }
 dotenv = "0.15"
 utoipa = { version = "5.3.1", features = ["actix_extras"] }
 utoipa-swagger-ui = { version = "9", features = ["actix-web", "vendored"] }
-reqwest = { version = "0.12", features = ["blocking"] }
+reqwest = { version = "0.12", features = ["blocking", "json"] }
 chrono = { version = "0.4", features = ["serde"] }
+time = { version = "0.3", features = ["serde"] }
+uuid = { version = "1.15", features = ["v4", "serde"] }
+validator = { version = "0.20", features = ["derive"] }
