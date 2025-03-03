@@ -5,6 +5,7 @@ use utoipa_swagger_ui::SwaggerUi;
 mod db;
 mod models;
 mod routes;
+mod services;
 
 use db::connect;
 use routes::{asset, transaction, wallet};
@@ -14,6 +15,7 @@ use routes::{asset, transaction, wallet};
     paths(
         asset::get_assets,
         asset::create_asset,
+        asset::update_assets_handler,
         wallet::get_wallets,
         wallet::create_wallet,
         transaction::get_transactions,

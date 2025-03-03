@@ -35,7 +35,7 @@ async fn get_wallets(pool: web::Data<PgPool>) -> impl Responder {
                     name: record.name,
                     wallet_type: record.wallet_type,
                     address: record.address,
-                    created_at: record.created_at.to_string(), // Преобразуем в строку
+                    created_at: record.created_at.to_string(),
                 })
                 .collect::<Vec<_>>();
             HttpResponse::Ok().json(wallets)

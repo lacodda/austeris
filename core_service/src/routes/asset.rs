@@ -1,4 +1,5 @@
 use crate::models::asset::{AssetRecord, AssetResponse, CreateAssetRequest};
+use crate::services::cmc::update_assets;
 use actix_web::{web, HttpResponse, Responder};
 use sqlx::PgPool;
 
@@ -6,7 +7,8 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/assets")
             .route("", web::get().to(get_assets))
-            .route("", web::post().to(create_asset)),
+            .route("", web::post().to(create_asset))
+            .route("/update", web::post().to(update_assets_handler)),
     );
 }
 
@@ -84,6 +86,21 @@ async fn create_asset(
             decimals: record.decimals,
             created_at: record.created_at.to_string(),
         }),
+        Err(e) => HttpResponse::InternalServerError().json(e.to_string()),
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/assets/update",
+    responses(
+        (status = 200, description = "Assets updated"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+async fn update_assets_handler(pool: web::Data<PgPool>) -> HttpResponse {
+    match update_assets(&pool).await {
+        Ok(_) => HttpResponse::Ok().json("Assets updated successfully"),
         Err(e) => HttpResponse::InternalServerError().json(e.to_string()),
     }
 }

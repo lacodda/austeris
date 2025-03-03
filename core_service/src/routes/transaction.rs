@@ -55,7 +55,7 @@ async fn get_transactions(pool: web::Data<PgPool>) -> impl Responder {
                     transaction_type: record.transaction_type,
                     fee: record.fee,
                     notes: record.notes,
-                    created_at: record.created_at.to_string(), // Преобразуем в строку
+                    created_at: record.created_at.to_string(),
                 })
                 .collect::<Vec<_>>();
             HttpResponse::Ok().json(transactions)
