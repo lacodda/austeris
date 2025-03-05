@@ -1,8 +1,10 @@
 use crate::models::transaction::{
-    CreateTransactionRequest, TransactionRecord, TransactionResponse,
+    CreateTransactionRequest, FilterParams, TransactionRecord, TransactionResponse,
 };
 use actix_web::{web, HttpResponse, Responder};
+use sqlx::types::time::PrimitiveDateTime;
 use sqlx::PgPool;
+use time::format_description::well_known::Iso8601;
 
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(
@@ -18,11 +20,20 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     responses(
         (status = 200, description = "List of transactions", body = Vec<TransactionResponse>),
         (status = 500, description = "Internal server error")
+    ),
+    params(
+        ("asset_id" = Option<i32>, Query, description = "Filter by asset ID"),
+        ("wallet_id" = Option<i32>, Query, description = "Filter by wallet ID"),
+        ("start_date" = Option<String>, Query, description = "Filter by start date (e.g., '2024-01-01T00:00:00')"),
+        ("limit" = Option<i64>, Query, description = "Number of records to return"),
+        ("offset" = Option<i64>, Query, description = "Offset for pagination")
     )
 )]
-async fn get_transactions(pool: web::Data<PgPool>) -> impl Responder {
-    let transactions = sqlx::query_as!(
-        TransactionRecord,
+async fn get_transactions(
+    pool: web::Data<PgPool>,
+    query: web::Query<FilterParams>,
+) -> impl Responder {
+    let mut sql = String::from(
         r#"
         SELECT 
             t.id, 
@@ -37,10 +48,35 @@ async fn get_transactions(pool: web::Data<PgPool>) -> impl Responder {
         FROM transactions t
         JOIN assets a ON t.asset_id = a.id
         JOIN wallets w ON t.wallet_id = w.id
-        "#
-    )
-    .fetch_all(pool.get_ref())
-    .await;
+        WHERE 1=1
+        "#,
+    );
+
+    if let Some(asset_id) = query.asset_id {
+        sql.push_str(&format!(" AND t.asset_id = {}", asset_id));
+    }
+    if let Some(wallet_id) = query.wallet_id {
+        sql.push_str(&format!(" AND t.wallet_id = {}", wallet_id));
+    }
+    if let Some(start_date) = &query.start_date {
+        match PrimitiveDateTime::parse(start_date, &Iso8601::DEFAULT) {
+            Ok(parsed_date) => sql.push_str(&format!(" AND t.created_at >= '{}'", parsed_date)),
+            Err(_) => {
+                return HttpResponse::BadRequest().json(
+                    "Invalid start_date format, expected ISO 8601 (e.g., '2024-01-01T00:00:00')",
+                )
+            }
+        }
+    }
+    sql.push_str(&format!(
+        " LIMIT {} OFFSET {}",
+        query.limit.unwrap_or(10),
+        query.offset.unwrap_or(0)
+    ));
+
+    let transactions = sqlx::query_as::<_, TransactionRecord>(&sql)
+        .fetch_all(pool.get_ref())
+        .await;
 
     match transactions {
         Ok(records) => {
