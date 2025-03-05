@@ -18,15 +18,16 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     get,
     path = "/transactions",
     responses(
-        (status = 200, description = "List of transactions", body = Vec<TransactionResponse>),
-        (status = 500, description = "Internal server error")
+        (status = 200, description = "Successfully retrieved list of transactions", body = Vec<TransactionResponse>, example = json!([{"id": 1, "asset": "BTC", "wallet": "Binance", "amount": 0.5, "price": 50000.0, "transaction_type": "BUY", "fee": 0.001, "notes": "First trade", "created_at": "2024-01-01T00:00:00"}])),
+        (status = 400, description = "Invalid start_date format", body = String, example = json!("Invalid start_date format, expected ISO 8601 (e.g., '2024-01-01T00:00:00')")),
+        (status = 500, description = "Internal server error", body = String, example = json!("Database connection failed"))
     ),
     params(
-        ("asset_id" = Option<i32>, Query, description = "Filter by asset ID"),
-        ("wallet_id" = Option<i32>, Query, description = "Filter by wallet ID"),
-        ("start_date" = Option<String>, Query, description = "Filter by start date (e.g., '2024-01-01T00:00:00')"),
-        ("limit" = Option<i64>, Query, description = "Number of records to return"),
-        ("offset" = Option<i64>, Query, description = "Offset for pagination")
+        ("asset_id" = Option<i32>, Query, description = "Filter transactions by asset ID (e.g., 1 for BTC)"),
+        ("wallet_id" = Option<i32>, Query, description = "Filter transactions by wallet ID (e.g., 1 for Binance)"),
+        ("start_date" = Option<String>, Query, description = "Filter transactions starting from this date in ISO 8601 format (e.g., '2024-01-01T00:00:00')"),
+        ("limit" = Option<i64>, Query, description = "Maximum number of transactions to return (default: 10)"),
+        ("offset" = Option<i64>, Query, description = "Number of transactions to skip for pagination (default: 0)")
     )
 )]
 async fn get_transactions(
@@ -103,10 +104,15 @@ async fn get_transactions(
 #[utoipa::path(
     post,
     path = "/transactions",
-    request_body = CreateTransactionRequest,
+    request_body(
+        content = CreateTransactionRequest,
+        description = "Details of the transaction to create",
+        example = json!({"asset_id": 1, "wallet_id": 1, "amount": 0.5, "price": 50000.0, "transaction_type": "BUY", "fee": 0.001, "notes": "First trade"})
+    ),
     responses(
-        (status = 200, description = "Transaction created", body = TransactionResponse),
-        (status = 500, description = "Internal server error")
+        (status = 200, description = "Transaction created successfully", body = i32, example = json!(1)),
+        (status = 400, description = "Invalid request data (e.g., validation failed)", body = String, example = json!("Validation error: amount must be >= 0")),
+        (status = 500, description = "Internal server error", body = String, example = json!("Failed to insert transaction into database"))
     )
 )]
 async fn create_transaction(
