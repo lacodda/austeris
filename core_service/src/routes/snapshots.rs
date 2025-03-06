@@ -1,6 +1,6 @@
 use crate::dto::snapshot::{SnapshotAssetDto, SnapshotDiffDto, SnapshotDto};
 use crate::models::snapshot::SnapshotDb;
-use crate::repository::transaction::TransactionRepository;
+use crate::services::portfolio::PortfolioService;
 use actix_web::{web, HttpResponse, Responder};
 use anyhow::Result;
 use log::error;
@@ -25,43 +25,13 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         (status = 500, description = "Internal server error (e.g., database failure)", body = String, example = json!("Failed to save snapshot to database"))
     )
 )]
-async fn create_snapshot(pool: web::Data<PgPool>) -> impl Responder {
+async fn create_snapshot(
+    pool: web::Data<PgPool>,
+    portfolio: web::Data<PortfolioService>,
+) -> impl Responder {
     let result: Result<SnapshotDto> = (|| async {
-        // Use the repository to fetch all transactions
-        let repo = TransactionRepository::new(pool.get_ref());
-        let transactions = repo.get_all_transactions().await?;
-
-        // Calculate current asset holdings from transactions
-        let mut asset_amounts: HashMap<String, (f64, String)> = HashMap::new();
-        for record in transactions {
-            let (amount, cmc_id) = asset_amounts
-                .entry(record.asset.clone())
-                .or_insert((0.0, String::new()));
-            if *cmc_id == String::new() {
-                let asset_cmc_id =
-                    sqlx::query!("SELECT cmc_id FROM assets WHERE symbol = $1", record.asset)
-                        .fetch_one(pool.get_ref())
-                        .await?
-                        .cmc_id;
-                *cmc_id = asset_cmc_id;
-            }
-            if record.transaction_type == "BUY" {
-                *amount += record.amount;
-            } else if record.transaction_type == "SELL" {
-                *amount -= record.amount;
-            }
-        }
-
-        // Filter out assets with zero or negative amounts and map to DTO
-        let snapshot_assets: Vec<SnapshotAssetDto> = asset_amounts
-            .into_iter()
-            .filter(|(_, (amount, _))| *amount > 0.0)
-            .map(|(symbol, (amount, cmc_id))| SnapshotAssetDto {
-                symbol,
-                amount,
-                cmc_id,
-            })
-            .collect();
+        // Get current asset snapshot from PortfolioService
+        let snapshot_assets = portfolio.get_current_snapshot().await?;
 
         // Save the snapshot to the database
         let record = sqlx::query_as::<_, SnapshotDb>(
@@ -102,7 +72,10 @@ async fn create_snapshot(pool: web::Data<PgPool>) -> impl Responder {
         (status = 500, description = "Internal server error (e.g., database failure)", body = String, example = json!("Failed to fetch snapshots from database"))
     )
 )]
-async fn get_snapshots(pool: web::Data<PgPool>) -> impl Responder {
+async fn get_snapshots(
+    pool: web::Data<PgPool>,
+    portfolio: web::Data<PortfolioService>,
+) -> impl Responder {
     let result: Result<Vec<SnapshotDto>> = (|| async {
         // Fetch all snapshots from the database
         let snapshots = sqlx::query_as::<_, SnapshotDb>(
@@ -115,30 +88,8 @@ async fn get_snapshots(pool: web::Data<PgPool>) -> impl Responder {
         .fetch_all(pool.get_ref())
         .await?;
 
-        // Use the repository to fetch all transactions
-        let repo = TransactionRepository::new(pool.get_ref());
-        let transactions = repo.get_all_transactions().await?;
-
-        // Calculate current asset holdings from transactions
-        let mut current_assets: HashMap<String, (f64, String)> = HashMap::new();
-        for record in transactions {
-            let (amount, cmc_id) = current_assets
-                .entry(record.asset.clone())
-                .or_insert((0.0, String::new()));
-            if *cmc_id == String::new() {
-                let asset_cmc_id =
-                    sqlx::query!("SELECT cmc_id FROM assets WHERE symbol = $1", record.asset)
-                        .fetch_one(pool.get_ref())
-                        .await?
-                        .cmc_id;
-                *cmc_id = asset_cmc_id;
-            }
-            if record.transaction_type == "BUY" {
-                *amount += record.amount;
-            } else if record.transaction_type == "SELL" {
-                *amount -= record.amount;
-            }
-        }
+        // Get current asset holdings from PortfolioService
+        let current_assets = portfolio.get_current_assets().await?;
 
         // Map snapshots to DTO with calculated differences
         let snapshots_with_diff: Vec<SnapshotDto> = snapshots

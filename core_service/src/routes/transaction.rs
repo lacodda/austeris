@@ -1,7 +1,7 @@
 use crate::dto::transaction::{CreateTransactionDto, TransactionDto};
 use crate::models::transaction::FilterParams;
 use crate::repository::transaction::TransactionRepository;
-use crate::services::cmc::CmcService;
+use crate::services::portfolio::PortfolioService;
 use actix_web::{web, HttpResponse, Responder};
 use anyhow::Result;
 use log::error;
@@ -67,7 +67,7 @@ async fn get_transactions(
         Ok(transactions) => HttpResponse::Ok().json(transactions),
         Err(e) => {
             error!("Failed to get transactions: {}", e);
-                                                         // Handle specific error for invalid start_date format
+            // Handle specific error for invalid start_date format
             if e.to_string().contains("Invalid start_date format") {
                 HttpResponse::BadRequest().json(
                     "Invalid start_date format, expected ISO 8601 (e.g., '2024-01-01T00:00:00')",
@@ -105,7 +105,7 @@ async fn create_transaction(
             INSERT INTO transactions 
                 (asset_id, wallet_id, amount, price, type, fee, notes)
             VALUES ($1, $2, $3, $4, $5, $6, $7)
-            RETURNING id, created_at
+            RETURNING id
             "#,
             transaction.asset_id,
             transaction.wallet_id,
@@ -140,43 +140,8 @@ async fn create_transaction(
         (status = 503, description = "Price data unavailable for some assets", body = String, example = json!("Price unavailable for symbol BTC"))
     )
 )]
-async fn get_portfolio_value(
-    pool: web::Data<PgPool>,
-    cmc: web::Data<CmcService>,
-) -> impl Responder {
-    let result: Result<f64> = (|| async {
-        // Use the repository to fetch all transactions
-        let repo = TransactionRepository::new(pool.get_ref());
-        let transactions = repo.get_all_transactions().await?;
-
-        let mut total_value = 0.0;
-        let mut asset_amounts: std::collections::HashMap<String, f64> =
-            std::collections::HashMap::new();
-
-        // Calculate the net amount of each asset
-        for record in transactions {
-            let amount = asset_amounts.entry(record.asset.clone()).or_insert(0.0);
-            if record.transaction_type == "BUY" {
-                *amount += record.amount;
-            } else if record.transaction_type == "SELL" {
-                *amount -= record.amount;
-            }
-        }
-
-        // Fetch current prices from CoinMarketCap and compute total value
-        for (symbol, amount) in asset_amounts {
-            if amount > 0.0 {
-                let quote = cmc.get_quote(&symbol).await?;
-                if let Some(price) = quote.price {
-                    total_value += amount * price;
-                }
-            }
-        }
-
-        Ok(total_value)
-    })()
-    .await;
-
+async fn get_portfolio_value(portfolio: web::Data<PortfolioService>) -> impl Responder {
+    let result: Result<f64> = portfolio.get_portfolio_value().await;
     match result {
         Ok(total_value) => {
             HttpResponse::Ok().json(serde_json::json!({"total_value_usd": total_value}))

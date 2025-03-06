@@ -68,6 +68,11 @@ async fn main() -> Result<()> {
 
     // Initialize CoinMarketCap service
     let cmc_service = services::cmc::CmcService::new();
+    // Initialize Portfolio service
+    let portfolio_service = services::portfolio::PortfolioService::new(
+        web::Data::new(pool.clone()),
+        web::Data::new(cmc_service.clone()),
+    );
 
     // Configure and start the HTTP server
     HttpServer::new(move || {
@@ -75,6 +80,7 @@ async fn main() -> Result<()> {
             // Share database pool and CMC service across requests
             .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::new(cmc_service.clone()))
+            .app_data(web::Data::new(portfolio_service.clone()))
             // Set up Swagger UI endpoint
             .service(
                 SwaggerUi::new("/swagger-ui/{_:.*}")
