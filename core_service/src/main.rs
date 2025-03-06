@@ -9,7 +9,7 @@ mod routes;
 mod services;
 
 use db::connect;
-use routes::{asset, transaction, wallet};
+use routes::{asset, snapshots, transaction, wallet};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -21,7 +21,8 @@ use routes::{asset, transaction, wallet};
         wallet::create_wallet,
         transaction::get_transactions,
         transaction::create_transaction,
-        transaction::get_portfolio_value
+        transaction::get_portfolio_value,
+        snapshots::create_snapshot
     ),
     components(
         schemas(
@@ -31,12 +32,15 @@ use routes::{asset, transaction, wallet};
             models::wallet::CreateWalletRequest,
             models::transaction::TransactionResponse,
             models::transaction::CreateTransactionRequest,
+            models::snapshot::PortfolioSnapshot,
+            models::snapshot::SnapshotAsset,
         )
     ),
     tags(
         (name = "Assets", description = "Asset management"),
         (name = "Wallets", description = "Wallet management"),
-        (name = "Transactions", description = "Transaction management")
+        (name = "Transactions", description = "Transaction management"),
+        (name = "Snapshots", description = "Portfolio snapshot management")
     )
 )]
 struct ApiDoc;
@@ -57,6 +61,7 @@ async fn main() -> Result<()> {
             .configure(asset::configure)
             .configure(wallet::configure)
             .configure(transaction::configure)
+            .configure(snapshots::configure) // Добавляем
     })
     .bind("127.0.0.1:9000")?
     .run()
