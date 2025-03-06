@@ -1,6 +1,5 @@
 use crate::models::cmc::{CmcListing, CmcQuote, CmcQuoteResponse, CmcResponse};
 use anyhow::{anyhow, Result};
-use reqwest::Error;
 use sqlx::PgPool;
 use std::env;
 
@@ -19,7 +18,7 @@ impl CmcService {
         }
     }
 
-    pub async fn fetch_cmc_listings(&self) -> Result<Vec<CmcListing>, Error> {
+    pub async fn fetch_cmc_listings(&self) -> Result<Vec<CmcListing>> {
         let response = self
             .client
             .get("https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest")
@@ -32,7 +31,7 @@ impl CmcService {
         Ok(cmc_response.data)
     }
 
-    pub async fn get_quote(&self, symbol: &str) -> Result<CmcQuote, anyhow::Error> {
+    pub async fn get_quote(&self, symbol: &str) -> Result<CmcQuote> {
         let response = self
             .client
             .get("https://pro-api.coinmarketcap.com/v2/cryptocurrency/quotes/latest")
@@ -53,14 +52,9 @@ impl CmcService {
     }
 }
 
-pub async fn update_assets(pool: &PgPool) -> Result<(), sqlx::Error> {
+pub async fn update_assets(pool: &PgPool) -> Result<()> {
     let service = CmcService::new();
-    let listings = service.fetch_cmc_listings().await.map_err(|e| {
-        sqlx::Error::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("Failed to fetch listings: {}", e),
-        ))
-    })?;
+    let listings = service.fetch_cmc_listings().await?;
 
     for listing in listings {
         let cmc_id = listing.id.to_string();

@@ -1,4 +1,5 @@
 use actix_web::{web, App, HttpServer};
+use anyhow::Result;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -41,8 +42,8 @@ use routes::{asset, transaction, wallet};
 struct ApiDoc;
 
 #[actix_web::main]
-async fn main() -> std::io::Result<()> {
-    let pool = connect().await.expect("Failed to connect to database");
+async fn main() -> Result<()> {
+    let pool = connect().await?;
     let cmc_service = services::cmc::CmcService::new();
 
     HttpServer::new(move || {
@@ -59,5 +60,6 @@ async fn main() -> std::io::Result<()> {
     })
     .bind("127.0.0.1:9000")?
     .run()
-    .await
+    .await?;
+    Ok(())
 }
