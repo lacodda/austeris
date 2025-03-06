@@ -1,11 +1,10 @@
 use crate::models::snapshot::{PortfolioSnapshot, SnapshotAsset, SnapshotDiff, SnapshotRecord};
-use crate::models::transaction::TransactionRecord;
+use crate::repository::transaction::TransactionRepository;
 use actix_web::{web, HttpResponse, Responder};
 use anyhow::Result;
 use sqlx::PgPool;
 use std::collections::HashMap;
 
-// Configures routes for the /snapshots scope
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/snapshots")
@@ -25,28 +24,10 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 )]
 async fn create_snapshot(pool: web::Data<PgPool>) -> impl Responder {
     let result: Result<PortfolioSnapshot> = (|| async {
-        // Fetch all transactions to compute the current portfolio state
-        let transactions = sqlx::query_as::<_, TransactionRecord>(
-            r#"
-            SELECT 
-                t.id, 
-                a.symbol as asset, 
-                w.name as wallet,
-                t.amount,
-                t.price,
-                t.type as transaction_type,
-                t.fee,
-                t.notes,
-                t.created_at
-            FROM transactions t
-            JOIN assets a ON t.asset_id = a.id
-            JOIN wallets w ON t.wallet_id = w.id
-            "#,
-        )
-        .fetch_all(pool.get_ref())
-        .await?;
+        // Use the repository to fetch all transactions
+        let repo = TransactionRepository::new(pool.get_ref());
+        let transactions = repo.get_all_transactions().await?;
 
-        // Calculate the current amount of each asset
         let mut asset_amounts: HashMap<String, (f64, String)> = HashMap::new();
         for record in transactions {
             let (amount, cmc_id) = asset_amounts
@@ -67,7 +48,6 @@ async fn create_snapshot(pool: web::Data<PgPool>) -> impl Responder {
             }
         }
 
-        // Create the snapshot assets list, excluding zero-amount assets
         let snapshot_assets: Vec<SnapshotAsset> = asset_amounts
             .into_iter()
             .filter(|(_, (amount, _))| *amount > 0.0)
@@ -78,7 +58,6 @@ async fn create_snapshot(pool: web::Data<PgPool>) -> impl Responder {
             })
             .collect();
 
-        // Save the snapshot to the database
         let record = sqlx::query_as::<_, SnapshotRecord>(
             r#"
             INSERT INTO portfolio_snapshots (assets)
@@ -94,7 +73,7 @@ async fn create_snapshot(pool: web::Data<PgPool>) -> impl Responder {
             id: record.id,
             created_at: record.created_at.to_string(),
             assets: snapshot_assets,
-            diff: None, // No diff on creation
+            diff: None,
         })
     })()
     .await;
@@ -116,7 +95,6 @@ async fn create_snapshot(pool: web::Data<PgPool>) -> impl Responder {
 )]
 async fn get_snapshots(pool: web::Data<PgPool>) -> impl Responder {
     let result: Result<Vec<PortfolioSnapshot>> = (|| async {
-        // Fetch all snapshots from the database, ordered by creation date
         let snapshots = sqlx::query_as::<_, SnapshotRecord>(
             r#"
             SELECT id, created_at, assets
@@ -127,28 +105,10 @@ async fn get_snapshots(pool: web::Data<PgPool>) -> impl Responder {
         .fetch_all(pool.get_ref())
         .await?;
 
-        // Fetch all transactions to compute the current portfolio state
-        let transactions = sqlx::query_as::<_, TransactionRecord>(
-            r#"
-            SELECT 
-                t.id, 
-                a.symbol as asset, 
-                w.name as wallet,
-                t.amount,
-                t.price,
-                t.type as transaction_type,
-                t.fee,
-                t.notes,
-                t.created_at
-            FROM transactions t
-            JOIN assets a ON t.asset_id = a.id
-            JOIN wallets w ON t.wallet_id = w.id
-            "#,
-        )
-        .fetch_all(pool.get_ref())
-        .await?;
+        // Use the repository to fetch all transactions
+        let repo = TransactionRepository::new(pool.get_ref());
+        let transactions = repo.get_all_transactions().await?;
 
-        // Calculate the current amount of each asset
         let mut current_assets: HashMap<String, (f64, String)> = HashMap::new();
         for record in transactions {
             let (amount, cmc_id) = current_assets
@@ -169,14 +129,12 @@ async fn get_snapshots(pool: web::Data<PgPool>) -> impl Responder {
             }
         }
 
-        // Transform snapshots and calculate differences
         let snapshots_with_diff: Vec<PortfolioSnapshot> = snapshots
             .into_iter()
             .map(|record| {
                 let snapshot_assets = record.assets.0.clone();
                 let mut diff_map: HashMap<String, SnapshotDiff> = HashMap::new();
 
-                // Calculate differences for assets in the snapshot
                 for asset in &snapshot_assets {
                     let current = current_assets
                         .get(&asset.symbol)
@@ -195,7 +153,6 @@ async fn get_snapshots(pool: web::Data<PgPool>) -> impl Responder {
                     }
                 }
 
-                // Check for assets added after the snapshot
                 for (symbol, (current_amount, cmc_id)) in &current_assets {
                     if *current_amount > 0.0 && !snapshot_assets.iter().any(|a| &a.symbol == symbol)
                     {

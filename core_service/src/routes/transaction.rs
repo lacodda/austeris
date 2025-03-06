@@ -1,12 +1,9 @@
-use crate::models::transaction::{
-    CreateTransactionRequest, FilterParams, TransactionRecord, TransactionResponse,
-};
+use crate::models::transaction::{CreateTransactionRequest, FilterParams, TransactionResponse};
+use crate::repository::transaction::TransactionRepository;
 use crate::services::cmc::CmcService;
 use actix_web::{web, HttpResponse, Responder};
 use anyhow::Result;
-use sqlx::types::time::PrimitiveDateTime;
 use sqlx::PgPool;
-use time::format_description::well_known::Iso8601;
 
 // Configures routes for the /transactions scope
 pub fn configure(cfg: &mut web::ServiceConfig) {
@@ -40,48 +37,9 @@ async fn get_transactions(
     query: web::Query<FilterParams>,
 ) -> impl Responder {
     let result: Result<Vec<TransactionResponse>> = (|| async {
-        // Build the base SQL query to fetch transactions
-        let mut sql = String::from(
-            r#"
-            SELECT 
-                t.id, 
-                a.symbol as asset, 
-                w.name as wallet,
-                t.amount,
-                t.price,
-                t.type as transaction_type,
-                t.fee,
-                t.notes,
-                t.created_at
-            FROM transactions t
-            JOIN assets a ON t.asset_id = a.id
-            JOIN wallets w ON t.wallet_id = w.id
-            WHERE 1=1
-            "#,
-        );
-
-        // Apply filters based on query parameters
-        if let Some(asset_id) = query.asset_id {
-            sql.push_str(&format!(" AND t.asset_id = {}", asset_id));
-        }
-        if let Some(wallet_id) = query.wallet_id {
-            sql.push_str(&format!(" AND t.wallet_id = {}", wallet_id));
-        }
-        if let Some(start_date) = &query.start_date {
-            let parsed_date = PrimitiveDateTime::parse(start_date, &Iso8601::DEFAULT)
-                .map_err(|_| anyhow::anyhow!("Invalid start_date format"))?;
-            sql.push_str(&format!(" AND t.created_at >= '{}'", parsed_date));
-        }
-        sql.push_str(&format!(
-            " LIMIT {} OFFSET {}",
-            query.limit.unwrap_or(10),
-            query.offset.unwrap_or(0)
-        ));
-
-        // Execute the query and fetch results
-        let transactions = sqlx::query_as::<_, TransactionRecord>(&sql)
-            .fetch_all(pool.get_ref())
-            .await?;
+        // Use the repository to fetch transactions
+        let repo = TransactionRepository::new(pool.get_ref());
+        let transactions = repo.get_transactions(query.into_inner()).await?;
 
         // Map database records to API response format
         let response = transactions
@@ -106,7 +64,6 @@ async fn get_transactions(
     match result {
         Ok(transactions) => HttpResponse::Ok().json(transactions),
         Err(e) => {
-            // Handle specific error for invalid start_date format
             if e.to_string().contains("Invalid start_date format") {
                 HttpResponse::BadRequest().json(
                     "Invalid start_date format, expected ISO 8601 (e.g., '2024-01-01T00:00:00')",
@@ -138,7 +95,6 @@ async fn create_transaction(
     transaction: web::Json<CreateTransactionRequest>,
 ) -> impl Responder {
     let result: Result<i32> = (|| async {
-        // Insert the transaction into the database and return its ID
         let record = sqlx::query!(
             r#"
             INSERT INTO transactions 
@@ -181,32 +137,14 @@ async fn get_portfolio_value(
     cmc: web::Data<CmcService>,
 ) -> impl Responder {
     let result: Result<f64> = (|| async {
-        // Fetch all transactions to compute the current portfolio
-        let transactions = sqlx::query_as::<_, TransactionRecord>(
-            r#"
-            SELECT 
-                t.id, 
-                a.symbol as asset, 
-                w.name as wallet,
-                t.amount,
-                t.price,
-                t.type as transaction_type,
-                t.fee,
-                t.notes,
-                t.created_at
-            FROM transactions t
-            JOIN assets a ON t.asset_id = a.id
-            JOIN wallets w ON t.wallet_id = w.id
-            "#,
-        )
-        .fetch_all(pool.get_ref())
-        .await?;
+        // Use the repository to fetch all transactions
+        let repo = TransactionRepository::new(pool.get_ref());
+        let transactions = repo.get_all_transactions().await?;
 
         let mut total_value = 0.0;
         let mut asset_amounts: std::collections::HashMap<String, f64> =
             std::collections::HashMap::new();
 
-        // Calculate the net amount of each asset
         for record in transactions {
             let amount = asset_amounts.entry(record.asset.clone()).or_insert(0.0);
             if record.transaction_type == "BUY" {
@@ -216,7 +154,6 @@ async fn get_portfolio_value(
             }
         }
 
-        // Fetch current prices from CoinMarketCap and compute total value
         for (symbol, amount) in asset_amounts {
             if amount > 0.0 {
                 let quote = cmc.get_quote(&symbol).await?;

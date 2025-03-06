@@ -6,6 +6,7 @@ use utoipa_swagger_ui::SwaggerUi;
 // Project modules
 mod db;
 mod models;
+mod repository;
 mod routes;
 mod services;
 
