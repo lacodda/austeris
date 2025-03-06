@@ -3,9 +3,11 @@ use crate::models::snapshot::SnapshotDb;
 use crate::repository::transaction::TransactionRepository;
 use actix_web::{web, HttpResponse, Responder};
 use anyhow::Result;
+use log::error;
 use sqlx::PgPool;
 use std::collections::HashMap;
 
+// Configures routes for the /snapshots scope
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/snapshots")
@@ -14,6 +16,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     );
 }
 
+// Handles POST /snapshots to create a new portfolio snapshot
 #[utoipa::path(
     post,
     path = "/snapshots",
@@ -24,9 +27,11 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 )]
 async fn create_snapshot(pool: web::Data<PgPool>) -> impl Responder {
     let result: Result<SnapshotDto> = (|| async {
+        // Use the repository to fetch all transactions
         let repo = TransactionRepository::new(pool.get_ref());
         let transactions = repo.get_all_transactions().await?;
 
+        // Calculate current asset holdings from transactions
         let mut asset_amounts: HashMap<String, (f64, String)> = HashMap::new();
         for record in transactions {
             let (amount, cmc_id) = asset_amounts
@@ -47,6 +52,7 @@ async fn create_snapshot(pool: web::Data<PgPool>) -> impl Responder {
             }
         }
 
+        // Filter out assets with zero or negative amounts and map to DTO
         let snapshot_assets: Vec<SnapshotAssetDto> = asset_amounts
             .into_iter()
             .filter(|(_, (amount, _))| *amount > 0.0)
@@ -57,6 +63,7 @@ async fn create_snapshot(pool: web::Data<PgPool>) -> impl Responder {
             })
             .collect();
 
+        // Save the snapshot to the database
         let record = sqlx::query_as::<_, SnapshotDb>(
             r#"
             INSERT INTO portfolio_snapshots (assets)
@@ -79,10 +86,14 @@ async fn create_snapshot(pool: web::Data<PgPool>) -> impl Responder {
 
     match result {
         Ok(snapshot) => HttpResponse::Ok().json(snapshot),
-        Err(e) => HttpResponse::InternalServerError().json(e.to_string()),
+        Err(e) => {
+            error!("Failed to create snapshot: {}", e);
+            HttpResponse::InternalServerError().json(e.to_string())
+        }
     }
 }
 
+// Handles GET /snapshots to retrieve all snapshots with differences
 #[utoipa::path(
     get,
     path = "/snapshots",
@@ -93,6 +104,7 @@ async fn create_snapshot(pool: web::Data<PgPool>) -> impl Responder {
 )]
 async fn get_snapshots(pool: web::Data<PgPool>) -> impl Responder {
     let result: Result<Vec<SnapshotDto>> = (|| async {
+        // Fetch all snapshots from the database
         let snapshots = sqlx::query_as::<_, SnapshotDb>(
             r#"
             SELECT id, created_at, assets
@@ -103,9 +115,11 @@ async fn get_snapshots(pool: web::Data<PgPool>) -> impl Responder {
         .fetch_all(pool.get_ref())
         .await?;
 
+        // Use the repository to fetch all transactions
         let repo = TransactionRepository::new(pool.get_ref());
         let transactions = repo.get_all_transactions().await?;
 
+        // Calculate current asset holdings from transactions
         let mut current_assets: HashMap<String, (f64, String)> = HashMap::new();
         for record in transactions {
             let (amount, cmc_id) = current_assets
@@ -126,6 +140,7 @@ async fn get_snapshots(pool: web::Data<PgPool>) -> impl Responder {
             }
         }
 
+        // Map snapshots to DTO with calculated differences
         let snapshots_with_diff: Vec<SnapshotDto> = snapshots
             .into_iter()
             .map(|record| {
@@ -142,6 +157,7 @@ async fn get_snapshots(pool: web::Data<PgPool>) -> impl Responder {
                     .collect();
                 let mut diff_map: HashMap<String, SnapshotDiffDto> = HashMap::new();
 
+                // Calculate differences between snapshot and current state
                 for asset in &snapshot_assets {
                     let current = current_assets
                         .get(&asset.symbol)
@@ -160,6 +176,7 @@ async fn get_snapshots(pool: web::Data<PgPool>) -> impl Responder {
                     }
                 }
 
+                // Include assets present now but not in the snapshot
                 for (symbol, (current_amount, cmc_id)) in &current_assets {
                     if *current_amount > 0.0 && !snapshot_assets.iter().any(|a| &a.symbol == symbol)
                     {
@@ -189,6 +206,9 @@ async fn get_snapshots(pool: web::Data<PgPool>) -> impl Responder {
 
     match result {
         Ok(snapshots) => HttpResponse::Ok().json(snapshots),
-        Err(e) => HttpResponse::InternalServerError().json(e.to_string()),
+        Err(e) => {
+            error!("Failed to get snapshots: {}", e);
+            HttpResponse::InternalServerError().json(e.to_string())
+        }
     }
 }

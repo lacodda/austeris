@@ -1,5 +1,7 @@
 use actix_web::{web, App, HttpServer};
 use anyhow::Result;
+use env_logger;
+use log::LevelFilter;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -54,6 +56,13 @@ struct ApiDoc;
 // Main entry point for the application
 #[actix_web::main]
 async fn main() -> Result<()> {
+    // Initialize logging with default level INFO
+    env_logger::Builder::new()
+        .filter_level(LevelFilter::Info)
+        .init();
+
+    log::info!("Starting application on 127.0.0.1:9000");
+
     // Establish database connection
     let pool = connect().await?;
 

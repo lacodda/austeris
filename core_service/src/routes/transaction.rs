@@ -4,8 +4,10 @@ use crate::repository::transaction::TransactionRepository;
 use crate::services::cmc::CmcService;
 use actix_web::{web, HttpResponse, Responder};
 use anyhow::Result;
+use log::error;
 use sqlx::PgPool;
 
+// Configures routes for the /transactions scope
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/transactions")
@@ -15,6 +17,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     );
 }
 
+// Handles GET /transactions to retrieve filtered transactions
 #[utoipa::path(
     get,
     path = "/transactions",
@@ -36,9 +39,11 @@ async fn get_transactions(
     query: web::Query<FilterParams>,
 ) -> impl Responder {
     let result: Result<Vec<TransactionDto>> = (|| async {
+        // Use the repository to fetch transactions with filters
         let repo = TransactionRepository::new(pool.get_ref());
         let transactions = repo.get_transactions(query.into_inner()).await?;
 
+        // Map database records to API response format (DTO)
         let response = transactions
             .into_iter()
             .map(|record| TransactionDto {
@@ -61,6 +66,8 @@ async fn get_transactions(
     match result {
         Ok(transactions) => HttpResponse::Ok().json(transactions),
         Err(e) => {
+            error!("Failed to get transactions: {}", e);
+                                                         // Handle specific error for invalid start_date format
             if e.to_string().contains("Invalid start_date format") {
                 HttpResponse::BadRequest().json(
                     "Invalid start_date format, expected ISO 8601 (e.g., '2024-01-01T00:00:00')",
@@ -72,6 +79,7 @@ async fn get_transactions(
     }
 }
 
+// Handles POST /transactions to create a new transaction
 #[utoipa::path(
     post,
     path = "/transactions",
@@ -91,6 +99,7 @@ async fn create_transaction(
     transaction: web::Json<CreateTransactionDto>,
 ) -> impl Responder {
     let result: Result<i32> = (|| async {
+        // Insert the transaction into the database and return its ID
         let record = sqlx::query!(
             r#"
             INSERT INTO transactions 
@@ -114,10 +123,14 @@ async fn create_transaction(
 
     match result {
         Ok(id) => HttpResponse::Ok().json(id),
-        Err(e) => HttpResponse::InternalServerError().json(e.to_string()),
+        Err(e) => {
+            error!("Failed to create transaction: {}", e);
+            HttpResponse::InternalServerError().json(e.to_string())
+        }
     }
 }
 
+// Handles GET /transactions/portfolio/value to calculate portfolio value
 #[utoipa::path(
     get,
     path = "/transactions/portfolio/value",
@@ -132,6 +145,7 @@ async fn get_portfolio_value(
     cmc: web::Data<CmcService>,
 ) -> impl Responder {
     let result: Result<f64> = (|| async {
+        // Use the repository to fetch all transactions
         let repo = TransactionRepository::new(pool.get_ref());
         let transactions = repo.get_all_transactions().await?;
 
@@ -139,6 +153,7 @@ async fn get_portfolio_value(
         let mut asset_amounts: std::collections::HashMap<String, f64> =
             std::collections::HashMap::new();
 
+        // Calculate the net amount of each asset
         for record in transactions {
             let amount = asset_amounts.entry(record.asset.clone()).or_insert(0.0);
             if record.transaction_type == "BUY" {
@@ -148,6 +163,7 @@ async fn get_portfolio_value(
             }
         }
 
+        // Fetch current prices from CoinMarketCap and compute total value
         for (symbol, amount) in asset_amounts {
             if amount > 0.0 {
                 let quote = cmc.get_quote(&symbol).await?;
@@ -165,6 +181,9 @@ async fn get_portfolio_value(
         Ok(total_value) => {
             HttpResponse::Ok().json(serde_json::json!({"total_value_usd": total_value}))
         }
-        Err(e) => HttpResponse::InternalServerError().json(e.to_string()),
+        Err(e) => {
+            error!("Failed to calculate portfolio value: {}", e);
+            HttpResponse::InternalServerError().json(e.to_string())
+        }
     }
 }

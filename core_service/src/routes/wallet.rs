@@ -2,8 +2,10 @@ use crate::dto::wallet::{CreateWalletDto, WalletDto};
 use crate::models::wallet::WalletDb;
 use actix_web::{web, HttpResponse, Responder};
 use anyhow::Result;
+use log::error;
 use sqlx::PgPool;
 
+// Configures routes for the /wallets scope
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/wallets")
@@ -12,6 +14,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     );
 }
 
+// Handles GET /wallets to retrieve all wallets
 #[utoipa::path(
     get,
     path = "/wallets",
@@ -22,6 +25,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 )]
 async fn get_wallets(pool: web::Data<PgPool>) -> impl Responder {
     let result: Result<Vec<WalletDto>> = (|| async {
+        // Fetch all wallets from the database
         let wallets = sqlx::query_as!(
             WalletDb,
             "SELECT id, name, type as wallet_type, address, created_at FROM wallets"
@@ -29,6 +33,7 @@ async fn get_wallets(pool: web::Data<PgPool>) -> impl Responder {
         .fetch_all(pool.get_ref())
         .await?;
 
+        // Map database records to API response format (DTO)
         let response = wallets
             .into_iter()
             .map(|record| WalletDto {
@@ -46,10 +51,14 @@ async fn get_wallets(pool: web::Data<PgPool>) -> impl Responder {
 
     match result {
         Ok(wallets) => HttpResponse::Ok().json(wallets),
-        Err(e) => HttpResponse::InternalServerError().json(e.to_string()),
+        Err(e) => {
+            error!("Failed to get wallets: {}", e);
+            HttpResponse::InternalServerError().json(e.to_string())
+        }
     }
 }
 
+// Handles POST /wallets to create a new wallet
 #[utoipa::path(
     post,
     path = "/wallets",
@@ -69,6 +78,7 @@ async fn create_wallet(
     wallet: web::Json<CreateWalletDto>,
 ) -> impl Responder {
     let result: Result<WalletDto> = (|| async {
+        // Insert the new wallet into the database and return its details
         let record = sqlx::query_as!(
             WalletDb,
             r#"
@@ -95,6 +105,9 @@ async fn create_wallet(
 
     match result {
         Ok(response) => HttpResponse::Ok().json(response),
-        Err(e) => HttpResponse::InternalServerError().json(e.to_string()),
+        Err(e) => {
+            error!("Failed to create wallet: {}", e);
+            HttpResponse::InternalServerError().json(e.to_string())
+        }
     }
 }

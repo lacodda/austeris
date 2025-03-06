@@ -3,8 +3,10 @@ use crate::models::asset::AssetDb;
 use crate::services::cmc::update_assets;
 use actix_web::{web, HttpResponse, Responder};
 use anyhow::Result;
+use log::error;
 use sqlx::PgPool;
 
+// Configures routes for the /assets scope
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/assets")
@@ -14,6 +16,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     );
 }
 
+// Handles GET /assets to retrieve all assets
 #[utoipa::path(
     get,
     path = "/assets",
@@ -24,6 +27,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 )]
 async fn get_assets(pool: web::Data<PgPool>) -> impl Responder {
     let result: Result<Vec<AssetDto>> = (|| async {
+        // Fetch all assets from the database
         let assets = sqlx::query_as!(
             AssetDb,
             r#"
@@ -34,6 +38,7 @@ async fn get_assets(pool: web::Data<PgPool>) -> impl Responder {
         .fetch_all(pool.get_ref())
         .await?;
 
+        // Map database records to API response format (DTO)
         let response = assets
             .into_iter()
             .map(|record| AssetDto {
@@ -52,10 +57,14 @@ async fn get_assets(pool: web::Data<PgPool>) -> impl Responder {
 
     match result {
         Ok(assets) => HttpResponse::Ok().json(assets),
-        Err(e) => HttpResponse::InternalServerError().json(e.to_string()),
+        Err(e) => {
+            error!("Failed to get assets: {}", e);
+            HttpResponse::InternalServerError().json(e.to_string())
+        }
     }
 }
 
+// Handles POST /assets to create a new asset
 #[utoipa::path(
     post,
     path = "/assets",
@@ -72,6 +81,7 @@ async fn get_assets(pool: web::Data<PgPool>) -> impl Responder {
 )]
 async fn create_asset(pool: web::Data<PgPool>, asset: web::Json<CreateAssetDto>) -> impl Responder {
     let result: Result<AssetDto> = (|| async {
+        // Insert the new asset into the database and return its details
         let record = sqlx::query_as!(
             AssetDb,
             r#"
@@ -100,10 +110,14 @@ async fn create_asset(pool: web::Data<PgPool>, asset: web::Json<CreateAssetDto>)
 
     match result {
         Ok(response) => HttpResponse::Ok().json(response),
-        Err(e) => HttpResponse::InternalServerError().json(e.to_string()),
+        Err(e) => {
+            error!("Failed to create asset: {}", e);
+            HttpResponse::InternalServerError().json(e.to_string())
+        }
     }
 }
 
+// Handles POST /assets/update to sync assets with CoinMarketCap
 #[utoipa::path(
     post,
     path = "/assets/update",
@@ -116,6 +130,9 @@ async fn update_assets_handler(pool: web::Data<PgPool>) -> impl Responder {
     let result: Result<()> = update_assets(&pool).await;
     match result {
         Ok(()) => HttpResponse::Ok().json("Assets updated successfully"),
-        Err(e) => HttpResponse::InternalServerError().json(e.to_string()),
+        Err(e) => {
+            error!("Failed to update assets: {}", e);
+            HttpResponse::InternalServerError().json(e.to_string())
+        }
     }
 }
