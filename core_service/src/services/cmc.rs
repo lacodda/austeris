@@ -1,25 +1,61 @@
-use crate::models::cmc::{CmcListing, CmcResponse};
+use crate::models::cmc::{CmcListing, CmcQuote, CmcQuoteResponse, CmcResponse};
+use anyhow::{anyhow, Result};
 use reqwest::Error;
 use sqlx::PgPool;
 use std::env;
 
-pub async fn fetch_cmc_listings() -> Result<Vec<CmcListing>, Error> {
-    let api_key = env::var("COINMARKETCAP_API_KEY").expect("COINMARKETCAP_API_KEY must be set");
+#[derive(Clone)]
+pub struct CmcService {
+    client: reqwest::Client,
+    api_key: String,
+}
 
-    let client = reqwest::Client::new();
-    let response = client
-        .get("https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest")
-        .header("X-CMC_PRO_API_KEY", api_key)
-        .query(&[("start", "1"), ("limit", "1000"), ("convert", "USD")])
-        .send()
-        .await?;
+impl CmcService {
+    pub fn new() -> Self {
+        let api_key = env::var("COINMARKETCAP_API_KEY").expect("COINMARKETCAP_API_KEY must be set");
+        Self {
+            client: reqwest::Client::new(),
+            api_key,
+        }
+    }
 
-    let cmc_response: CmcResponse = response.json().await?;
-    Ok(cmc_response.data)
+    pub async fn fetch_cmc_listings(&self) -> Result<Vec<CmcListing>, Error> {
+        let response = self
+            .client
+            .get("https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest")
+            .header("X-CMC_PRO_API_KEY", &self.api_key)
+            .query(&[("start", "1"), ("limit", "1000"), ("convert", "USD")])
+            .send()
+            .await?;
+
+        let cmc_response: CmcResponse = response.json().await?;
+        Ok(cmc_response.data)
+    }
+
+    pub async fn get_quote(&self, symbol: &str) -> Result<CmcQuote, anyhow::Error> {
+        let response = self
+            .client
+            .get("https://pro-api.coinmarketcap.com/v2/cryptocurrency/quotes/latest")
+            .header("X-CMC_PRO_API_KEY", &self.api_key)
+            .query(&[("symbol", symbol), ("convert", "USD")])
+            .send()
+            .await?;
+
+        let quote_response: CmcQuoteResponse = response.json().await?;
+        let listings = quote_response
+            .data
+            .get(symbol)
+            .ok_or_else(|| anyhow!("No quote data for symbol {}", symbol))?;
+        let listing = listings
+            .first()
+            .ok_or_else(|| anyhow!("No quote data available for symbol {}", symbol))?;
+        Ok(listing.quote.usd.clone())
+    }
 }
 
 pub async fn update_assets(pool: &PgPool) -> Result<(), sqlx::Error> {
-    let listings = fetch_cmc_listings().await.map_err(|e| {
+    let service = CmcService::new();
+    let listings = service.fetch_cmc_listings().await.map_err(|e| {
         sqlx::Error::Io(std::io::Error::new(
             std::io::ErrorKind::Other,
             format!("Failed to fetch listings: {}", e),

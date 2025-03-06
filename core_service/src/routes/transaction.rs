@@ -1,6 +1,7 @@
 use crate::models::transaction::{
     CreateTransactionRequest, FilterParams, TransactionRecord, TransactionResponse,
 };
+use crate::services::cmc::CmcService;
 use actix_web::{web, HttpResponse, Responder};
 use sqlx::types::time::PrimitiveDateTime;
 use sqlx::PgPool;
@@ -10,7 +11,8 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/transactions")
             .route("", web::get().to(get_transactions))
-            .route("", web::post().to(create_transaction)),
+            .route("", web::post().to(create_transaction))
+            .route("/portfolio/value", web::get().to(get_portfolio_value)),
     );
 }
 
@@ -27,7 +29,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         ("wallet_id" = Option<i32>, Query, description = "Filter transactions by wallet ID (e.g., 1 for Binance)"),
         ("start_date" = Option<String>, Query, description = "Filter transactions starting from this date in ISO 8601 format (e.g., '2024-01-01T00:00:00')"),
         ("limit" = Option<i64>, Query, description = "Maximum number of transactions to return (default: 10)"),
-        ("offset" = Option<i64>, Query, description = "Number of transactions to skip for pagination (default: 0)")
+        ("offset" = Option<i64>, Query, description = "Offset for pagination (default: 0)")
     )
 )]
 async fn get_transactions(
@@ -139,6 +141,75 @@ async fn create_transaction(
 
     match result {
         Ok(record) => HttpResponse::Ok().json(record.id),
+        Err(e) => HttpResponse::InternalServerError().json(e.to_string()),
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/transactions/portfolio/value",
+    responses(
+        (status = 200, description = "Successfully calculated portfolio value in USD", body = serde_json::Value, example = json!({"total_value_usd": 25000.0})),
+        (status = 500, description = "Internal server error (e.g., database or CoinMarketCap API failure)", body = String, example = json!("Failed to fetch price data from CoinMarketCap")),
+        (status = 503, description = "Price data unavailable for some assets", body = String, example = json!("Price unavailable for symbol BTC"))
+    )
+)]
+async fn get_portfolio_value(
+    pool: web::Data<PgPool>,
+    cmc: web::Data<CmcService>,
+) -> impl Responder {
+    let transactions = sqlx::query_as::<_, TransactionRecord>(
+        r#"
+        SELECT 
+            t.id, 
+            a.symbol as asset, 
+            w.name as wallet,
+            t.amount,
+            t.price,
+            t.type as transaction_type,
+            t.fee,
+            t.notes,
+            t.created_at
+        FROM transactions t
+        JOIN assets a ON t.asset_id = a.id
+        JOIN wallets w ON t.wallet_id = w.id
+        "#,
+    )
+    .fetch_all(pool.get_ref())
+    .await;
+
+    match transactions {
+        Ok(records) => {
+            let mut total_value = 0.0;
+            let mut asset_amounts: std::collections::HashMap<String, f64> =
+                std::collections::HashMap::new();
+
+            for record in records {
+                let amount = asset_amounts.entry(record.asset.clone()).or_insert(0.0);
+                if record.transaction_type == "BUY" {
+                    *amount += record.amount;
+                } else if record.transaction_type == "SELL" {
+                    *amount -= record.amount;
+                }
+            }
+
+            for (symbol, amount) in asset_amounts {
+                if amount > 0.0 {
+                    match cmc.get_quote(&symbol).await {
+                        Ok(quote) => {
+                            if let Some(price) = quote.price {
+                                total_value += amount * price;
+                            } else {
+                                continue;
+                            }
+                        }
+                        Err(e) => return HttpResponse::InternalServerError().json(e.to_string()),
+                    }
+                }
+            }
+
+            HttpResponse::Ok().json(serde_json::json!({"total_value_usd": total_value}))
+        }
         Err(e) => HttpResponse::InternalServerError().json(e.to_string()),
     }
 }
