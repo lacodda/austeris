@@ -14,6 +14,7 @@ pub struct CmcStatus {
     pub elapsed: i32,
     pub credit_count: i32,
     pub notice: Option<String>,
+    pub total_count: Option<i32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -24,15 +25,15 @@ pub struct CmcListing {
     pub slug: String,
     pub num_market_pairs: i32,
     pub date_added: String,
-    pub tags: Vec<CmcTag>,
+    pub tags: Vec<String>,
     pub max_supply: Option<f64>,
     pub circulating_supply: f64,
     pub total_supply: f64,
-    pub is_active: i32,
+    pub is_active: Option<i32>,
     pub infinite_supply: bool,
     pub platform: Option<CmcPlatform>,
     pub cmc_rank: i32,
-    pub is_fiat: i32,
+    pub is_fiat: Option<i32>,
     pub self_reported_circulating_supply: Option<f64>,
     pub self_reported_market_cap: Option<f64>,
     pub tvl_ratio: Option<f64>,
