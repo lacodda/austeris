@@ -27,10 +27,8 @@ pub struct WalletResponse {
 pub struct CreateWalletRequest {
     #[validate(length(min = 1, max = 50))]
     pub name: String,
-
     #[validate(length(min = 1, max = 20))]
     pub wallet_type: String,
-
     #[validate(length(max = 255))]
     pub address: Option<String>,
 }

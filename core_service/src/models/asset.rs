@@ -27,13 +27,10 @@ pub struct AssetResponse {
 pub struct CreateAssetRequest {
     #[validate(length(min = 1, max = 10))]
     pub symbol: String,
-
     #[validate(length(min = 1, max = 50))]
     pub name: String,
-
     #[validate(length(min = 1, max = 50))]
     pub cmc_id: String,
-
     #[validate(range(min = 0, max = 18))]
     pub decimals: Option<i32>,
 }

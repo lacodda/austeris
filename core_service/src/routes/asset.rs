@@ -17,8 +17,8 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     get,
     path = "/assets",
     responses(
-        (status = 200, description = "List of assets", body = Vec<AssetResponse>),
-        (status = 500, description = "Internal server error")
+        (status = 200, description = "Successfully retrieved list of assets", body = Vec<AssetResponse>, example = json!([{"id": 1, "symbol": "BTC", "name": "Bitcoin", "cmc_id": "1", "decimals": 8, "created_at": "2024-01-01T00:00:00"}])),
+        (status = 500, description = "Internal server error (e.g., database failure)", body = String, example = json!("Database connection failed"))
     )
 )]
 async fn get_assets(pool: web::Data<PgPool>) -> impl Responder {
@@ -58,10 +58,15 @@ async fn get_assets(pool: web::Data<PgPool>) -> impl Responder {
 #[utoipa::path(
     post,
     path = "/assets",
-    request_body = CreateAssetRequest,
+    request_body(
+        content = CreateAssetRequest,
+        description = "Details of the asset to create",
+        example = json!({"symbol": "BTC", "name": "Bitcoin", "cmc_id": "1", "decimals": 8})
+    ),
     responses(
-        (status = 200, description = "Asset created", body = AssetResponse),
-        (status = 500, description = "Internal server error")
+        (status = 200, description = "Asset created successfully", body = AssetResponse, example = json!({"id": 1, "symbol": "BTC", "name": "Bitcoin", "cmc_id": "1", "decimals": 8, "created_at": "2024-01-01T00:00:00"})),
+        (status = 400, description = "Invalid request data (e.g., missing required fields)", body = String, example = json!("Validation error: symbol is required")),
+        (status = 500, description = "Internal server error (e.g., database failure)", body = String, example = json!("Failed to insert asset into database"))
     )
 )]
 async fn create_asset(
@@ -104,8 +109,8 @@ async fn create_asset(
     post,
     path = "/assets/update",
     responses(
-        (status = 200, description = "Assets updated"),
-        (status = 500, description = "Internal server error")
+        (status = 200, description = "Assets updated successfully from CoinMarketCap", body = String, example = json!("Assets updated successfully")),
+        (status = 500, description = "Internal server error (e.g., CoinMarketCap API or database failure)", body = String, example = json!("Failed to fetch listings from CoinMarketCap"))
     )
 )]
 async fn update_assets_handler(pool: web::Data<PgPool>) -> impl Responder {

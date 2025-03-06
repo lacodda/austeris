@@ -15,8 +15,8 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     get,
     path = "/wallets",
     responses(
-        (status = 200, description = "List of wallets", body = Vec<WalletResponse>),
-        (status = 500, description = "Internal server error")
+        (status = 200, description = "Successfully retrieved list of wallets", body = Vec<WalletResponse>, example = json!([{"id": 1, "name": "Binance", "wallet_type": "Hot", "address": "0x1234", "created_at": "2024-01-01T00:00:00"}])),
+        (status = 500, description = "Internal server error (e.g., database failure)", body = String, example = json!("Database connection failed"))
     )
 )]
 async fn get_wallets(pool: web::Data<PgPool>) -> impl Responder {
@@ -52,10 +52,15 @@ async fn get_wallets(pool: web::Data<PgPool>) -> impl Responder {
 #[utoipa::path(
     post,
     path = "/wallets",
-    request_body = CreateWalletRequest,
+    request_body(
+        content = CreateWalletRequest,
+        description = "Details of the wallet to create",
+        example = json!({"name": "Binance", "wallet_type": "Hot", "address": "0x1234"})
+    ),
     responses(
-        (status = 200, description = "Wallet created", body = WalletResponse),
-        (status = 500, description = "Internal server error")
+        (status = 200, description = "Wallet created successfully", body = WalletResponse, example = json!({"id": 1, "name": "Binance", "wallet_type": "Hot", "address": "0x1234", "created_at": "2024-01-01T00:00:00"})),
+        (status = 400, description = "Invalid request data (e.g., missing required fields)", body = String, example = json!("Validation error: name is required")),
+        (status = 500, description = "Internal server error (e.g., database failure)", body = String, example = json!("Failed to insert wallet into database"))
     )
 )]
 async fn create_wallet(
