@@ -5,6 +5,7 @@ use utoipa_swagger_ui::SwaggerUi;
 
 // Project modules
 mod db;
+mod dto;
 mod models;
 mod repository;
 mod routes;
@@ -30,15 +31,15 @@ use routes::{asset, snapshots, transaction, wallet};
     ),
     components(
         schemas(
-            models::asset::AssetResponse,
-            models::asset::CreateAssetRequest,
-            models::wallet::WalletResponse,
-            models::wallet::CreateWalletRequest,
-            models::transaction::TransactionResponse,
-            models::transaction::CreateTransactionRequest,
-            models::snapshot::PortfolioSnapshot,
-            models::snapshot::SnapshotAsset,
-            models::snapshot::SnapshotDiff
+            dto::asset::AssetDto,
+            dto::asset::CreateAssetDto,
+            dto::wallet::WalletDto,
+            dto::wallet::CreateWalletDto,
+            dto::transaction::TransactionDto,
+            dto::transaction::CreateTransactionDto,
+            dto::snapshot::SnapshotDto,
+            dto::snapshot::SnapshotAssetDto,
+            dto::snapshot::SnapshotDiffDto
         )
     ),
     tags(

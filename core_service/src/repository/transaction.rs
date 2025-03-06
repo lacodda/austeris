@@ -1,4 +1,4 @@
-use crate::models::transaction::{FilterParams, TransactionRecord};
+use crate::models::transaction::{FilterParams, TransactionDb};
 use anyhow::Result;
 use sqlx::types::time::PrimitiveDateTime;
 use sqlx::PgPool;
@@ -16,7 +16,7 @@ impl<'a> TransactionRepository<'a> {
     }
 
     // Fetches transactions with optional filters
-    pub async fn get_transactions(&self, filters: FilterParams) -> Result<Vec<TransactionRecord>> {
+    pub async fn get_transactions(&self, filters: FilterParams) -> Result<Vec<TransactionDb>> {
         let mut sql = String::from(
             r#"
             SELECT 
@@ -53,15 +53,15 @@ impl<'a> TransactionRepository<'a> {
             filters.offset.unwrap_or(0)
         ));
 
-        let transactions = sqlx::query_as::<_, TransactionRecord>(&sql)
+        let transactions = sqlx::query_as::<_, TransactionDb>(&sql)
             .fetch_all(self.pool)
             .await?;
         Ok(transactions)
     }
 
     // Fetches all transactions without filters for portfolio calculations
-    pub async fn get_all_transactions(&self) -> Result<Vec<TransactionRecord>> {
-        let transactions = sqlx::query_as::<_, TransactionRecord>(
+    pub async fn get_all_transactions(&self) -> Result<Vec<TransactionDb>> {
+        let transactions = sqlx::query_as::<_, TransactionDb>(
             r#"
             SELECT 
                 t.id, 

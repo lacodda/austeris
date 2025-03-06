@@ -2,11 +2,10 @@ use serde::{Deserialize, Serialize};
 use sqlx::types::time::PrimitiveDateTime;
 use sqlx::FromRow;
 use utoipa::ToSchema;
-use validator::Validate;
 
 // Represents a transaction record fetched from the database
-#[derive(Debug, FromRow)]
-pub struct TransactionRecord {
+#[derive(Debug, FromRow, Deserialize, Serialize)]
+pub struct TransactionDb {
     pub id: i32,
     pub asset: String,
     pub wallet: String,
@@ -16,40 +15,6 @@ pub struct TransactionRecord {
     pub fee: Option<f64>,
     pub notes: Option<String>,
     pub created_at: PrimitiveDateTime,
-}
-
-// Represents a transaction response returned by the API
-#[derive(Debug, Serialize, Deserialize, FromRow, ToSchema)]
-pub struct TransactionResponse {
-    pub id: i32,
-    pub asset: String,
-    pub wallet: String,
-    pub amount: f64,
-    pub price: f64,
-    pub transaction_type: String,
-    pub fee: Option<f64>,
-    pub notes: Option<String>,
-    #[schema(value_type = String)]
-    pub created_at: String,
-}
-
-// Represents a request to create a new transaction
-#[derive(Debug, Serialize, Deserialize, Validate, ToSchema)]
-pub struct CreateTransactionRequest {
-    #[validate(range(min = 1))]
-    pub asset_id: i32,
-    #[validate(range(min = 1))]
-    pub wallet_id: i32,
-    #[validate(range(min = 0.0))]
-    pub amount: f64,
-    #[validate(range(min = 0.0))]
-    pub price: f64,
-    #[validate(length(min = 1))]
-    pub transaction_type: String,
-    #[validate(range(min = 0.0))]
-    pub fee: Option<f64>,
-    #[validate(length(max = 500))]
-    pub notes: Option<String>,
 }
 
 // Represents query parameters for filtering transactions

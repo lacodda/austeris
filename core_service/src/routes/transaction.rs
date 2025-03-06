@@ -1,11 +1,11 @@
-use crate::models::transaction::{CreateTransactionRequest, FilterParams, TransactionResponse};
+use crate::dto::transaction::{CreateTransactionDto, TransactionDto};
+use crate::models::transaction::FilterParams;
 use crate::repository::transaction::TransactionRepository;
 use crate::services::cmc::CmcService;
 use actix_web::{web, HttpResponse, Responder};
 use anyhow::Result;
 use sqlx::PgPool;
 
-// Configures routes for the /transactions scope
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/transactions")
@@ -15,12 +15,11 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     );
 }
 
-// Handles GET /transactions to retrieve filtered transactions
 #[utoipa::path(
     get,
     path = "/transactions",
     responses(
-        (status = 200, description = "Successfully retrieved list of transactions", body = Vec<TransactionResponse>, example = json!([{"id": 1, "asset": "BTC", "wallet": "Binance", "amount": 0.5, "price": 50000.0, "transaction_type": "BUY", "fee": 0.001, "notes": "First trade", "created_at": "2024-01-01T00:00:00"}])),
+        (status = 200, description = "Successfully retrieved list of transactions", body = Vec<TransactionDto>, example = json!([{"id": 1, "asset": "BTC", "wallet": "Binance", "amount": 0.5, "price": 50000.0, "transaction_type": "BUY", "fee": 0.001, "notes": "First trade", "created_at": "2024-01-01T00:00:00"}])),
         (status = 400, description = "Invalid start_date format", body = String, example = json!("Invalid start_date format, expected ISO 8601 (e.g., '2024-01-01T00:00:00')")),
         (status = 500, description = "Internal server error", body = String, example = json!("Database connection failed"))
     ),
@@ -36,15 +35,13 @@ async fn get_transactions(
     pool: web::Data<PgPool>,
     query: web::Query<FilterParams>,
 ) -> impl Responder {
-    let result: Result<Vec<TransactionResponse>> = (|| async {
-        // Use the repository to fetch transactions
+    let result: Result<Vec<TransactionDto>> = (|| async {
         let repo = TransactionRepository::new(pool.get_ref());
         let transactions = repo.get_transactions(query.into_inner()).await?;
 
-        // Map database records to API response format
         let response = transactions
             .into_iter()
-            .map(|record| TransactionResponse {
+            .map(|record| TransactionDto {
                 id: record.id,
                 asset: record.asset,
                 wallet: record.wallet,
@@ -75,12 +72,11 @@ async fn get_transactions(
     }
 }
 
-// Handles POST /transactions to create a new transaction
 #[utoipa::path(
     post,
     path = "/transactions",
     request_body(
-        content = CreateTransactionRequest,
+        content = CreateTransactionDto,
         description = "Details of the transaction to create",
         example = json!({"asset_id": 1, "wallet_id": 1, "amount": 0.5, "price": 50000.0, "transaction_type": "BUY", "fee": 0.001, "notes": "First trade"})
     ),
@@ -92,7 +88,7 @@ async fn get_transactions(
 )]
 async fn create_transaction(
     pool: web::Data<PgPool>,
-    transaction: web::Json<CreateTransactionRequest>,
+    transaction: web::Json<CreateTransactionDto>,
 ) -> impl Responder {
     let result: Result<i32> = (|| async {
         let record = sqlx::query!(
@@ -122,7 +118,6 @@ async fn create_transaction(
     }
 }
 
-// Handles GET /transactions/portfolio/value to calculate portfolio value
 #[utoipa::path(
     get,
     path = "/transactions/portfolio/value",
@@ -137,7 +132,6 @@ async fn get_portfolio_value(
     cmc: web::Data<CmcService>,
 ) -> impl Responder {
     let result: Result<f64> = (|| async {
-        // Use the repository to fetch all transactions
         let repo = TransactionRepository::new(pool.get_ref());
         let transactions = repo.get_all_transactions().await?;
 

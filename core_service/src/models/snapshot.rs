@@ -1,37 +1,20 @@
 use serde::{Deserialize, Serialize};
+use sqlx::types::time::PrimitiveDateTime;
 use sqlx::types::Json;
-use utoipa::ToSchema;
+use sqlx::FromRow;
 
-// Represents an asset in a portfolio snapshot
-#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
-pub struct SnapshotAsset {
-    pub symbol: String,
-    pub amount: f64,
-    pub cmc_id: String,
-}
-
-// Represents a portfolio snapshot with optional difference from current state
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct PortfolioSnapshot {
+// Represents a snapshot record fetched from the database
+#[derive(Debug, Deserialize, Serialize, FromRow)]
+pub struct SnapshotDb {
     pub id: i32,
-    pub created_at: String,
-    pub assets: Vec<SnapshotAsset>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub diff: Option<Vec<SnapshotDiff>>, // Difference between snapshot and current portfolio
+    pub created_at: PrimitiveDateTime,
+    pub assets: Json<Vec<SnapshotAssetDb>>, // Stored as JSONB in the database
 }
 
-// Represents the difference in asset amounts between a snapshot and current portfolio
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct SnapshotDiff {
+// Represents an asset in a snapshot stored in the database
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct SnapshotAssetDb {
     pub symbol: String,
-    pub amount_diff: f64, // Positive or negative difference
+    pub amount: f64, // Positive or negative difference
     pub cmc_id: String,
-}
-
-// Internal structure for mapping database rows to snapshot data
-#[derive(Debug, sqlx::FromRow)]
-pub struct SnapshotRecord {
-    pub id: i32,
-    pub created_at: sqlx::types::time::PrimitiveDateTime,
-    pub assets: Json<Vec<SnapshotAsset>>, // Stored as JSONB in the database
 }

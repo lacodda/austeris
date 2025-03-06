@@ -1,9 +1,9 @@
-use crate::models::wallet::{CreateWalletRequest, WalletRecord, WalletResponse};
+use crate::dto::wallet::{CreateWalletDto, WalletDto};
+use crate::models::wallet::WalletDb;
 use actix_web::{web, HttpResponse, Responder};
 use anyhow::Result;
 use sqlx::PgPool;
 
-// Configures routes for the /wallets scope
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/wallets")
@@ -12,29 +12,26 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     );
 }
 
-// Handles GET /wallets to retrieve all wallets
 #[utoipa::path(
     get,
     path = "/wallets",
     responses(
-        (status = 200, description = "Successfully retrieved list of wallets", body = Vec<WalletResponse>, example = json!([{"id": 1, "name": "Binance", "wallet_type": "Hot", "address": "0x1234", "created_at": "2024-01-01T00:00:00"}])),
+        (status = 200, description = "Successfully retrieved list of wallets", body = Vec<WalletDto>, example = json!([{"id": 1, "name": "Binance", "wallet_type": "Hot", "address": "0x1234", "created_at": "2024-01-01T00:00:00"}])),
         (status = 500, description = "Internal server error (e.g., database failure)", body = String, example = json!("Database connection failed"))
     )
 )]
 async fn get_wallets(pool: web::Data<PgPool>) -> impl Responder {
-    let result: Result<Vec<WalletResponse>> = (|| async {
-        // Fetch all wallets from the database
+    let result: Result<Vec<WalletDto>> = (|| async {
         let wallets = sqlx::query_as!(
-            WalletRecord,
+            WalletDb,
             "SELECT id, name, type as wallet_type, address, created_at FROM wallets"
         )
         .fetch_all(pool.get_ref())
         .await?;
 
-        // Map database records to API response format
         let response = wallets
             .into_iter()
-            .map(|record| WalletResponse {
+            .map(|record| WalletDto {
                 id: record.id,
                 name: record.name,
                 wallet_type: record.wallet_type,
@@ -53,28 +50,27 @@ async fn get_wallets(pool: web::Data<PgPool>) -> impl Responder {
     }
 }
 
-// Handles POST /wallets to create a new wallet
 #[utoipa::path(
     post,
     path = "/wallets",
     request_body(
-        content = CreateWalletRequest,
+        content = CreateWalletDto,
         description = "Details of the wallet to create",
         example = json!({"name": "Binance", "wallet_type": "Hot", "address": "0x1234"})
     ),
     responses(
-        (status = 200, description = "Wallet created successfully", body = WalletResponse, example = json!({"id": 1, "name": "Binance", "wallet_type": "Hot", "address": "0x1234", "created_at": "2024-01-01T00:00:00"})),
+        (status = 200, description = "Wallet created successfully", body = WalletDto, example = json!({"id": 1, "name": "Binance", "wallet_type": "Hot", "address": "0x1234", "created_at": "2024-01-01T00:00:00"})),
         (status = 400, description = "Invalid request data (e.g., missing required fields)", body = String, example = json!("Validation error: name is required")),
         (status = 500, description = "Internal server error (e.g., database failure)", body = String, example = json!("Failed to insert wallet into database"))
     )
 )]
 async fn create_wallet(
     pool: web::Data<PgPool>,
-    wallet: web::Json<CreateWalletRequest>,
+    wallet: web::Json<CreateWalletDto>,
 ) -> impl Responder {
-    let result: Result<WalletResponse> = (|| async {
-        // Insert the new wallet into the database and return its details
-        let record = sqlx::query!(
+    let result: Result<WalletDto> = (|| async {
+        let record = sqlx::query_as!(
+            WalletDb,
             r#"
             INSERT INTO wallets (name, type, address)
             VALUES ($1, $2, $3)
@@ -87,7 +83,7 @@ async fn create_wallet(
         .fetch_one(pool.get_ref())
         .await?;
 
-        Ok(WalletResponse {
+        Ok(WalletDto {
             id: record.id,
             name: record.name,
             wallet_type: record.wallet_type,

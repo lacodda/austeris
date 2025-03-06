@@ -1,4 +1,5 @@
-use crate::models::snapshot::{PortfolioSnapshot, SnapshotAsset, SnapshotDiff, SnapshotRecord};
+use crate::dto::snapshot::{SnapshotAssetDto, SnapshotDiffDto, SnapshotDto};
+use crate::models::snapshot::SnapshotDb;
 use crate::repository::transaction::TransactionRepository;
 use actix_web::{web, HttpResponse, Responder};
 use anyhow::Result;
@@ -13,18 +14,16 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     );
 }
 
-// Handles POST /snapshots to create a new portfolio snapshot
 #[utoipa::path(
     post,
     path = "/snapshots",
     responses(
-        (status = 200, description = "Snapshot created successfully", body = PortfolioSnapshot, example = json!({"id": 1, "created_at": "2025-03-06T14:00:00", "assets": [{"symbol": "BTC", "amount": 1.5, "cmc_id": "1"}, {"symbol": "ETH", "amount": 10.0, "cmc_id": "1027"}]})),
+        (status = 200, description = "Snapshot created successfully", body = SnapshotDto, example = json!({"id": 1, "created_at": "2025-03-06T14:00:00", "assets": [{"symbol": "BTC", "amount": 1.5, "cmc_id": "1"}, {"symbol": "ETH", "amount": 10.0, "cmc_id": "1027"}]})),
         (status = 500, description = "Internal server error (e.g., database failure)", body = String, example = json!("Failed to save snapshot to database"))
     )
 )]
 async fn create_snapshot(pool: web::Data<PgPool>) -> impl Responder {
-    let result: Result<PortfolioSnapshot> = (|| async {
-        // Use the repository to fetch all transactions
+    let result: Result<SnapshotDto> = (|| async {
         let repo = TransactionRepository::new(pool.get_ref());
         let transactions = repo.get_all_transactions().await?;
 
@@ -48,17 +47,17 @@ async fn create_snapshot(pool: web::Data<PgPool>) -> impl Responder {
             }
         }
 
-        let snapshot_assets: Vec<SnapshotAsset> = asset_amounts
+        let snapshot_assets: Vec<SnapshotAssetDto> = asset_amounts
             .into_iter()
             .filter(|(_, (amount, _))| *amount > 0.0)
-            .map(|(symbol, (amount, cmc_id))| SnapshotAsset {
+            .map(|(symbol, (amount, cmc_id))| SnapshotAssetDto {
                 symbol,
                 amount,
                 cmc_id,
             })
             .collect();
 
-        let record = sqlx::query_as::<_, SnapshotRecord>(
+        let record = sqlx::query_as::<_, SnapshotDb>(
             r#"
             INSERT INTO portfolio_snapshots (assets)
             VALUES ($1)
@@ -69,7 +68,7 @@ async fn create_snapshot(pool: web::Data<PgPool>) -> impl Responder {
         .fetch_one(pool.get_ref())
         .await?;
 
-        Ok(PortfolioSnapshot {
+        Ok(SnapshotDto {
             id: record.id,
             created_at: record.created_at.to_string(),
             assets: snapshot_assets,
@@ -84,18 +83,17 @@ async fn create_snapshot(pool: web::Data<PgPool>) -> impl Responder {
     }
 }
 
-// Handles GET /snapshots to retrieve all snapshots with differences
 #[utoipa::path(
     get,
     path = "/snapshots",
     responses(
-        (status = 200, description = "Successfully retrieved list of snapshots with differences", body = Vec<PortfolioSnapshot>, example = json!([{"id": 1, "created_at": "2025-03-06T14:00:00", "assets": [{"symbol": "BTC", "amount": 1.5, "cmc_id": "1"}, {"symbol": "ETH", "amount": 10.0, "cmc_id": "1027"}], "diff": [{"symbol": "BTC", "amount_diff": -0.5, "cmc_id": "1"}, {"symbol": "ETH", "amount_diff": 2.0, "cmc_id": "1027"}]}])),
+        (status = 200, description = "Successfully retrieved list of snapshots with differences", body = Vec<SnapshotDto>, example = json!([{"id": 1, "created_at": "2025-03-06T14:00:00", "assets": [{"symbol": "BTC", "amount": 1.5, "cmc_id": "1"}, {"symbol": "ETH", "amount": 10.0, "cmc_id": "1027"}], "diff": [{"symbol": "BTC", "amount_diff": -0.5, "cmc_id": "1"}, {"symbol": "ETH", "amount_diff": 2.0, "cmc_id": "1027"}]}])),
         (status = 500, description = "Internal server error (e.g., database failure)", body = String, example = json!("Failed to fetch snapshots from database"))
     )
 )]
 async fn get_snapshots(pool: web::Data<PgPool>) -> impl Responder {
-    let result: Result<Vec<PortfolioSnapshot>> = (|| async {
-        let snapshots = sqlx::query_as::<_, SnapshotRecord>(
+    let result: Result<Vec<SnapshotDto>> = (|| async {
+        let snapshots = sqlx::query_as::<_, SnapshotDb>(
             r#"
             SELECT id, created_at, assets
             FROM portfolio_snapshots
@@ -105,7 +103,6 @@ async fn get_snapshots(pool: web::Data<PgPool>) -> impl Responder {
         .fetch_all(pool.get_ref())
         .await?;
 
-        // Use the repository to fetch all transactions
         let repo = TransactionRepository::new(pool.get_ref());
         let transactions = repo.get_all_transactions().await?;
 
@@ -129,11 +126,21 @@ async fn get_snapshots(pool: web::Data<PgPool>) -> impl Responder {
             }
         }
 
-        let snapshots_with_diff: Vec<PortfolioSnapshot> = snapshots
+        let snapshots_with_diff: Vec<SnapshotDto> = snapshots
             .into_iter()
             .map(|record| {
-                let snapshot_assets = record.assets.0.clone();
-                let mut diff_map: HashMap<String, SnapshotDiff> = HashMap::new();
+                let snapshot_assets: Vec<SnapshotAssetDto> = record
+                    .assets
+                    .0
+                    .clone()
+                    .into_iter()
+                    .map(|asset| SnapshotAssetDto {
+                        symbol: asset.symbol,
+                        amount: asset.amount,
+                        cmc_id: asset.cmc_id,
+                    })
+                    .collect();
+                let mut diff_map: HashMap<String, SnapshotDiffDto> = HashMap::new();
 
                 for asset in &snapshot_assets {
                     let current = current_assets
@@ -144,7 +151,7 @@ async fn get_snapshots(pool: web::Data<PgPool>) -> impl Responder {
                     if diff != 0.0 {
                         diff_map.insert(
                             asset.symbol.clone(),
-                            SnapshotDiff {
+                            SnapshotDiffDto {
                                 symbol: asset.symbol.clone(),
                                 amount_diff: diff,
                                 cmc_id: asset.cmc_id.clone(),
@@ -158,7 +165,7 @@ async fn get_snapshots(pool: web::Data<PgPool>) -> impl Responder {
                     {
                         diff_map.insert(
                             symbol.clone(),
-                            SnapshotDiff {
+                            SnapshotDiffDto {
                                 symbol: symbol.clone(),
                                 amount_diff: *current_amount,
                                 cmc_id: cmc_id.clone(),
@@ -167,7 +174,7 @@ async fn get_snapshots(pool: web::Data<PgPool>) -> impl Responder {
                     }
                 }
 
-                PortfolioSnapshot {
+                SnapshotDto {
                     id: record.id,
                     created_at: record.created_at.to_string(),
                     assets: snapshot_assets,
