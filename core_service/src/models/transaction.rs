@@ -4,6 +4,7 @@ use sqlx::FromRow;
 use utoipa::ToSchema;
 use validator::Validate;
 
+// Represents a transaction record fetched from the database
 #[derive(Debug, FromRow)]
 pub struct TransactionRecord {
     pub id: i32,
@@ -17,6 +18,7 @@ pub struct TransactionRecord {
     pub created_at: PrimitiveDateTime,
 }
 
+// Represents a transaction response returned by the API
 #[derive(Debug, Serialize, Deserialize, FromRow, ToSchema)]
 pub struct TransactionResponse {
     pub id: i32,
@@ -31,6 +33,7 @@ pub struct TransactionResponse {
     pub created_at: String,
 }
 
+// Represents a request to create a new transaction
 #[derive(Debug, Serialize, Deserialize, Validate, ToSchema)]
 pub struct CreateTransactionRequest {
     #[validate(range(min = 1))]
@@ -49,6 +52,7 @@ pub struct CreateTransactionRequest {
     pub notes: Option<String>,
 }
 
+// Represents query parameters for filtering transactions
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct FilterParams {
     pub asset_id: Option<i32>,

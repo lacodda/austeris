@@ -8,6 +8,7 @@ use sqlx::types::time::PrimitiveDateTime;
 use sqlx::PgPool;
 use time::format_description::well_known::Iso8601;
 
+// Configures routes for the /transactions scope
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/transactions")
@@ -17,6 +18,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     );
 }
 
+// Handles GET /transactions to retrieve filtered transactions
 #[utoipa::path(
     get,
     path = "/transactions",
@@ -38,6 +40,7 @@ async fn get_transactions(
     query: web::Query<FilterParams>,
 ) -> impl Responder {
     let result: Result<Vec<TransactionResponse>> = (|| async {
+        // Build the base SQL query to fetch transactions
         let mut sql = String::from(
             r#"
             SELECT 
@@ -57,6 +60,7 @@ async fn get_transactions(
             "#,
         );
 
+        // Apply filters based on query parameters
         if let Some(asset_id) = query.asset_id {
             sql.push_str(&format!(" AND t.asset_id = {}", asset_id));
         }
@@ -74,10 +78,12 @@ async fn get_transactions(
             query.offset.unwrap_or(0)
         ));
 
+        // Execute the query and fetch results
         let transactions = sqlx::query_as::<_, TransactionRecord>(&sql)
             .fetch_all(pool.get_ref())
             .await?;
 
+        // Map database records to API response format
         let response = transactions
             .into_iter()
             .map(|record| TransactionResponse {
@@ -100,6 +106,7 @@ async fn get_transactions(
     match result {
         Ok(transactions) => HttpResponse::Ok().json(transactions),
         Err(e) => {
+            // Handle specific error for invalid start_date format
             if e.to_string().contains("Invalid start_date format") {
                 HttpResponse::BadRequest().json(
                     "Invalid start_date format, expected ISO 8601 (e.g., '2024-01-01T00:00:00')",
@@ -111,6 +118,7 @@ async fn get_transactions(
     }
 }
 
+// Handles POST /transactions to create a new transaction
 #[utoipa::path(
     post,
     path = "/transactions",
@@ -130,6 +138,7 @@ async fn create_transaction(
     transaction: web::Json<CreateTransactionRequest>,
 ) -> impl Responder {
     let result: Result<i32> = (|| async {
+        // Insert the transaction into the database and return its ID
         let record = sqlx::query!(
             r#"
             INSERT INTO transactions 
@@ -157,6 +166,7 @@ async fn create_transaction(
     }
 }
 
+// Handles GET /transactions/portfolio/value to calculate portfolio value
 #[utoipa::path(
     get,
     path = "/transactions/portfolio/value",
@@ -171,6 +181,7 @@ async fn get_portfolio_value(
     cmc: web::Data<CmcService>,
 ) -> impl Responder {
     let result: Result<f64> = (|| async {
+        // Fetch all transactions to compute the current portfolio
         let transactions = sqlx::query_as::<_, TransactionRecord>(
             r#"
             SELECT 
@@ -195,6 +206,7 @@ async fn get_portfolio_value(
         let mut asset_amounts: std::collections::HashMap<String, f64> =
             std::collections::HashMap::new();
 
+        // Calculate the net amount of each asset
         for record in transactions {
             let amount = asset_amounts.entry(record.asset.clone()).or_insert(0.0);
             if record.transaction_type == "BUY" {
@@ -204,6 +216,7 @@ async fn get_portfolio_value(
             }
         }
 
+        // Fetch current prices from CoinMarketCap and compute total value
         for (symbol, amount) in asset_amounts {
             if amount > 0.0 {
                 let quote = cmc.get_quote(&symbol).await?;

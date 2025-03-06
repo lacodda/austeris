@@ -3,6 +3,7 @@ use actix_web::{web, HttpResponse, Responder};
 use anyhow::Result;
 use sqlx::PgPool;
 
+// Configures routes for the /wallets scope
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/wallets")
@@ -11,6 +12,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     );
 }
 
+// Handles GET /wallets to retrieve all wallets
 #[utoipa::path(
     get,
     path = "/wallets",
@@ -21,6 +23,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 )]
 async fn get_wallets(pool: web::Data<PgPool>) -> impl Responder {
     let result: Result<Vec<WalletResponse>> = (|| async {
+        // Fetch all wallets from the database
         let wallets = sqlx::query_as!(
             WalletRecord,
             "SELECT id, name, type as wallet_type, address, created_at FROM wallets"
@@ -28,6 +31,7 @@ async fn get_wallets(pool: web::Data<PgPool>) -> impl Responder {
         .fetch_all(pool.get_ref())
         .await?;
 
+        // Map database records to API response format
         let response = wallets
             .into_iter()
             .map(|record| WalletResponse {
@@ -49,6 +53,7 @@ async fn get_wallets(pool: web::Data<PgPool>) -> impl Responder {
     }
 }
 
+// Handles POST /wallets to create a new wallet
 #[utoipa::path(
     post,
     path = "/wallets",
@@ -68,6 +73,7 @@ async fn create_wallet(
     wallet: web::Json<CreateWalletRequest>,
 ) -> impl Responder {
     let result: Result<WalletResponse> = (|| async {
+        // Insert the new wallet into the database and return its details
         let record = sqlx::query!(
             r#"
             INSERT INTO wallets (name, type, address)

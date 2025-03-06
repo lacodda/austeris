@@ -3,6 +3,7 @@ use anyhow::{anyhow, Result};
 use sqlx::PgPool;
 use std::env;
 
+// Represents a service for interacting with the CoinMarketCap API
 #[derive(Clone)]
 pub struct CmcService {
     client: reqwest::Client,
@@ -10,6 +11,7 @@ pub struct CmcService {
 }
 
 impl CmcService {
+    // Creates a new instance of CmcService with API key from environment
     pub fn new() -> Self {
         let api_key = env::var("COINMARKETCAP_API_KEY").expect("COINMARKETCAP_API_KEY must be set");
         Self {
@@ -18,6 +20,7 @@ impl CmcService {
         }
     }
 
+    // Fetches the latest cryptocurrency listings from CoinMarketCap
     pub async fn fetch_cmc_listings(&self) -> Result<Vec<CmcListing>> {
         let response = self
             .client
@@ -27,10 +30,12 @@ impl CmcService {
             .send()
             .await?;
 
+        // Parse the response into CmcResponse structure
         let cmc_response: CmcResponse = response.json().await?;
         Ok(cmc_response.data)
     }
 
+    // Fetches the latest quote for a specific cryptocurrency symbol
     pub async fn get_quote(&self, symbol: &str) -> Result<CmcQuote> {
         let response = self
             .client
@@ -40,6 +45,7 @@ impl CmcService {
             .send()
             .await?;
 
+        // Parse the response into CmcQuoteResponse structure
         let quote_response: CmcQuoteResponse = response.json().await?;
         let listings = quote_response
             .data
@@ -52,13 +58,14 @@ impl CmcService {
     }
 }
 
+// Updates the assets table with data from CoinMarketCap
 pub async fn update_assets(pool: &PgPool) -> Result<()> {
     let service = CmcService::new();
     let listings = service.fetch_cmc_listings().await?;
 
+    // Iterate over listings and upsert into the assets table
     for listing in listings {
         let cmc_id = listing.id.to_string();
-
         sqlx::query!(
             r#"
             INSERT INTO assets (symbol, name, cmc_id)

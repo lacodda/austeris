@@ -3,6 +3,7 @@ use sqlx::types::time::PrimitiveDateTime;
 use sqlx::FromRow;
 use utoipa::ToSchema;
 
+// Internal structure for mapping database rows to wallet data
 #[derive(Debug, sqlx::FromRow)]
 pub struct WalletRecord {
     pub id: i32,
@@ -12,6 +13,7 @@ pub struct WalletRecord {
     pub created_at: PrimitiveDateTime,
 }
 
+// Response structure for wallet data returned to the client
 #[derive(Debug, Serialize, Deserialize, FromRow, ToSchema)]
 pub struct WalletResponse {
     pub id: i32,
@@ -23,6 +25,7 @@ pub struct WalletResponse {
     pub created_at: String,
 }
 
+// Request structure for creating a new wallet
 #[derive(Debug, Serialize, Deserialize, validator::Validate, ToSchema)]
 pub struct CreateWalletRequest {
     #[validate(length(min = 1, max = 50))]

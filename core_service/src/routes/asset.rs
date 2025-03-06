@@ -4,6 +4,7 @@ use actix_web::{web, HttpResponse, Responder};
 use anyhow::Result;
 use sqlx::PgPool;
 
+// Configures routes for the /assets scope
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/assets")
@@ -13,6 +14,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     );
 }
 
+// Handles GET /assets to retrieve all assets
 #[utoipa::path(
     get,
     path = "/assets",
@@ -23,6 +25,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 )]
 async fn get_assets(pool: web::Data<PgPool>) -> impl Responder {
     let result: Result<Vec<AssetResponse>> = (|| async {
+        // Fetch all assets from the database
         let assets = sqlx::query_as!(
             AssetRecord,
             r#"
@@ -33,6 +36,7 @@ async fn get_assets(pool: web::Data<PgPool>) -> impl Responder {
         .fetch_all(pool.get_ref())
         .await?;
 
+        // Map database records to API response format
         let response = assets
             .into_iter()
             .map(|record| AssetResponse {
@@ -55,6 +59,7 @@ async fn get_assets(pool: web::Data<PgPool>) -> impl Responder {
     }
 }
 
+// Handles POST /assets to create a new asset
 #[utoipa::path(
     post,
     path = "/assets",
@@ -74,6 +79,7 @@ async fn create_asset(
     asset: web::Json<CreateAssetRequest>,
 ) -> impl Responder {
     let result: Result<AssetResponse> = (|| async {
+        // Insert the new asset into the database and return its details
         let record = sqlx::query!(
             r#"
             INSERT INTO assets (symbol, name, cmc_id, decimals)
@@ -105,6 +111,7 @@ async fn create_asset(
     }
 }
 
+// Handles POST /assets/update to sync assets with CoinMarketCap
 #[utoipa::path(
     post,
     path = "/assets/update",
