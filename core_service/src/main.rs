@@ -22,7 +22,8 @@ use routes::{asset, snapshots, transaction, wallet};
         transaction::get_transactions,
         transaction::create_transaction,
         transaction::get_portfolio_value,
-        snapshots::create_snapshot
+        snapshots::create_snapshot,
+        snapshots::get_snapshots
     ),
     components(
         schemas(
@@ -34,6 +35,7 @@ use routes::{asset, snapshots, transaction, wallet};
             models::transaction::CreateTransactionRequest,
             models::snapshot::PortfolioSnapshot,
             models::snapshot::SnapshotAsset,
+            models::snapshot::SnapshotDiff,
         )
     ),
     tags(
