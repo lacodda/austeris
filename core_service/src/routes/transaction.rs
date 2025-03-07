@@ -1,7 +1,9 @@
 use crate::dto::transaction::{CreateTransactionDto, TransactionDto};
 use crate::error::AppError;
 use crate::models::transaction::FilterParams;
+use crate::repository::asset::AssetRepository;
 use crate::repository::transaction::TransactionRepository;
+use crate::repository::wallet::WalletRepository;
 use crate::services::portfolio::PortfolioService;
 use actix_web::{web, HttpResponse, Responder};
 use actix_web_validator::{Json, Query};
@@ -76,7 +78,7 @@ async fn get_transactions(
     ),
     responses(
         (status = 200, description = "Transaction created successfully", body = TransactionDto, example = json!({"id": 1, "asset": "BTC", "wallet": "Binance", "amount": 0.5, "price": 50000.0, "transaction_type": "BUY", "fee": 0.001, "notes": "First trade", "created_at": "2025-03-07T12:00:00Z"})),
-        (status = 400, description = "Invalid request data (e.g., validation failed)", body = String, example = json!({"status": 400, "error": "Bad Request", "message": "Validation error: Amount must be non-negative"})),
+        (status = 400, description = "Invalid request data (e.g., validation failed or invalid IDs)", body = String, example = json!({"status": 400, "error": "Bad Request", "message": "Wallet not found"})),
         (status = 500, description = "Internal server error", body = String, example = json!({"status": 500, "error": "Internal Server Error", "message": "Failed to insert transaction into database"}))
     )
 )]
@@ -84,6 +86,27 @@ async fn create_transaction(
     pool: web::Data<PgPool>,
     transaction: Json<CreateTransactionDto>,
 ) -> Result<impl Responder, AppError> {
+    let asset_repo = AssetRepository::new(pool.get_ref());
+    let wallet_repo = WalletRepository::new(pool.get_ref());
+
+    // Check if asset_id exists
+    if !asset_repo
+        .exists(transaction.asset_id)
+        .await
+        .map_err(AppError::internal)?
+    {
+        return Err(AppError::bad_request(anyhow::anyhow!("Asset not found")));
+    }
+
+    // Check if wallet_id exists
+    if !wallet_repo
+        .exists(transaction.wallet_id)
+        .await
+        .map_err(AppError::internal)?
+    {
+        return Err(AppError::bad_request(anyhow::anyhow!("Wallet not found")));
+    }
+
     // Insert the transaction into the database and fetch full details
     let record = sqlx::query!(
         r#"
@@ -115,12 +138,8 @@ async fn create_transaction(
 
     let response = TransactionDto {
         id: record.id,
-        asset: record
-            .asset
-            .ok_or_else(|| AppError::internal(anyhow::anyhow!("Asset not found")))?,
-        wallet: record
-            .wallet
-            .ok_or_else(|| AppError::internal(anyhow::anyhow!("Wallet not found")))?,
+        asset: record.asset.unwrap(),
+        wallet: record.wallet.unwrap(),
         amount: record.amount,
         price: record.price,
         transaction_type: record.transaction_type,
