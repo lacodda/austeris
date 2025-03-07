@@ -75,7 +75,7 @@ async fn get_transactions(
         example = json!({"asset_id": 1, "wallet_id": 1, "amount": 0.5, "price": 50000.0, "transaction_type": "BUY", "fee": 0.001, "notes": "First trade"})
     ),
     responses(
-        (status = 200, description = "Transaction created successfully", body = i32, example = json!(1)),
+        (status = 200, description = "Transaction created successfully", body = TransactionDto, example = json!({"id": 1, "asset": "BTC", "wallet": "Binance", "amount": 0.5, "price": 50000.0, "transaction_type": "BUY", "fee": 0.001, "notes": "First trade", "created_at": "2025-03-07T12:00:00Z"})),
         (status = 400, description = "Invalid request data (e.g., validation failed)", body = String, example = json!({"status": 400, "error": "Bad Request", "message": "Validation error: Amount must be non-negative"})),
         (status = 500, description = "Internal server error", body = String, example = json!({"status": 500, "error": "Internal Server Error", "message": "Failed to insert transaction into database"}))
     )
@@ -84,13 +84,22 @@ async fn create_transaction(
     pool: web::Data<PgPool>,
     transaction: Json<CreateTransactionDto>,
 ) -> Result<impl Responder, AppError> {
-    // Insert the transaction into the database and return its ID
+    // Insert the transaction into the database and fetch full details
     let record = sqlx::query!(
         r#"
         INSERT INTO transactions 
             (asset_id, wallet_id, amount, price, type, fee, notes)
         VALUES ($1, $2, $3, $4, $5, $6, $7)
-        RETURNING id
+        RETURNING 
+            id, 
+            (SELECT symbol FROM assets WHERE id = $1) AS asset,
+            (SELECT name FROM wallets WHERE id = $2) AS wallet,
+            amount,
+            price,
+            type AS transaction_type,
+            fee,
+            notes,
+            created_at
         "#,
         transaction.asset_id,
         transaction.wallet_id,
@@ -104,7 +113,23 @@ async fn create_transaction(
     .await
     .map_err(AppError::internal)?;
 
-    Ok(HttpResponse::Ok().json(record.id))
+    let response = TransactionDto {
+        id: record.id,
+        asset: record
+            .asset
+            .ok_or_else(|| AppError::internal(anyhow::anyhow!("Asset not found")))?,
+        wallet: record
+            .wallet
+            .ok_or_else(|| AppError::internal(anyhow::anyhow!("Wallet not found")))?,
+        amount: record.amount,
+        price: record.price,
+        transaction_type: record.transaction_type,
+        fee: record.fee,
+        notes: record.notes,
+        created_at: record.created_at.to_string(),
+    };
+
+    Ok(HttpResponse::Ok().json(response))
 }
 
 // Handles GET /transactions/portfolio/value to calculate portfolio value

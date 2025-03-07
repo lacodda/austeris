@@ -58,15 +58,16 @@ impl CmcService {
     }
 }
 
-// Updates the assets table with data from CoinMarketCap
-pub async fn update_assets(pool: &PgPool) -> Result<()> {
+// Updates the assets table with data from CoinMarketCap and returns the number of updated assets
+pub async fn update_assets(pool: &PgPool) -> Result<usize> {
     let service = CmcService::new();
     let listings = service.fetch_cmc_listings().await?;
+    let mut updated_count = 0;
 
     // Iterate over listings and upsert into the assets table
     for listing in listings {
         let cmc_id = listing.id.to_string();
-        sqlx::query!(
+        let result = sqlx::query!(
             r#"
             INSERT INTO assets (symbol, name, cmc_id)
             VALUES ($1, $2, $3)
@@ -79,7 +80,8 @@ pub async fn update_assets(pool: &PgPool) -> Result<()> {
         )
         .execute(pool)
         .await?;
+        updated_count += result.rows_affected() as usize;
     }
 
-    Ok(())
+    Ok(updated_count)
 }

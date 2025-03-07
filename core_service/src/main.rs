@@ -37,6 +37,7 @@ use routes::{asset, snapshots, transaction, wallet};
         schemas(
             dto::asset::AssetDto,
             dto::asset::CreateAssetDto,
+            dto::asset::UpdateAssetsResponse,
             dto::wallet::WalletDto,
             dto::wallet::CreateWalletDto,
             dto::transaction::TransactionDto,

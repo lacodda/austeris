@@ -1,10 +1,11 @@
-use crate::dto::asset::{AssetDto, CreateAssetDto};
+use crate::dto::asset::{AssetDto, CreateAssetDto, UpdateAssetsResponse};
 use crate::error::AppError;
 use crate::models::asset::AssetDb;
 use crate::services::cmc::update_assets;
 use actix_web::{web, HttpResponse, Responder};
 use actix_web_validator::Json;
 use anyhow::Result;
+use chrono::Utc;
 use sqlx::PgPool;
 
 // Configures routes for the /assets scope
@@ -109,11 +110,18 @@ async fn create_asset(
     post,
     path = "/assets/update",
     responses(
-        (status = 200, description = "Assets updated successfully from CoinMarketCap", body = String, example = json!("Assets updated successfully")),
+        (status = 200, description = "Assets updated successfully from CoinMarketCap", body = UpdateAssetsResponse, example = json!({"updated_count": 1000, "updated_at": "2025-03-07T12:00:00Z"})),
         (status = 500, description = "Internal server error (e.g., CoinMarketCap API or database failure)", body = String, example = json!({"status": 500, "error": "Internal Server Error", "message": "Failed to fetch listings from CoinMarketCap"}))
     )
 )]
 async fn update_assets_handler(pool: web::Data<PgPool>) -> Result<impl Responder, AppError> {
-    update_assets(&pool).await.map_err(AppError::internal)?;
-    Ok(HttpResponse::Ok().json("Assets updated successfully"))
+    let updated_count = update_assets(&pool).await?;
+    let updated_at = Utc::now();
+
+    let response = UpdateAssetsResponse {
+        updated_count,
+        updated_at: updated_at.to_rfc3339(),
+    };
+
+    Ok(HttpResponse::Ok().json(response))
 }

@@ -26,3 +26,11 @@ pub struct CreateAssetDto {
     #[validate(range(min = 0, message = "Decimals must be non-negative"))]
     pub decimals: Option<i32>,
 }
+
+// DTO for the response of updating assets
+#[derive(Debug, Serialize, ToSchema)]
+pub struct UpdateAssetsResponse {
+    pub updated_count: usize,
+    #[schema(value_type = String)]
+    pub updated_at: String,
+}
