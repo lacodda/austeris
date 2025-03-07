@@ -33,6 +33,7 @@ async fn get_assets(pool: web::Data<PgPool>) -> impl Responder {
             r#"
             SELECT id, symbol, name, cmc_id, decimals, created_at
             FROM assets
+            ORDER BY id ASC
             "#
         )
         .fetch_all(pool.get_ref())
