@@ -8,12 +8,14 @@ use utoipa_swagger_ui::SwaggerUi;
 // Project modules
 mod db;
 mod dto;
+mod error;
 mod models;
 mod repository;
 mod routes;
 mod services;
 
 use db::connect;
+use error::AppError;
 use routes::{asset, snapshots, transaction, wallet};
 
 // Define OpenAPI documentation structure
@@ -81,6 +83,15 @@ async fn main() -> Result<()> {
             .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::new(cmc_service.clone()))
             .app_data(web::Data::new(portfolio_service.clone()))
+            // Register custom error handlers for validation errors
+            .app_data(
+                actix_web_validator::JsonConfig::default()
+                    .error_handler(|err, _req| AppError::from(err).into()),
+            )
+            .app_data(
+                actix_web_validator::QueryConfig::default()
+                    .error_handler(|err, _req| AppError::from(err).into()),
+            )
             // Set up Swagger UI endpoint
             .service(
                 SwaggerUi::new("/swagger-ui/{_:.*}")
