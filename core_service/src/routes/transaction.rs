@@ -3,7 +3,7 @@ use crate::models::transaction::FilterParams;
 use crate::repository::transaction::TransactionRepository;
 use crate::services::portfolio::PortfolioService;
 use actix_web::{web, HttpResponse, Responder};
-use actix_web_validator::Json;
+use actix_web_validator::{Json, Query};
 use anyhow::Result;
 use log::error;
 use sqlx::PgPool;
@@ -24,7 +24,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     path = "/transactions",
     responses(
         (status = 200, description = "Successfully retrieved list of transactions", body = Vec<TransactionDto>, example = json!([{"id": 1, "asset": "BTC", "wallet": "Binance", "amount": 0.5, "price": 50000.0, "transaction_type": "BUY", "fee": 0.001, "notes": "First trade", "created_at": "2024-01-01T00:00:00"}])),
-        (status = 400, description = "Invalid start_date format", body = String, example = json!("Invalid start_date format, expected ISO 8601 (e.g., '2024-01-01T00:00:00')")),
+        (status = 400, description = "Invalid query parameters", body = String, example = json!("Validation error: Invalid start_date format, expected ISO 8601 (e.g., '2024-01-01T00:00:00')")),
         (status = 500, description = "Internal server error", body = String, example = json!("Database connection failed"))
     ),
     params(
@@ -35,10 +35,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         ("offset" = Option<i64>, Query, description = "Offset for pagination (default: 0)")
     )
 )]
-async fn get_transactions(
-    pool: web::Data<PgPool>,
-    query: web::Query<FilterParams>,
-) -> impl Responder {
+async fn get_transactions(pool: web::Data<PgPool>, query: Query<FilterParams>) -> impl Responder {
     let result: Result<Vec<TransactionDto>> = (|| async {
         // Use the repository to fetch transactions with filters
         let repo = TransactionRepository::new(pool.get_ref());
@@ -68,13 +65,7 @@ async fn get_transactions(
         Ok(transactions) => HttpResponse::Ok().json(transactions),
         Err(e) => {
             error!("Failed to get transactions: {}", e);
-            if e.to_string().contains("Invalid start_date format") {
-                HttpResponse::BadRequest().json(
-                    "Invalid start_date format, expected ISO 8601 (e.g., '2024-01-01T00:00:00')",
-                )
-            } else {
-                HttpResponse::InternalServerError().json(e.to_string())
-            }
+            HttpResponse::InternalServerError().json(e.to_string())
         }
     }
 }

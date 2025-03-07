@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::types::time::PrimitiveDateTime;
 use sqlx::FromRow;
 use utoipa::ToSchema;
+use validator::{Validate, ValidationError};
 
 // Represents a transaction record fetched from the database
 #[derive(Debug, FromRow, Deserialize, Serialize)]
@@ -18,11 +19,30 @@ pub struct TransactionDb {
 }
 
 // Represents query parameters for filtering transactions
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, ToSchema, Validate)]
 pub struct FilterParams {
+    #[validate(range(min = 1, message = "Asset ID must be positive"))]
     pub asset_id: Option<i32>,
+    #[validate(range(min = 1, message = "Wallet ID must be positive"))]
     pub wallet_id: Option<i32>,
+    #[validate(custom(function = "validate_iso8601_date"))]
     pub start_date: Option<String>,
+    #[validate(range(min = 1, message = "Limit must be positive"))]
     pub limit: Option<i64>,
+    #[validate(range(min = 0, message = "Offset must be non-negative"))]
     pub offset: Option<i64>,
+}
+
+// Custom validation function for ISO 8601 date
+fn validate_iso8601_date(date: &str) -> Result<(), ValidationError> {
+    if chrono::DateTime::parse_from_rfc3339(date).is_ok() {
+        return Ok(());
+    }
+
+    let date_with_utc = format!("{}Z", date);
+    if chrono::DateTime::parse_from_rfc3339(&date_with_utc).is_ok() {
+        return Ok(());
+    }
+
+    Err(ValidationError::new("Invalid start_date format, expected ISO 8601 (e.g., '2024-01-01T00:00:00' or '2024-01-01T00:00:00Z')"))
 }
