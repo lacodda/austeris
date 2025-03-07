@@ -29,7 +29,10 @@ pub struct CreateTransactionDto {
     pub amount: f64,
     #[validate(range(min = 0.0, message = "Price must be non-negative"))]
     pub price: f64,
-    #[validate(custom(function = "validate_transaction_type"))]
+    #[validate(custom(
+        function = "validate_transaction_type",
+        message = "Transaction type must be either 'BUY' or 'SELL'"
+    ))]
     pub transaction_type: String,
     #[validate(range(min = 0.0, message = "Fee must be non-negative"))]
     pub fee: Option<f64>,
@@ -42,8 +45,6 @@ fn validate_transaction_type(transaction_type: &str) -> Result<(), ValidationErr
     if transaction_type == "BUY" || transaction_type == "SELL" {
         Ok(())
     } else {
-        Err(ValidationError::new(
-            "Transaction type must be either 'BUY' or 'SELL'",
-        ))
+        Err(ValidationError::new("transaction_type"))
     }
 }

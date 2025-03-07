@@ -62,14 +62,12 @@ impl From<ValidatorError> for AppError {
                     .iter()
                     .flat_map(|(field, errors)| {
                         errors.iter().map(move |error| {
-                            format!(
-                                "{}: {}",
-                                field,
-                                error
-                                    .message
-                                    .as_ref()
-                                    .unwrap_or(&"Validation failed".into())
-                            )
+                            let msg = error
+                                .message
+                                .as_ref()
+                                .map(|m| m.to_string())
+                                .unwrap_or_else(|| "Validation failed".to_string());
+                            format!("{}: {}", field, msg)
                         })
                     })
                     .collect::<Vec<_>>()

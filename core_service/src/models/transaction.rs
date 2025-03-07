@@ -1,3 +1,4 @@
+use chrono::{DateTime, NaiveDateTime};
 use serde::{Deserialize, Serialize};
 use sqlx::types::time::PrimitiveDateTime;
 use sqlx::FromRow;
@@ -25,7 +26,10 @@ pub struct FilterParams {
     pub asset_id: Option<i32>,
     #[validate(range(min = 1, message = "Wallet ID must be positive"))]
     pub wallet_id: Option<i32>,
-    #[validate(custom(function = "validate_iso8601_date"))]
+    #[validate(custom(
+        function = "validate_date",
+        message = "Invalid start_date format, expected ISO 8601 (e.g., '2024-01-01T00:00:00' or '2024-01-01T00:00:00Z')"
+    ))]
     pub start_date: Option<String>,
     #[validate(range(min = 1, message = "Limit must be positive"))]
     pub limit: Option<i64>,
@@ -34,15 +38,11 @@ pub struct FilterParams {
 }
 
 // Custom validation function for ISO 8601 date
-fn validate_iso8601_date(date: &str) -> Result<(), ValidationError> {
-    if chrono::DateTime::parse_from_rfc3339(date).is_ok() {
+fn validate_date(date: &str) -> Result<(), ValidationError> {
+    if DateTime::parse_from_rfc3339(date).is_ok() {
         return Ok(());
     }
-
-    let date_with_utc = format!("{}Z", date);
-    if chrono::DateTime::parse_from_rfc3339(&date_with_utc).is_ok() {
-        return Ok(());
-    }
-
-    Err(ValidationError::new("Invalid start_date format, expected ISO 8601 (e.g., '2024-01-01T00:00:00' or '2024-01-01T00:00:00Z')"))
+    NaiveDateTime::parse_from_str(date, "%Y-%m-%dT%H:%M:%S")
+        .map(|_| ())
+        .map_err(|_| ValidationError::new("start_date"))
 }
