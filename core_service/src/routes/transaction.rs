@@ -3,6 +3,7 @@ use crate::models::transaction::FilterParams;
 use crate::repository::transaction::TransactionRepository;
 use crate::services::portfolio::PortfolioService;
 use actix_web::{web, HttpResponse, Responder};
+use actix_web_validator::Json;
 use anyhow::Result;
 use log::error;
 use sqlx::PgPool;
@@ -67,7 +68,6 @@ async fn get_transactions(
         Ok(transactions) => HttpResponse::Ok().json(transactions),
         Err(e) => {
             error!("Failed to get transactions: {}", e);
-            // Handle specific error for invalid start_date format
             if e.to_string().contains("Invalid start_date format") {
                 HttpResponse::BadRequest().json(
                     "Invalid start_date format, expected ISO 8601 (e.g., '2024-01-01T00:00:00')",
@@ -90,13 +90,13 @@ async fn get_transactions(
     ),
     responses(
         (status = 200, description = "Transaction created successfully", body = i32, example = json!(1)),
-        (status = 400, description = "Invalid request data (e.g., validation failed)", body = String, example = json!("Validation error: amount must be >= 0")),
+        (status = 400, description = "Invalid request data (e.g., validation failed)", body = String, example = json!("Validation error: Amount must be non-negative")),
         (status = 500, description = "Internal server error", body = String, example = json!("Failed to insert transaction into database"))
     )
 )]
 async fn create_transaction(
     pool: web::Data<PgPool>,
-    transaction: web::Json<CreateTransactionDto>,
+    transaction: Json<CreateTransactionDto>,
 ) -> impl Responder {
     let result: Result<i32> = (|| async {
         // Insert the transaction into the database and return its ID

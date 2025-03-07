@@ -17,12 +17,12 @@ pub struct AssetDto {
 // DTO for creating a new asset via API
 #[derive(Debug, Deserialize, Serialize, Validate, ToSchema)]
 pub struct CreateAssetDto {
-    #[validate(length(min = 1, max = 10))]
+    #[validate(length(min = 1, message = "Symbol must not be empty"))]
     pub symbol: String,
-    #[validate(length(min = 1, max = 50))]
+    #[validate(length(min = 1, message = "Name must not be empty"))]
     pub name: String,
-    #[validate(length(min = 1, max = 50))]
+    #[validate(length(min = 1, message = "CMC ID must not be empty"))]
     pub cmc_id: String,
-    #[validate(range(min = 0, max = 18))]
+    #[validate(range(min = 0, message = "Decimals must be non-negative"))]
     pub decimals: Option<i32>,
 }

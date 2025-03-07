@@ -1,6 +1,7 @@
 use crate::dto::wallet::{CreateWalletDto, WalletDto};
 use crate::models::wallet::WalletDb;
 use actix_web::{web, HttpResponse, Responder};
+use actix_web_validator::Json;
 use anyhow::Result;
 use log::error;
 use sqlx::PgPool;
@@ -69,14 +70,11 @@ async fn get_wallets(pool: web::Data<PgPool>) -> impl Responder {
     ),
     responses(
         (status = 200, description = "Wallet created successfully", body = WalletDto, example = json!({"id": 1, "name": "Binance", "wallet_type": "Hot", "address": "0x1234", "created_at": "2024-01-01T00:00:00"})),
-        (status = 400, description = "Invalid request data (e.g., missing required fields)", body = String, example = json!("Validation error: name is required")),
+        (status = 400, description = "Invalid request data (e.g., missing required fields)", body = String, example = json!("Validation error: Name must not be empty")),
         (status = 500, description = "Internal server error (e.g., database failure)", body = String, example = json!("Failed to insert wallet into database"))
     )
 )]
-async fn create_wallet(
-    pool: web::Data<PgPool>,
-    wallet: web::Json<CreateWalletDto>,
-) -> impl Responder {
+async fn create_wallet(pool: web::Data<PgPool>, wallet: Json<CreateWalletDto>) -> impl Responder {
     let result: Result<WalletDto> = (|| async {
         // Insert the new wallet into the database and return its details
         let record = sqlx::query_as!(

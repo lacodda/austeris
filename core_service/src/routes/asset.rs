@@ -2,6 +2,7 @@ use crate::dto::asset::{AssetDto, CreateAssetDto};
 use crate::models::asset::AssetDb;
 use crate::services::cmc::update_assets;
 use actix_web::{web, HttpResponse, Responder};
+use actix_web_validator::Json;
 use anyhow::Result;
 use log::error;
 use sqlx::PgPool;
@@ -76,11 +77,11 @@ async fn get_assets(pool: web::Data<PgPool>) -> impl Responder {
     ),
     responses(
         (status = 200, description = "Asset created successfully", body = AssetDto, example = json!({"id": 1, "symbol": "BTC", "name": "Bitcoin", "cmc_id": "1", "decimals": 8, "created_at": "2024-01-01T00:00:00"})),
-        (status = 400, description = "Invalid request data (e.g., missing required fields)", body = String, example = json!("Validation error: symbol is required")),
+        (status = 400, description = "Invalid request data (e.g., missing required fields)", body = String, example = json!("Validation error: Symbol must not be empty")),
         (status = 500, description = "Internal server error (e.g., database failure)", body = String, example = json!("Failed to insert asset into database"))
     )
 )]
-async fn create_asset(pool: web::Data<PgPool>, asset: web::Json<CreateAssetDto>) -> impl Responder {
+async fn create_asset(pool: web::Data<PgPool>, asset: Json<CreateAssetDto>) -> impl Responder {
     let result: Result<AssetDto> = (|| async {
         // Insert the new asset into the database and return its details
         let record = sqlx::query_as!(
