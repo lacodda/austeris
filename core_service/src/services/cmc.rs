@@ -1,5 +1,5 @@
 use crate::models::cmc::{CmcListing, CmcQuote, CmcQuoteResponse, CmcResponse};
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use sqlx::PgPool;
 use std::env;
 
@@ -35,28 +35,6 @@ impl CmcService {
         Ok(cmc_response.data)
     }
 
-    // Fetches the latest quote for a specific cryptocurrency symbol
-    pub async fn get_quote(&self, symbol: &str) -> Result<CmcQuote> {
-        let response = self
-            .client
-            .get("https://pro-api.coinmarketcap.com/v2/cryptocurrency/quotes/latest")
-            .header("X-CMC_PRO_API_KEY", &self.api_key)
-            .query(&[("symbol", symbol), ("convert", "USD")])
-            .send()
-            .await?;
-
-        // Parse the response into CmcQuoteResponse structure
-        let quote_response: CmcQuoteResponse = response.json().await?;
-        let listings = quote_response
-            .data
-            .get(symbol)
-            .ok_or_else(|| anyhow!("No quote data for symbol {}", symbol))?;
-        let listing = listings
-            .first()
-            .ok_or_else(|| anyhow!("No quote data available for symbol {}", symbol))?;
-        Ok(listing.quote.usd.clone())
-    }
-
     // Fetches quotes for all assets in the database using their cmc_id
     pub async fn fetch_quotes_for_assets(&self, pool: &PgPool) -> Result<Vec<(i32, CmcQuote)>> {
         // Fetch all cmc_ids from the assets table
@@ -88,11 +66,9 @@ impl CmcService {
                 .await?;
 
             let quote_response: CmcQuoteResponse = response.json().await?;
-            for (cmc_id_str, listings) in quote_response.data {
+            for (cmc_id_str, listing) in quote_response.data {
                 let cmc_id: i32 = cmc_id_str.parse().expect("CMC ID should be an integer");
-                if let Some(listing) = listings.first() {
-                    quotes.push((cmc_id, listing.quote.usd.clone()));
-                }
+                quotes.push((cmc_id, listing.quote.usd.clone()));
             }
         }
 

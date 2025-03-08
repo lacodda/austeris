@@ -28,7 +28,7 @@ pub struct CmcListing {
     pub slug: String,
     pub num_market_pairs: i32,
     pub date_added: String,
-    pub tags: Vec<String>, // Tags as simple strings for listings/latest
+    pub tags: Vec<String>,
     pub max_supply: Option<f64>,
     pub circulating_supply: f64,
     pub total_supply: f64,
@@ -92,7 +92,7 @@ pub struct CmcQuote {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct CmcQuoteResponse {
     pub status: CmcStatus,
-    pub data: std::collections::HashMap<String, Vec<CmcQuoteListing>>,
+    pub data: std::collections::HashMap<String, CmcQuoteListing>,
 }
 
 // Listing data for quotes/latest endpoint
@@ -104,7 +104,7 @@ pub struct CmcQuoteListing {
     pub slug: String,
     pub num_market_pairs: i32,
     pub date_added: String,
-    pub tags: Vec<CmcTag>, // Detailed tags for quotes/latest
+    pub tags: Vec<CmcTag>,
     pub max_supply: Option<f64>,
     pub circulating_supply: f64,
     pub total_supply: f64,

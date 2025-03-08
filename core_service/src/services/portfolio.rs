@@ -1,8 +1,10 @@
 use crate::dto::snapshot::SnapshotAssetDto;
+use crate::repository::asset_price::AssetPriceRepository;
 use crate::repository::transaction::TransactionRepository;
 use crate::services::cmc::CmcService;
 use actix_web::web;
 use anyhow::Result;
+use chrono::{DateTime, Duration, Utc};
 use sqlx::PgPool;
 use std::collections::HashMap;
 
@@ -28,7 +30,7 @@ impl PortfolioService {
         for record in transactions {
             let (amount, cmc_id) = asset_amounts
                 .entry(record.asset.clone())
-                .or_insert((0.0, 0)); // Default cmc_id as 0
+                .or_insert((0.0, 0));
             if *cmc_id == 0 {
                 // Check if cmc_id needs to be fetched
                 let asset_cmc_id = sqlx::query_scalar!(
@@ -52,13 +54,64 @@ impl PortfolioService {
     // Calculates the total portfolio value in USD
     pub async fn get_portfolio_value(&self) -> Result<f64> {
         let asset_amounts = self.get_current_assets().await?;
+        let price_repo = AssetPriceRepository::new(self.pool.as_ref());
         let mut total_value = 0.0;
 
-        for (symbol, (amount, _)) in asset_amounts {
-            if amount > 0.0 {
-                let quote = self.cmc_service.get_quote(&symbol).await?;
+        // Get latest prices from the database
+        let latest_prices = price_repo.get_latest_prices().await?;
+        let mut price_map: HashMap<i32, (f64, DateTime<Utc>)> = latest_prices
+            .into_iter()
+            .map(|(cmc_id, price, timestamp)| (cmc_id, (price, timestamp)))
+            .collect();
+
+        // Identify assets needing fresh prices (missing or older than 1 hour)
+        let now = Utc::now();
+        let one_hour_ago = now - Duration::hours(1);
+        let mut cmc_ids_to_fetch: Vec<i32> = Vec::new();
+
+        for (_symbol, (amount, cmc_id)) in &asset_amounts {
+            if *amount > 0.0 {
+                match price_map.get(cmc_id) {
+                    Some((_, timestamp)) if *timestamp >= one_hour_ago => {
+                        // Price is fresh, use it
+                        let price = price_map.get(cmc_id).unwrap().0;
+                        total_value += amount * price;
+                    }
+                    _ => {
+                        // Price is missing or outdated, fetch it
+                        cmc_ids_to_fetch.push(*cmc_id);
+                    }
+                }
+            }
+        }
+
+        // Fetch and save fresh prices if needed
+        if !cmc_ids_to_fetch.is_empty() {
+            let fresh_quotes = self
+                .cmc_service
+                .fetch_quotes_for_assets(self.pool.as_ref())
+                .await?;
+            price_repo.save_prices(fresh_quotes.clone()).await?;
+
+            // Update price_map with fresh prices
+            for (cmc_id, quote) in fresh_quotes {
                 if let Some(price) = quote.price {
-                    total_value += amount * price;
+                    price_map.insert(cmc_id, (price, now));
+                }
+            }
+
+            // Recalculate value for assets with fresh prices
+            for (symbol, (amount, cmc_id)) in &asset_amounts {
+                if *amount > 0.0 && cmc_ids_to_fetch.contains(cmc_id) {
+                    if let Some((price, _)) = price_map.get(cmc_id) {
+                        total_value += amount * price;
+                    } else {
+                        log::warn!(
+                            "No price available for cmc_id {} ({}) after fetch",
+                            cmc_id,
+                            symbol
+                        );
+                    }
                 }
             }
         }
