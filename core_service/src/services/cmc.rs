@@ -56,6 +56,48 @@ impl CmcService {
             .ok_or_else(|| anyhow!("No quote data available for symbol {}", symbol))?;
         Ok(listing.quote.usd.clone())
     }
+
+    // Fetches quotes for all assets in the database using their cmc_id
+    pub async fn fetch_quotes_for_assets(&self, pool: &PgPool) -> Result<Vec<(i32, CmcQuote)>> {
+        // Fetch all cmc_ids from the assets table
+        let cmc_ids: Vec<i32> = sqlx::query_scalar!("SELECT cmc_id FROM assets")
+            .fetch_all(pool)
+            .await?;
+
+        if cmc_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Batch cmc_ids into chunks of 100 (API limit)
+        const BATCH_SIZE: usize = 100;
+        let mut quotes = Vec::new();
+        let usd = String::from("USD");
+
+        for chunk in cmc_ids.chunks(BATCH_SIZE) {
+            let ids_str = chunk
+                .iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<String>>()
+                .join(",");
+            let response = self
+                .client
+                .get("https://pro-api.coinmarketcap.com/v2/cryptocurrency/quotes/latest")
+                .header("X-CMC_PRO_API_KEY", &self.api_key)
+                .query(&[("id", &ids_str), ("convert", &usd)])
+                .send()
+                .await?;
+
+            let quote_response: CmcQuoteResponse = response.json().await?;
+            for (cmc_id_str, listings) in quote_response.data {
+                let cmc_id: i32 = cmc_id_str.parse().expect("CMC ID should be an integer");
+                if let Some(listing) = listings.first() {
+                    quotes.push((cmc_id, listing.quote.usd.clone()));
+                }
+            }
+        }
+
+        Ok(quotes)
+    }
 }
 
 // Updates the assets table with data from CoinMarketCap and returns the number of updated assets
