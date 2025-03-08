@@ -1,7 +1,7 @@
 use crate::models::cmc::CmcQuote;
 use anyhow::Result;
-use chrono::{DateTime, Utc};
-use sqlx::PgPool;
+use sqlx::types::time::PrimitiveDateTime;
+use sqlx::{query_builder::QueryBuilder, PgPool, Postgres};
 
 // Repository for asset price-related database operations
 pub struct AssetPriceRepository<'a> {
@@ -48,10 +48,10 @@ impl<'a> AssetPriceRepository<'a> {
     }
 
     // Gets the latest prices for all assets from asset_prices
-    pub async fn get_latest_prices(&self) -> Result<Vec<(i32, f64, DateTime<Utc>)>> {
+    pub async fn get_latest_prices(&self) -> Result<Vec<(i32, f64, PrimitiveDateTime)>> {
         let prices = sqlx::query!(
             r#"
-            SELECT a.cmc_id, ap.price_usd, ap.timestamp as "timestamp: DateTime<Utc>"
+            SELECT a.cmc_id, ap.price_usd, ap.timestamp
             FROM asset_prices ap
             JOIN assets a ON a.id = ap.asset_id
             WHERE ap.timestamp = (
@@ -70,18 +70,19 @@ impl<'a> AssetPriceRepository<'a> {
         Ok(prices)
     }
 
-    // Gets the latest prices with asset details from asset_prices and assets
+    // Gets the latest prices with asset details, optionally filtered by asset_ids, sorted by rank
     pub async fn get_latest_prices_with_assets(
         &self,
-    ) -> Result<Vec<(i32, String, String, f64, DateTime<Utc>)>> {
-        let prices = sqlx::query!(
+        asset_ids: Option<Vec<i32>>,
+    ) -> Result<Vec<(i32, String, String, f64, PrimitiveDateTime)>> {
+        let mut query_builder: QueryBuilder<Postgres> = QueryBuilder::new(
             r#"
             SELECT 
                 a.cmc_id, 
                 a.symbol, 
                 a.name, 
                 ap.price_usd, 
-                ap.timestamp as "timestamp: DateTime<Utc>"
+                ap.timestamp
             FROM asset_prices ap
             JOIN assets a ON a.id = ap.asset_id
             WHERE ap.timestamp = (
@@ -89,22 +90,25 @@ impl<'a> AssetPriceRepository<'a> {
                 FROM asset_prices
                 WHERE asset_id = ap.asset_id
             )
-            ORDER BY a.rank ASC
             "#,
-        )
-        .fetch_all(self.pool)
-        .await?
-        .into_iter()
-        .map(|record| {
-            (
-                record.cmc_id,
-                record.symbol,
-                record.name,
-                record.price_usd,
-                record.timestamp,
-            )
-        })
-        .collect();
+        );
+
+        // Add filter by asset_ids if provided
+        if let Some(ids) = asset_ids {
+            if !ids.is_empty() {
+                query_builder.push(" AND a.id = ANY(");
+                query_builder.push_bind(ids);
+                query_builder.push(")");
+            }
+        }
+
+        // Add sorting by rank
+        query_builder.push(" ORDER BY a.rank ASC");
+
+        let prices = query_builder
+            .build_query_as::<(i32, String, String, f64, PrimitiveDateTime)>()
+            .fetch_all(self.pool)
+            .await?;
 
         Ok(prices)
     }

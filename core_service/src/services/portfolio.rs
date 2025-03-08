@@ -5,6 +5,7 @@ use crate::services::cmc::CmcService;
 use actix_web::web;
 use anyhow::Result;
 use chrono::{DateTime, Duration, Utc};
+use sqlx::types::time::PrimitiveDateTime;
 use sqlx::PgPool;
 use std::collections::HashMap;
 
@@ -59,7 +60,7 @@ impl PortfolioService {
 
         // Get latest prices from the database
         let latest_prices = price_repo.get_latest_prices().await?;
-        let mut price_map: HashMap<i32, (f64, DateTime<Utc>)> = latest_prices
+        let mut price_map: HashMap<i32, (f64, PrimitiveDateTime)> = latest_prices
             .into_iter()
             .map(|(cmc_id, price, timestamp)| (cmc_id, (price, timestamp)))
             .collect();
@@ -72,13 +73,21 @@ impl PortfolioService {
         for (_symbol, (amount, cmc_id)) in &asset_amounts {
             if *amount > 0.0 {
                 match price_map.get(cmc_id) {
-                    Some((_, timestamp)) if *timestamp >= one_hour_ago => {
-                        // Price is fresh, use it
-                        let price = price_map.get(cmc_id).unwrap().0;
-                        total_value += amount * price;
+                    Some((_, timestamp)) => {
+                        let timestamp_offset = timestamp.assume_utc();
+                        let timestamp_utc: DateTime<Utc> = DateTime::from_timestamp(
+                            timestamp_offset.unix_timestamp(),
+                            timestamp_offset.nanosecond(),
+                        )
+                        .unwrap_or_else(|| Utc::now());
+                        if timestamp_utc >= one_hour_ago {
+                            let price = price_map.get(cmc_id).unwrap().0;
+                            total_value += amount * price;
+                        } else {
+                            cmc_ids_to_fetch.push(*cmc_id);
+                        }
                     }
-                    _ => {
-                        // Price is missing or outdated, fetch it
+                    None => {
                         cmc_ids_to_fetch.push(*cmc_id);
                     }
                 }
@@ -93,10 +102,12 @@ impl PortfolioService {
                 .await?;
             price_repo.save_prices(fresh_quotes.clone()).await?;
 
-            // Update price_map with fresh prices
+            // Use PrimitiveDateTime::new from current UTC time
+            let now_offset = time::OffsetDateTime::now_utc();
+            let now_pdt = PrimitiveDateTime::new(now_offset.date(), now_offset.time());
             for (cmc_id, quote) in fresh_quotes {
                 if let Some(price) = quote.price {
-                    price_map.insert(cmc_id, (price, now));
+                    price_map.insert(cmc_id, (price, now_pdt));
                 }
             }
 

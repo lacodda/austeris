@@ -7,7 +7,14 @@ use actix_web::{web, HttpResponse, Responder};
 use actix_web_validator::Json;
 use anyhow::Result;
 use chrono::Utc;
+use serde::Deserialize;
 use sqlx::PgPool;
+
+// Query parameters for GET /assets/prices
+#[derive(Debug, Deserialize)]
+struct PriceQuery {
+    asset_ids: Option<String>,
+}
 
 // Configures routes for the /assets scope
 pub fn configure(cfg: &mut web::ServiceConfig) {
@@ -135,15 +142,29 @@ async fn update_assets_handler(pool: web::Data<PgPool>) -> Result<impl Responder
 #[utoipa::path(
     get,
     path = "/assets/prices",
+    params(
+        ("asset_ids", Query, description = "Comma-separated list of asset IDs to filter by (e.g., 1,2)", example = "1,2")
+    ),
     responses(
         (status = 200, description = "Successfully retrieved latest asset prices with details", body = Vec<AssetPriceWithDetailsDto>, example = json!([{"cmc_id": 1, "symbol": "BTC", "name": "Bitcoin", "price_usd": 60000.0, "timestamp": "2025-03-08T12:00:00Z"}, {"cmc_id": 1027, "symbol": "ETH", "name": "Ethereum", "price_usd": 3000.0, "timestamp": "2025-03-08T12:00:00Z"}])),
         (status = 500, description = "Internal server error (e.g., database failure)", body = String, example = json!({"status": 500, "error": "Internal Server Error", "message": "Database connection failed"}))
     )
 )]
-async fn get_asset_prices(pool: web::Data<PgPool>) -> Result<impl Responder, AppError> {
+async fn get_asset_prices(
+    pool: web::Data<PgPool>,
+    query: web::Query<PriceQuery>,
+) -> Result<impl Responder, AppError> {
     let price_repo = AssetPriceRepository::new(pool.get_ref());
+
+    // Parse asset_ids from query parameter if provided
+    let asset_ids = query.asset_ids.as_ref().map(|ids| {
+        ids.split(',')
+            .filter_map(|id| id.trim().parse::<i32>().ok())
+            .collect::<Vec<i32>>()
+    });
+
     let prices = price_repo
-        .get_latest_prices_with_assets()
+        .get_latest_prices_with_assets(asset_ids)
         .await
         .map_err(AppError::internal)?;
 
@@ -155,7 +176,7 @@ async fn get_asset_prices(pool: web::Data<PgPool>) -> Result<impl Responder, App
                 symbol,
                 name,
                 price_usd,
-                timestamp: timestamp.to_rfc3339(),
+                timestamp: timestamp.to_string(),
             },
         )
         .collect::<Vec<_>>();
