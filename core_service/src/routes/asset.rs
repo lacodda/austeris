@@ -23,7 +23,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     get,
     path = "/assets",
     responses(
-        (status = 200, description = "Successfully retrieved list of assets", body = Vec<AssetDto>, example = json!([{"id": 1, "symbol": "BTC", "name": "Bitcoin", "cmc_id": "1", "decimals": 8, "created_at": "2024-01-01T00:00:00"}])),
+        (status = 200, description = "Successfully retrieved list of assets", body = Vec<AssetDto>, example = json!([{"id": 1, "symbol": "BTC", "name": "Bitcoin", "cmc_id": 1, "decimals": 8, "rank": 1, "created_at": "2024-01-01T00:00:00"}])),
         (status = 500, description = "Internal server error (e.g., database failure)", body = String, example = json!({"status": 500, "error": "Internal Server Error", "message": "Database connection failed"}))
     )
 )]
@@ -32,7 +32,7 @@ async fn get_assets(pool: web::Data<PgPool>) -> Result<impl Responder, AppError>
     let assets = sqlx::query_as!(
         AssetDb,
         r#"
-        SELECT id, symbol, name, cmc_id, decimals, created_at
+        SELECT id, symbol, name, cmc_id, decimals, rank, created_at
         FROM assets
         ORDER BY id ASC
         "#
@@ -50,6 +50,7 @@ async fn get_assets(pool: web::Data<PgPool>) -> Result<impl Responder, AppError>
             name: record.name,
             cmc_id: record.cmc_id,
             decimals: record.decimals,
+            rank: record.rank,
             created_at: record.created_at.to_string(),
         })
         .collect::<Vec<_>>();
@@ -64,10 +65,10 @@ async fn get_assets(pool: web::Data<PgPool>) -> Result<impl Responder, AppError>
     request_body(
         content = CreateAssetDto,
         description = "Details of the asset to create",
-        example = json!({"symbol": "BTC", "name": "Bitcoin", "cmc_id": "1", "decimals": 8})
+        example = json!({"symbol": "BTC", "name": "Bitcoin", "cmc_id": 1, "decimals": 8})
     ),
     responses(
-        (status = 200, description = "Asset created successfully", body = AssetDto, example = json!({"id": 1, "symbol": "BTC", "name": "Bitcoin", "cmc_id": "1", "decimals": 8, "created_at": "2024-01-01T00:00:00"})),
+        (status = 200, description = "Asset created successfully", body = AssetDto, example = json!({"id": 1, "symbol": "BTC", "name": "Bitcoin", "cmc_id": 1, "decimals": 8, "rank": 1, "created_at": "2024-01-01T00:00:00"})),
         (status = 400, description = "Invalid request data (e.g., missing required fields)", body = String, example = json!({"status": 400, "error": "Bad Request", "message": "Validation error: Symbol must not be empty"})),
         (status = 500, description = "Internal server error (e.g., database failure)", body = String, example = json!({"status": 500, "error": "Internal Server Error", "message": "Failed to insert asset into database"}))
     )
@@ -80,14 +81,15 @@ async fn create_asset(
     let record = sqlx::query_as!(
         AssetDb,
         r#"
-        INSERT INTO assets (symbol, name, cmc_id, decimals)
-        VALUES ($1, $2, $3, $4)
-        RETURNING id, symbol, name, cmc_id, decimals, created_at
+        INSERT INTO assets (symbol, name, cmc_id, decimals, rank)
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING id, symbol, name, cmc_id, decimals, rank, created_at
         "#,
         asset.symbol,
         asset.name,
         asset.cmc_id,
         asset.decimals,
+        asset.rank
     )
     .fetch_one(pool.get_ref())
     .await
@@ -99,6 +101,7 @@ async fn create_asset(
         name: record.name,
         cmc_id: record.cmc_id,
         decimals: record.decimals,
+        rank: record.rank,
         created_at: record.created_at.to_string(),
     };
 
@@ -115,7 +118,7 @@ async fn create_asset(
     )
 )]
 async fn update_assets_handler(pool: web::Data<PgPool>) -> Result<impl Responder, AppError> {
-    let updated_count = update_assets(&pool).await?;
+    let updated_count = update_assets(pool.get_ref()).await?;
     let updated_at = Utc::now();
 
     let response = UpdateAssetsResponse {

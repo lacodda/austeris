@@ -8,7 +8,8 @@ pub struct AssetDb {
     pub id: i32,
     pub symbol: String,
     pub name: String,
-    pub cmc_id: String,
+    pub cmc_id: i32,
     pub decimals: Option<i32>,
+    pub rank: Option<i32>,
     pub created_at: PrimitiveDateTime,
 }

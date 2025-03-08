@@ -16,5 +16,5 @@ pub struct SnapshotDb {
 pub struct SnapshotAssetDb {
     pub symbol: String,
     pub amount: f64, // Positive or negative difference
-    pub cmc_id: String,
+    pub cmc_id: i32,
 }

@@ -6,7 +6,7 @@ use utoipa::ToSchema;
 pub struct SnapshotAssetDto {
     pub symbol: String,
     pub amount: f64,
-    pub cmc_id: String,
+    pub cmc_id: i32,
 }
 
 // DTO for snapshot response in API
@@ -16,7 +16,7 @@ pub struct SnapshotDto {
     pub created_at: String,
     pub assets: Vec<SnapshotAssetDto>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub diff: Option<Vec<SnapshotDiffDto>>, // Difference between snapshot and current portfolio
+    pub diff: Option<Vec<SnapshotDiffDto>>,
 }
 
 // DTO for difference in asset amounts
@@ -24,5 +24,5 @@ pub struct SnapshotDto {
 pub struct SnapshotDiffDto {
     pub symbol: String,
     pub amount_diff: f64,
-    pub cmc_id: String,
+    pub cmc_id: i32,
 }

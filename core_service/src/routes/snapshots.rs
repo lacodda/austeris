@@ -21,7 +21,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     post,
     path = "/snapshots",
     responses(
-        (status = 200, description = "Snapshot created successfully", body = SnapshotDto, example = json!({"id": 1, "created_at": "2025-03-06T14:00:00", "assets": [{"symbol": "BTC", "amount": 1.5, "cmc_id": "1"}, {"symbol": "ETH", "amount": 10.0, "cmc_id": "1027"}]})),
+        (status = 200, description = "Snapshot created successfully", body = SnapshotDto, example = json!({"id": 1, "created_at": "2025-03-06T14:00:00", "assets": [{"symbol": "BTC", "amount": 1.5, "cmc_id": 1}, {"symbol": "ETH", "amount": 10.0, "cmc_id": 1027}]})),
         (status = 500, description = "Internal server error (e.g., database failure)", body = String, example = json!({"status": 500, "error": "Internal Server Error", "message": "Failed to save snapshot to database"}))
     )
 )]
@@ -63,7 +63,7 @@ async fn create_snapshot(
     get,
     path = "/snapshots",
     responses(
-        (status = 200, description = "Successfully retrieved list of snapshots with differences", body = Vec<SnapshotDto>, example = json!([{"id": 1, "created_at": "2025-03-06T14:00:00", "assets": [{"symbol": "BTC", "amount": 1.5, "cmc_id": "1"}, {"symbol": "ETH", "amount": 10.0, "cmc_id": "1027"}], "diff": [{"symbol": "BTC", "amount_diff": -0.5, "cmc_id": "1"}, {"symbol": "ETH", "amount_diff": 2.0, "cmc_id": "1027"}]}])),
+        (status = 200, description = "Successfully retrieved list of snapshots with differences", body = Vec<SnapshotDto>, example = json!([{"id": 1, "created_at": "2025-03-06T14:00:00", "assets": [{"symbol": "BTC", "amount": 1.5, "cmc_id": 1}, {"symbol": "ETH", "amount": 10.0, "cmc_id": 1027}], "diff": [{"symbol": "BTC", "amount_diff": -0.5, "cmc_id": 1}, {"symbol": "ETH", "amount_diff": 2.0, "cmc_id": 1027}]}])),
         (status = 500, description = "Internal server error (e.g., database failure)", body = String, example = json!({"status": 500, "error": "Internal Server Error", "message": "Failed to fetch snapshots from database"}))
     )
 )]
@@ -119,7 +119,7 @@ async fn get_snapshots(
                         SnapshotDiffDto {
                             symbol: asset.symbol.clone(),
                             amount_diff: diff,
-                            cmc_id: asset.cmc_id.clone(),
+                            cmc_id: asset.cmc_id,
                         },
                     );
                 }
@@ -133,7 +133,7 @@ async fn get_snapshots(
                         SnapshotDiffDto {
                             symbol: symbol.clone(),
                             amount_diff: *current_amount,
-                            cmc_id: cmc_id.clone(),
+                            cmc_id: *cmc_id,
                         },
                     );
                 }

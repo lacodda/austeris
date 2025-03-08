@@ -20,21 +20,23 @@ impl PortfolioService {
     }
 
     // Calculates current asset holdings from all transactions
-    pub async fn get_current_assets(&self) -> Result<HashMap<String, (f64, String)>> {
+    pub async fn get_current_assets(&self) -> Result<HashMap<String, (f64, i32)>> {
         let transaction_repo = TransactionRepository::new(self.pool.as_ref());
         let transactions = transaction_repo.get_all_transactions().await?;
-        let mut asset_amounts: HashMap<String, (f64, String)> = HashMap::new();
+        let mut asset_amounts: HashMap<String, (f64, i32)> = HashMap::new();
 
         for record in transactions {
             let (amount, cmc_id) = asset_amounts
                 .entry(record.asset.clone())
-                .or_insert((0.0, String::new()));
-            if *cmc_id == String::new() {
-                let asset_cmc_id =
-                    sqlx::query!("SELECT cmc_id FROM assets WHERE symbol = $1", record.asset)
-                        .fetch_one(self.pool.as_ref())
-                        .await?
-                        .cmc_id;
+                .or_insert((0.0, 0)); // Default cmc_id as 0
+            if *cmc_id == 0 {
+                // Check if cmc_id needs to be fetched
+                let asset_cmc_id = sqlx::query_scalar!(
+                    "SELECT cmc_id FROM assets WHERE symbol = $1",
+                    record.asset
+                )
+                .fetch_one(self.pool.as_ref())
+                .await?;
                 *cmc_id = asset_cmc_id;
             }
             if record.transaction_type == "BUY" {

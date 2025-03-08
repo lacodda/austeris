@@ -66,17 +66,17 @@ pub async fn update_assets(pool: &PgPool) -> Result<usize> {
 
     // Iterate over listings and upsert into the assets table
     for listing in listings {
-        let cmc_id = listing.id.to_string();
         let result = sqlx::query!(
             r#"
-            INSERT INTO assets (symbol, name, cmc_id)
-            VALUES ($1, $2, $3)
+            INSERT INTO assets (symbol, name, cmc_id, rank)
+            VALUES ($1, $2, $3, $4)
             ON CONFLICT (cmc_id) DO UPDATE
-            SET symbol = EXCLUDED.symbol, name = EXCLUDED.name
+            SET symbol = EXCLUDED.symbol, name = EXCLUDED.name, rank = EXCLUDED.rank
             "#,
             listing.symbol,
             listing.name,
-            cmc_id,
+            listing.id,
+            listing.cmc_rank,
         )
         .execute(pool)
         .await?;
