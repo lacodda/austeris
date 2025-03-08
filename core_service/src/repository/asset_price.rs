@@ -69,4 +69,43 @@ impl<'a> AssetPriceRepository<'a> {
 
         Ok(prices)
     }
+
+    // Gets the latest prices with asset details from asset_prices and assets
+    pub async fn get_latest_prices_with_assets(
+        &self,
+    ) -> Result<Vec<(i32, String, String, f64, DateTime<Utc>)>> {
+        let prices = sqlx::query!(
+            r#"
+            SELECT 
+                a.cmc_id, 
+                a.symbol, 
+                a.name, 
+                ap.price_usd, 
+                ap.timestamp as "timestamp: DateTime<Utc>"
+            FROM asset_prices ap
+            JOIN assets a ON a.id = ap.asset_id
+            WHERE ap.timestamp = (
+                SELECT MAX(timestamp)
+                FROM asset_prices
+                WHERE asset_id = ap.asset_id
+            )
+            ORDER BY a.rank ASC
+            "#,
+        )
+        .fetch_all(self.pool)
+        .await?
+        .into_iter()
+        .map(|record| {
+            (
+                record.cmc_id,
+                record.symbol,
+                record.name,
+                record.price_usd,
+                record.timestamp,
+            )
+        })
+        .collect();
+
+        Ok(prices)
+    }
 }

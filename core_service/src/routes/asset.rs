@@ -1,6 +1,7 @@
-use crate::dto::asset::{AssetDto, CreateAssetDto, UpdateAssetsResponse};
+use crate::dto::asset::{AssetDto, AssetPriceWithDetailsDto, CreateAssetDto, UpdateAssetsResponse};
 use crate::error::AppError;
 use crate::models::asset::AssetDb;
+use crate::repository::asset_price::AssetPriceRepository;
 use crate::services::cmc::update_assets;
 use actix_web::{web, HttpResponse, Responder};
 use actix_web_validator::Json;
@@ -14,7 +15,8 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         web::scope("/assets")
             .route("", web::get().to(get_assets))
             .route("", web::post().to(create_asset))
-            .route("/update", web::post().to(update_assets_handler)),
+            .route("/update", web::post().to(update_assets_handler))
+            .route("/prices", web::get().to(get_asset_prices)),
     );
 }
 
@@ -125,6 +127,38 @@ async fn update_assets_handler(pool: web::Data<PgPool>) -> Result<impl Responder
         updated_count,
         updated_at: updated_at.to_rfc3339(),
     };
+
+    Ok(HttpResponse::Ok().json(response))
+}
+
+// Handles GET /assets/prices to retrieve latest asset prices with details
+#[utoipa::path(
+    get,
+    path = "/assets/prices",
+    responses(
+        (status = 200, description = "Successfully retrieved latest asset prices with details", body = Vec<AssetPriceWithDetailsDto>, example = json!([{"cmc_id": 1, "symbol": "BTC", "name": "Bitcoin", "price_usd": 60000.0, "timestamp": "2025-03-08T12:00:00Z"}, {"cmc_id": 1027, "symbol": "ETH", "name": "Ethereum", "price_usd": 3000.0, "timestamp": "2025-03-08T12:00:00Z"}])),
+        (status = 500, description = "Internal server error (e.g., database failure)", body = String, example = json!({"status": 500, "error": "Internal Server Error", "message": "Database connection failed"}))
+    )
+)]
+async fn get_asset_prices(pool: web::Data<PgPool>) -> Result<impl Responder, AppError> {
+    let price_repo = AssetPriceRepository::new(pool.get_ref());
+    let prices = price_repo
+        .get_latest_prices_with_assets()
+        .await
+        .map_err(AppError::internal)?;
+
+    let response = prices
+        .into_iter()
+        .map(
+            |(cmc_id, symbol, name, price_usd, timestamp)| AssetPriceWithDetailsDto {
+                cmc_id,
+                symbol,
+                name,
+                price_usd,
+                timestamp: timestamp.to_rfc3339(),
+            },
+        )
+        .collect::<Vec<_>>();
 
     Ok(HttpResponse::Ok().json(response))
 }

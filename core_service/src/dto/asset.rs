@@ -37,3 +37,14 @@ pub struct UpdateAssetsResponse {
     #[schema(value_type = String)]
     pub updated_at: String,
 }
+
+// DTO for asset price response with asset details in API
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AssetPriceWithDetailsDto {
+    pub cmc_id: i32,
+    pub symbol: String,
+    pub name: String,
+    pub price_usd: f64,
+    #[schema(value_type = String)]
+    pub timestamp: String,
+}
