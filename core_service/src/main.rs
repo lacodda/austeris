@@ -17,6 +17,7 @@ mod services;
 use db::connect;
 use error::AppError;
 use routes::{asset, snapshots, transaction, wallet};
+use services::redis::RedisService;
 
 // Define OpenAPI documentation structure
 #[derive(OpenApi)]
@@ -75,10 +76,13 @@ async fn main() -> Result<()> {
 
     // Initialize CoinMarketCap service
     let cmc_service = services::cmc::CmcService::new();
+    // Redis service
+    let redis_service = RedisService::new()?;
     // Initialize Portfolio service
     let portfolio_service = services::portfolio::PortfolioService::new(
         web::Data::new(pool.clone()),
         web::Data::new(cmc_service.clone()),
+        web::Data::new(redis_service.clone()),
     );
 
     // Configure and start the HTTP server
@@ -87,6 +91,7 @@ async fn main() -> Result<()> {
             // Share database pool and CMC service across requests
             .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::new(cmc_service.clone()))
+            .app_data(web::Data::new(redis_service.clone()))
             .app_data(web::Data::new(portfolio_service.clone()))
             // Register custom error handlers for validation errors
             .app_data(

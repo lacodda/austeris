@@ -1,4 +1,5 @@
 use crate::models::cmc::CmcQuote;
+use crate::services::redis::RedisService;
 use anyhow::Result;
 use sqlx::types::time::PrimitiveDateTime;
 use sqlx::{query_builder::QueryBuilder, PgPool, Postgres};
@@ -6,15 +7,16 @@ use sqlx::{query_builder::QueryBuilder, PgPool, Postgres};
 // Repository for asset price-related database operations
 pub struct AssetPriceRepository<'a> {
     pool: &'a PgPool,
+    redis: RedisService,
 }
 
 impl<'a> AssetPriceRepository<'a> {
     // Creates a new instance of AssetPriceRepository
-    pub fn new(pool: &'a PgPool) -> Self {
-        Self { pool }
+    pub fn new(pool: &'a PgPool, redis: RedisService) -> Self {
+        Self { pool, redis }
     }
 
-    // Saves asset prices into the asset_prices table
+    // Saves asset prices into the asset_prices table and caches them in Redis
     pub async fn save_prices(&self, prices: Vec<(i32, CmcQuote)>) -> Result<usize> {
         let mut inserted_count = 0;
 
@@ -32,14 +34,21 @@ impl<'a> AssetPriceRepository<'a> {
                         INSERT INTO asset_prices (asset_id, price_usd)
                         VALUES ($1, $2)
                         ON CONFLICT (asset_id, timestamp) DO NOTHING
+                        RETURNING timestamp
                         "#,
                         asset_id,
                         price_usd
                     )
-                    .execute(self.pool)
+                    .fetch_one(self.pool)
                     .await?;
 
-                    inserted_count += result.rows_affected() as usize;
+                    inserted_count += 1;
+
+                    // Cache the price in Redis with the timestamp returned from DB
+                    let timestamp = result.timestamp.to_string();
+                    self.redis
+                        .save_price(asset_id, price_usd, timestamp)
+                        .await?;
                 }
             }
         }

@@ -14,12 +14,21 @@ use std::collections::HashMap;
 pub struct PortfolioService {
     pool: web::Data<PgPool>,
     cmc_service: web::Data<CmcService>,
+    redis_service: web::Data<crate::services::redis::RedisService>,
 }
 
 impl PortfolioService {
     // Creates a new instance of PortfolioService
-    pub fn new(pool: web::Data<PgPool>, cmc_service: web::Data<CmcService>) -> Self {
-        Self { pool, cmc_service }
+    pub fn new(
+        pool: web::Data<PgPool>,
+        cmc_service: web::Data<CmcService>,
+        redis_service: web::Data<crate::services::redis::RedisService>,
+    ) -> Self {
+        Self {
+            pool,
+            cmc_service,
+            redis_service,
+        }
     }
 
     // Calculates current asset holdings from all transactions
@@ -55,7 +64,8 @@ impl PortfolioService {
     // Calculates the total portfolio value in USD
     pub async fn get_portfolio_value(&self) -> Result<f64> {
         let asset_amounts = self.get_current_assets().await?;
-        let price_repo = AssetPriceRepository::new(self.pool.as_ref());
+        let price_repo =
+            AssetPriceRepository::new(self.pool.as_ref(), self.redis_service.as_ref().clone());
         let mut total_value = 0.0;
 
         // Get latest prices from the database

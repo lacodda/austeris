@@ -5,6 +5,7 @@ use crate::error::AppError;
 use crate::models::asset::AssetDb;
 use crate::repository::asset_price::AssetPriceRepository;
 use crate::services::cmc::update_assets;
+use crate::services::redis::RedisService;
 use actix_web::{web, HttpResponse, Responder};
 use actix_web_validator::Json;
 use anyhow::Result;
@@ -165,9 +166,10 @@ async fn update_assets_handler(pool: web::Data<PgPool>) -> Result<impl Responder
 )]
 async fn get_asset_prices(
     pool: web::Data<PgPool>,
+    redis: web::Data<RedisService>,
     query: web::Query<PriceQuery>,
 ) -> Result<impl Responder, AppError> {
-    let price_repo = AssetPriceRepository::new(pool.get_ref());
+    let price_repo = AssetPriceRepository::new(pool.get_ref(), redis.as_ref().clone());
 
     // Parse asset_ids from query parameter if provided
     let asset_ids = query.asset_ids.as_ref().map(|ids| {
@@ -214,9 +216,10 @@ async fn get_asset_prices(
 )]
 async fn get_price_history(
     pool: web::Data<PgPool>,
+    redis: web::Data<RedisService>,
     query: web::Query<HistoryQuery>,
 ) -> Result<impl Responder, AppError> {
-    let price_repo = AssetPriceRepository::new(pool.get_ref());
+    let price_repo = AssetPriceRepository::new(pool.get_ref(), redis.as_ref().clone());
 
     let asset_ids = query.asset_ids.as_ref().map(|ids| {
         ids.split(',')

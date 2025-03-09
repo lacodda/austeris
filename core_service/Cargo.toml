@@ -7,7 +7,7 @@ edition = "2021"
 actix-web = "4.9"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.140"
-tokio = { version = "1.0", features = ["full"] }
+tokio = { version = "1.44.0", features = ["full"] }
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-native-tls", "time", "chrono", "bigdecimal", "uuid"] }
 dotenv = "0.15"
 utoipa = { version = "5.3.1", features = ["actix_extras"] }
@@ -21,3 +21,4 @@ anyhow = "1.0"
 log = "0.4"
 env_logger = "0.11"
 actix-web-validator = "6.0.0"
+redis = { version = "0.29.1", features = ["tokio-comp"] }
