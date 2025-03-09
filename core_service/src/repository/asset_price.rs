@@ -112,4 +112,48 @@ impl<'a> AssetPriceRepository<'a> {
 
         Ok(prices)
     }
+
+    // Gets historical prices
+    pub async fn get_price_history(
+        &self,
+        asset_ids: Option<Vec<i32>>,
+        start_date: PrimitiveDateTime,
+        end_date: Option<PrimitiveDateTime>,
+    ) -> Result<Vec<(i32, String, f64, PrimitiveDateTime)>> {
+        let mut query_builder: QueryBuilder<Postgres> = QueryBuilder::new(
+            r#"
+            SELECT 
+                a.cmc_id, 
+                a.symbol, 
+                ap.price_usd, 
+                ap.timestamp
+            FROM asset_prices ap
+            JOIN assets a ON a.id = ap.asset_id
+            WHERE ap.timestamp >= 
+            "#,
+        );
+        query_builder.push_bind(start_date);
+
+        if let Some(end) = end_date {
+            query_builder.push(" AND ap.timestamp <= ");
+            query_builder.push_bind(end);
+        }
+
+        if let Some(ids) = asset_ids {
+            if !ids.is_empty() {
+                query_builder.push(" AND a.id = ANY(");
+                query_builder.push_bind(ids);
+                query_builder.push(")");
+            }
+        }
+
+        query_builder.push(" ORDER BY ap.timestamp ASC");
+
+        let history = query_builder
+            .build_query_as::<(i32, String, f64, PrimitiveDateTime)>()
+            .fetch_all(self.pool)
+            .await?;
+
+        Ok(history)
+    }
 }

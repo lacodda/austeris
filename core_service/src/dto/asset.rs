@@ -48,3 +48,12 @@ pub struct AssetPriceWithDetailsDto {
     #[schema(value_type = String)]
     pub timestamp: String,
 }
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AssetPriceHistoryDto {
+    pub cmc_id: i32,
+    pub symbol: String,
+    pub price_usd: f64,
+    #[schema(value_type = String)]
+    pub timestamp: String,
+}
