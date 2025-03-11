@@ -17,9 +17,10 @@ mod services;
 use db::connect;
 use error::AppError;
 use routes::{asset, snapshots, transaction, wallet};
+use services::cmc::CmcService;
+use services::portfolio::PortfolioService;
 use services::redis::RedisService;
 
-// Define OpenAPI documentation structure
 #[derive(OpenApi)]
 #[openapi(
     paths(
@@ -61,7 +62,6 @@ use services::redis::RedisService;
 )]
 struct ApiDoc;
 
-// Main entry point for the application
 #[actix_web::main]
 async fn main() -> Result<()> {
     // Initialize logging with default level INFO
@@ -74,26 +74,50 @@ async fn main() -> Result<()> {
     // Establish database connection
     let pool = connect().await?;
 
-    // Initialize CoinMarketCap service
-    let cmc_service = services::cmc::CmcService::new();
-    // Redis service
+    // Initialize services
+    let cmc_service = CmcService::new();
     let redis_service = RedisService::new()?;
-    // Initialize Portfolio service
-    let portfolio_service = services::portfolio::PortfolioService::new(
+    let portfolio_service = PortfolioService::new(
         web::Data::new(pool.clone()),
         web::Data::new(cmc_service.clone()),
         web::Data::new(redis_service.clone()),
     );
 
+    // Spawn periodic price updates
+    let pool_for_task = pool.clone();
+    let cmc_service_for_task = cmc_service.clone();
+    let redis_service_for_task = redis_service.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(15 * 60)); // Every 15 minutes
+        loop {
+            interval.tick().await;
+            log::info!("Updating asset prices...");
+            match cmc_service_for_task
+                .fetch_quotes_for_assets(&pool_for_task)
+                .await
+            {
+                Ok(quotes) => {
+                    let price_repo = repository::asset_price::AssetPriceRepository::new(
+                        &pool_for_task,
+                        redis_service_for_task.clone(),
+                    );
+                    match price_repo.save_prices(quotes).await {
+                        Ok(count) => log::info!("Updated {} asset prices successfully", count),
+                        Err(e) => log::error!("Failed to save prices: {}", e),
+                    }
+                }
+                Err(e) => log::error!("Failed to fetch quotes from CMC: {}", e),
+            }
+        }
+    });
+
     // Configure and start the HTTP server
     HttpServer::new(move || {
         App::new()
-            // Share database pool and CMC service across requests
             .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::new(cmc_service.clone()))
             .app_data(web::Data::new(redis_service.clone()))
             .app_data(web::Data::new(portfolio_service.clone()))
-            // Register custom error handlers for validation errors
             .app_data(
                 actix_web_validator::JsonConfig::default()
                     .error_handler(|err, _req| AppError::from(err).into()),
@@ -102,12 +126,10 @@ async fn main() -> Result<()> {
                 actix_web_validator::QueryConfig::default()
                     .error_handler(|err, _req| AppError::from(err).into()),
             )
-            // Set up Swagger UI endpoint
             .service(
                 SwaggerUi::new("/swagger-ui/{_:.*}")
                     .url("/api-docs/openapi.json", ApiDoc::openapi()),
             )
-            // Configure route handlers
             .configure(asset::configure)
             .configure(wallet::configure)
             .configure(transaction::configure)
