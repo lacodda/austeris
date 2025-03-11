@@ -1,10 +1,9 @@
 use crate::dto::transaction::{CreateTransactionDto, TransactionDto};
 use crate::error::AppError;
 use crate::models::transaction::FilterParams;
-use crate::repository::asset::AssetRepository;
 use crate::repository::transaction::TransactionRepository;
-use crate::repository::wallet::WalletRepository;
 use crate::services::portfolio::PortfolioService;
+use crate::services::transaction::TransactionService;
 use actix_web::{web, HttpResponse, Responder};
 use actix_web_validator::{Json, Query};
 use anyhow::Result;
@@ -41,7 +40,6 @@ async fn get_transactions(
     pool: web::Data<PgPool>,
     query: Query<FilterParams>,
 ) -> Result<impl Responder, AppError> {
-    // Use the repository to fetch transactions with filters
     let repo = TransactionRepository::new(pool.get_ref());
     let transactions = repo
         .get_transactions(query.into_inner())
@@ -83,71 +81,11 @@ async fn get_transactions(
     )
 )]
 async fn create_transaction(
-    pool: web::Data<PgPool>,
+    _pool: web::Data<PgPool>,
+    transaction_service: web::Data<TransactionService>,
     transaction: Json<CreateTransactionDto>,
 ) -> Result<impl Responder, AppError> {
-    let asset_repo = AssetRepository::new(pool.get_ref());
-    let wallet_repo = WalletRepository::new(pool.get_ref());
-
-    // Check if asset_id exists
-    if !asset_repo
-        .exists(transaction.asset_id)
-        .await
-        .map_err(AppError::internal)?
-    {
-        return Err(AppError::bad_request(anyhow::anyhow!("Asset not found")));
-    }
-
-    // Check if wallet_id exists
-    if !wallet_repo
-        .exists(transaction.wallet_id)
-        .await
-        .map_err(AppError::internal)?
-    {
-        return Err(AppError::bad_request(anyhow::anyhow!("Wallet not found")));
-    }
-
-    // Insert the transaction into the database and fetch full details
-    let record = sqlx::query!(
-        r#"
-        INSERT INTO transactions 
-            (asset_id, wallet_id, amount, price, type, fee, notes)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        RETURNING 
-            id, 
-            (SELECT symbol FROM assets WHERE id = $1) AS asset,
-            (SELECT name FROM wallets WHERE id = $2) AS wallet,
-            amount,
-            price,
-            type AS transaction_type,
-            fee,
-            notes,
-            created_at
-        "#,
-        transaction.asset_id,
-        transaction.wallet_id,
-        transaction.amount,
-        transaction.price,
-        transaction.transaction_type,
-        transaction.fee,
-        transaction.notes,
-    )
-    .fetch_one(pool.get_ref())
-    .await
-    .map_err(AppError::internal)?;
-
-    let response = TransactionDto {
-        id: record.id,
-        asset: record.asset.unwrap(),
-        wallet: record.wallet.unwrap(),
-        amount: record.amount,
-        price: record.price,
-        transaction_type: record.transaction_type,
-        fee: record.fee,
-        notes: record.notes,
-        created_at: record.created_at.to_string(),
-    };
-
+    let response = transaction_service.create(transaction.into_inner()).await?;
     Ok(HttpResponse::Ok().json(response))
 }
 
