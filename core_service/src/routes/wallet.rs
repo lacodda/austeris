@@ -1,6 +1,6 @@
 use crate::dto::wallet::{CreateWalletDto, WalletDto};
 use crate::error::AppError;
-use crate::models::wallet::WalletDb;
+use crate::services::wallet::WalletService;
 use actix_web::{web, HttpResponse, Responder};
 use actix_web_validator::Json;
 use anyhow::Result;
@@ -24,29 +24,12 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         (status = 500, description = "Internal server error (e.g., database failure)", body = String, example = json!({"status": 500, "error": "Internal Server Error", "message": "Database connection failed"}))
     )
 )]
-async fn get_wallets(pool: web::Data<PgPool>) -> Result<impl Responder, AppError> {
-    // Fetch all wallets from the database
-    let wallets = sqlx::query_as!(
-        WalletDb,
-        "SELECT id, name, type as wallet_type, address, created_at FROM wallets"
-    )
-    .fetch_all(pool.get_ref())
-    .await
-    .map_err(AppError::internal)?;
-
-    // Map database records to API response format (DTO)
-    let response = wallets
-        .into_iter()
-        .map(|record| WalletDto {
-            id: record.id,
-            name: record.name,
-            wallet_type: record.wallet_type,
-            address: record.address,
-            created_at: record.created_at.to_string(),
-        })
-        .collect::<Vec<_>>();
-
-    Ok(HttpResponse::Ok().json(response))
+async fn get_wallets(
+    _pool: web::Data<PgPool>,
+    wallet_service: web::Data<WalletService>,
+) -> Result<impl Responder, AppError> {
+    let wallets = wallet_service.get_all().await.map_err(AppError::internal)?;
+    Ok(HttpResponse::Ok().json(wallets))
 }
 
 // Handles POST /wallets to create a new wallet
@@ -65,32 +48,13 @@ async fn get_wallets(pool: web::Data<PgPool>) -> Result<impl Responder, AppError
     )
 )]
 async fn create_wallet(
-    pool: web::Data<PgPool>,
+    _pool: web::Data<PgPool>,
+    wallet_service: web::Data<WalletService>,
     wallet: Json<CreateWalletDto>,
 ) -> Result<impl Responder, AppError> {
-    // Insert the new wallet into the database and return its details
-    let record = sqlx::query_as!(
-        WalletDb,
-        r#"
-        INSERT INTO wallets (name, type, address)
-        VALUES ($1, $2, $3)
-        RETURNING id, name, type as wallet_type, address, created_at
-        "#,
-        wallet.name,
-        wallet.wallet_type,
-        wallet.address,
-    )
-    .fetch_one(pool.get_ref())
-    .await
-    .map_err(AppError::internal)?;
-
-    let response = WalletDto {
-        id: record.id,
-        name: record.name,
-        wallet_type: record.wallet_type,
-        address: record.address,
-        created_at: record.created_at.to_string(),
-    };
-
+    let response = wallet_service
+        .create(wallet.into_inner())
+        .await
+        .map_err(AppError::internal)?;
     Ok(HttpResponse::Ok().json(response))
 }
