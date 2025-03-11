@@ -21,6 +21,7 @@ use services::asset::AssetService;
 use services::cmc::CmcService;
 use services::portfolio::PortfolioService;
 use services::redis::RedisService;
+use services::snapshot::SnapshotService;
 use services::transaction::TransactionService;
 use services::wallet::WalletService;
 
@@ -88,6 +89,10 @@ async fn main() -> Result<()> {
         web::Data::new(cmc_service.clone()),
         web::Data::new(redis_service.clone()),
     );
+    let snapshot_service = SnapshotService::new(
+        web::Data::new(pool.clone()),
+        web::Data::new(portfolio_service.clone()),
+    );
 
     // Spawn periodic price updates
     let pool_for_task = pool.clone();
@@ -127,6 +132,7 @@ async fn main() -> Result<()> {
             .app_data(web::Data::new(wallet_service.clone()))
             .app_data(web::Data::new(transaction_service.clone()))
             .app_data(web::Data::new(portfolio_service.clone()))
+            .app_data(web::Data::new(snapshot_service.clone()))
             .app_data(
                 actix_web_validator::JsonConfig::default()
                     .error_handler(|err, _req| AppError::from(err).into()),
