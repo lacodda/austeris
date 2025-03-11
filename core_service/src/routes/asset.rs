@@ -2,8 +2,8 @@ use crate::dto::asset::{
     AssetDto, AssetPriceHistoryDto, AssetPriceWithDetailsDto, CreateAssetDto, UpdateAssetsResponse,
 };
 use crate::error::AppError;
-use crate::models::asset::AssetDb;
 use crate::repository::asset_price::AssetPriceRepository;
+use crate::services::asset::AssetService;
 use crate::services::cmc::update_assets;
 use crate::services::redis::RedisService;
 use actix_web::{web, HttpResponse, Responder};
@@ -50,35 +50,12 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         (status = 500, description = "Internal server error (e.g., database failure)", body = String, example = json!({"status": 500, "error": "Internal Server Error", "message": "Database connection failed"}))
     )
 )]
-async fn get_assets(pool: web::Data<PgPool>) -> Result<impl Responder, AppError> {
-    // Fetch all assets from the database
-    let assets = sqlx::query_as!(
-        AssetDb,
-        r#"
-        SELECT id, symbol, name, cmc_id, decimals, rank, created_at
-        FROM assets
-        ORDER BY id ASC
-        "#
-    )
-    .fetch_all(pool.get_ref())
-    .await
-    .map_err(AppError::internal)?;
-
-    // Map database records to API response format (DTO)
-    let response = assets
-        .into_iter()
-        .map(|record| AssetDto {
-            id: record.id,
-            symbol: record.symbol,
-            name: record.name,
-            cmc_id: record.cmc_id,
-            decimals: record.decimals,
-            rank: record.rank,
-            created_at: record.created_at.to_string(),
-        })
-        .collect::<Vec<_>>();
-
-    Ok(HttpResponse::Ok().json(response))
+async fn get_assets(
+    _pool: web::Data<PgPool>,
+    asset_service: web::Data<AssetService>,
+) -> Result<impl Responder, AppError> {
+    let assets = asset_service.get_all().await.map_err(AppError::internal)?;
+    Ok(HttpResponse::Ok().json(assets))
 }
 
 // Handles POST /assets to create a new asset
@@ -97,37 +74,14 @@ async fn get_assets(pool: web::Data<PgPool>) -> Result<impl Responder, AppError>
     )
 )]
 async fn create_asset(
-    pool: web::Data<PgPool>,
+    _pool: web::Data<PgPool>,
+    asset_service: web::Data<AssetService>,
     asset: Json<CreateAssetDto>,
 ) -> Result<impl Responder, AppError> {
-    // Insert the new asset into the database and return its details
-    let record = sqlx::query_as!(
-        AssetDb,
-        r#"
-        INSERT INTO assets (symbol, name, cmc_id, decimals, rank)
-        VALUES ($1, $2, $3, $4, $5)
-        RETURNING id, symbol, name, cmc_id, decimals, rank, created_at
-        "#,
-        asset.symbol,
-        asset.name,
-        asset.cmc_id,
-        asset.decimals,
-        asset.rank
-    )
-    .fetch_one(pool.get_ref())
-    .await
-    .map_err(AppError::internal)?;
-
-    let response = AssetDto {
-        id: record.id,
-        symbol: record.symbol,
-        name: record.name,
-        cmc_id: record.cmc_id,
-        decimals: record.decimals,
-        rank: record.rank,
-        created_at: record.created_at.to_string(),
-    };
-
+    let response = asset_service
+        .create(asset.into_inner())
+        .await
+        .map_err(AppError::internal)?;
     Ok(HttpResponse::Ok().json(response))
 }
 

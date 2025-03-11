@@ -17,6 +17,7 @@ mod services;
 use db::connect;
 use error::AppError;
 use routes::{asset, snapshots, transaction, wallet};
+use services::asset::AssetService;
 use services::cmc::CmcService;
 use services::portfolio::PortfolioService;
 use services::redis::RedisService;
@@ -77,6 +78,7 @@ async fn main() -> Result<()> {
     // Initialize services
     let cmc_service = CmcService::new();
     let redis_service = RedisService::new()?;
+    let asset_service = AssetService::new(web::Data::new(pool.clone()));
     let portfolio_service = PortfolioService::new(
         web::Data::new(pool.clone()),
         web::Data::new(cmc_service.clone()),
@@ -117,6 +119,7 @@ async fn main() -> Result<()> {
             .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::new(cmc_service.clone()))
             .app_data(web::Data::new(redis_service.clone()))
+            .app_data(web::Data::new(asset_service.clone()))
             .app_data(web::Data::new(portfolio_service.clone()))
             .app_data(
                 actix_web_validator::JsonConfig::default()
