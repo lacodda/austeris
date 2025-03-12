@@ -4,7 +4,6 @@ use crate::services::wallet::WalletService;
 use actix_web::{web, HttpResponse, Responder};
 use actix_web_validator::Json;
 use anyhow::Result;
-use sqlx::PgPool;
 
 // Configures routes for the /wallets scope
 pub fn configure(cfg: &mut web::ServiceConfig) {
@@ -24,10 +23,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         (status = 500, description = "Internal server error (e.g., database failure)", body = String, example = json!({"status": 500, "error": "Internal Server Error", "message": "Database connection failed"}))
     )
 )]
-async fn get_wallets(
-    _pool: web::Data<PgPool>,
-    wallet_service: web::Data<WalletService>,
-) -> Result<impl Responder, AppError> {
+async fn get_wallets(wallet_service: web::Data<WalletService>) -> Result<impl Responder, AppError> {
     let wallets = wallet_service.get_all().await.map_err(AppError::internal)?;
     Ok(HttpResponse::Ok().json(wallets))
 }
@@ -48,7 +44,6 @@ async fn get_wallets(
     )
 )]
 async fn create_wallet(
-    _pool: web::Data<PgPool>,
     wallet_service: web::Data<WalletService>,
     wallet: Json<CreateWalletDto>,
 ) -> Result<impl Responder, AppError> {

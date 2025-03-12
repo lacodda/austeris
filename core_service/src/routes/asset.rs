@@ -2,32 +2,11 @@ use crate::dto::asset::{
     AssetDto, AssetPriceHistoryDto, AssetPriceWithDetailsDto, CreateAssetDto, UpdateAssetsResponse,
 };
 use crate::error::AppError;
-use crate::repository::asset_price::AssetPriceRepository;
+use crate::models::asset::{HistoryQueryParams, PriceQueryParams};
 use crate::services::asset::AssetService;
-use crate::services::cmc::update_assets;
-use crate::services::redis::RedisService;
 use actix_web::{web, HttpResponse, Responder};
-use actix_web_validator::Json;
+use actix_web_validator::{Json, Query};
 use anyhow::Result;
-use chrono::Utc;
-use serde::Deserialize;
-use sqlx::types::time::PrimitiveDateTime;
-use sqlx::PgPool;
-use time::format_description::well_known::Iso8601;
-
-// Query parameters for GET /assets/prices
-#[derive(Debug, Deserialize)]
-struct PriceQuery {
-    asset_ids: Option<String>,
-}
-
-// Query parameters for GET /assets/prices/history
-#[derive(Debug, Deserialize)]
-struct HistoryQuery {
-    asset_ids: Option<String>,
-    start_date: String,
-    end_date: Option<String>,
-}
 
 // Configures routes for the /assets scope
 pub fn configure(cfg: &mut web::ServiceConfig) {
@@ -35,7 +14,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         web::scope("/assets")
             .route("", web::get().to(get_assets))
             .route("", web::post().to(create_asset))
-            .route("/update", web::post().to(update_assets_handler))
+            .route("/update", web::post().to(update_assets))
             .route("/prices", web::get().to(get_asset_prices))
             .route("/prices/history", web::get().to(get_price_history)),
     );
@@ -50,10 +29,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         (status = 500, description = "Internal server error (e.g., database failure)", body = String, example = json!({"status": 500, "error": "Internal Server Error", "message": "Database connection failed"}))
     )
 )]
-async fn get_assets(
-    _pool: web::Data<PgPool>,
-    asset_service: web::Data<AssetService>,
-) -> Result<impl Responder, AppError> {
+async fn get_assets(asset_service: web::Data<AssetService>) -> Result<impl Responder, AppError> {
     let assets = asset_service.get_all().await.map_err(AppError::internal)?;
     Ok(HttpResponse::Ok().json(assets))
 }
@@ -74,7 +50,6 @@ async fn get_assets(
     )
 )]
 async fn create_asset(
-    _pool: web::Data<PgPool>,
     asset_service: web::Data<AssetService>,
     asset: Json<CreateAssetDto>,
 ) -> Result<impl Responder, AppError> {
@@ -94,15 +69,8 @@ async fn create_asset(
         (status = 500, description = "Internal server error (e.g., CoinMarketCap API or database failure)", body = String, example = json!({"status": 500, "error": "Internal Server Error", "message": "Failed to fetch listings from CoinMarketCap"}))
     )
 )]
-async fn update_assets_handler(pool: web::Data<PgPool>) -> Result<impl Responder, AppError> {
-    let updated_count = update_assets(pool.get_ref()).await?;
-    let updated_at = Utc::now();
-
-    let response = UpdateAssetsResponse {
-        updated_count,
-        updated_at: updated_at.to_rfc3339(),
-    };
-
+async fn update_assets(asset_service: web::Data<AssetService>) -> Result<impl Responder, AppError> {
+    let response = asset_service.update().await.map_err(AppError::internal)?;
     Ok(HttpResponse::Ok().json(response))
 }
 
@@ -119,37 +87,13 @@ async fn update_assets_handler(pool: web::Data<PgPool>) -> Result<impl Responder
     )
 )]
 async fn get_asset_prices(
-    pool: web::Data<PgPool>,
-    redis: web::Data<RedisService>,
-    query: web::Query<PriceQuery>,
+    asset_service: web::Data<AssetService>,
+    query: Query<PriceQueryParams>,
 ) -> Result<impl Responder, AppError> {
-    let price_repo = AssetPriceRepository::new(pool.get_ref(), redis.as_ref().clone());
-
-    // Parse asset_ids from query parameter if provided
-    let asset_ids = query.asset_ids.as_ref().map(|ids| {
-        ids.split(',')
-            .filter_map(|id| id.trim().parse::<i32>().ok())
-            .collect::<Vec<i32>>()
-    });
-
-    let prices = price_repo
-        .get_latest_prices_with_assets(asset_ids)
+    let response = asset_service
+        .get_prices(query.into_inner())
         .await
         .map_err(AppError::internal)?;
-
-    let response = prices
-        .into_iter()
-        .map(
-            |(cmc_id, symbol, name, price_usd, timestamp)| AssetPriceWithDetailsDto {
-                cmc_id,
-                symbol,
-                name,
-                price_usd,
-                timestamp: timestamp.to_string(),
-            },
-        )
-        .collect::<Vec<_>>();
-
     Ok(HttpResponse::Ok().json(response))
 }
 
@@ -169,47 +113,13 @@ async fn get_asset_prices(
     )
 )]
 async fn get_price_history(
-    pool: web::Data<PgPool>,
-    redis: web::Data<RedisService>,
-    query: web::Query<HistoryQuery>,
+    asset_service: web::Data<AssetService>,
+    query: Query<HistoryQueryParams>,
 ) -> Result<impl Responder, AppError> {
-    let price_repo = AssetPriceRepository::new(pool.get_ref(), redis.as_ref().clone());
-
-    let asset_ids = query.asset_ids.as_ref().map(|ids| {
-        ids.split(',')
-            .filter_map(|id| id.trim().parse::<i32>().ok())
-            .collect::<Vec<i32>>()
-    });
-
-    let start_date = PrimitiveDateTime::parse(&query.start_date, &Iso8601::DEFAULT)
-        .map_err(|e| AppError::bad_request(anyhow::anyhow!("Invalid start_date format: {}", e)))?;
-
-    let end_date = query
-        .end_date
-        .as_ref()
-        .map(|end| {
-            PrimitiveDateTime::parse(end, &Iso8601::DEFAULT).map_err(|e| {
-                AppError::bad_request(anyhow::anyhow!("Invalid end_date format: {}", e))
-            })
-        })
-        .transpose()?;
-
-    let history = price_repo
-        .get_price_history(asset_ids, start_date, end_date)
+    let response = asset_service
+        .get_price_history(query.into_inner())
         .await
         .map_err(AppError::internal)?;
-
-    let response = history
-        .into_iter()
-        .map(
-            |(cmc_id, symbol, price_usd, timestamp)| AssetPriceHistoryDto {
-                cmc_id,
-                symbol,
-                price_usd,
-                timestamp: timestamp.to_string(),
-            },
-        )
-        .collect::<Vec<_>>();
 
     Ok(HttpResponse::Ok().json(response))
 }

@@ -30,7 +30,7 @@ use services::wallet::WalletService;
     paths(
         asset::get_assets,
         asset::create_asset,
-        asset::update_assets_handler,
+        asset::update_assets,
         asset::get_asset_prices,
         asset::get_price_history,
         wallet::get_wallets,
@@ -81,7 +81,11 @@ async fn main() -> Result<()> {
     // Initialize services
     let cmc_service = CmcService::new();
     let redis_service = RedisService::new()?;
-    let asset_service = AssetService::new(web::Data::new(pool.clone()));
+    let asset_service = AssetService::new(
+        web::Data::new(pool.clone()),
+        web::Data::new(cmc_service.clone()),
+        web::Data::new(redis_service.clone()),
+    );
     let wallet_service = WalletService::new(web::Data::new(pool.clone()));
     let transaction_service = TransactionService::new(web::Data::new(pool.clone()));
     let portfolio_service = PortfolioService::new(

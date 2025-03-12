@@ -45,8 +45,6 @@ async fn get_transactions(
         .get_transactions(query.into_inner())
         .await
         .map_err(AppError::internal)?;
-
-    // Map database records to API response format (DTO)
     let response = transactions
         .into_iter()
         .map(|record| TransactionDto {
@@ -61,7 +59,6 @@ async fn get_transactions(
             created_at: record.created_at.to_string(),
         })
         .collect::<Vec<_>>();
-
     Ok(HttpResponse::Ok().json(response))
 }
 
@@ -81,7 +78,6 @@ async fn get_transactions(
     )
 )]
 async fn create_transaction(
-    _pool: web::Data<PgPool>,
     transaction_service: web::Data<TransactionService>,
     transaction: Json<CreateTransactionDto>,
 ) -> Result<impl Responder, AppError> {

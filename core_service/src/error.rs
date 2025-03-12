@@ -1,6 +1,7 @@
 use actix_web::{http::StatusCode, HttpResponse, ResponseError};
 use actix_web_validator::Error as ValidatorError;
 use serde::Serialize;
+use std::error::Error as StdError;
 use std::fmt;
 
 // Custom application error type wrapping anyhow::Error
@@ -33,17 +34,17 @@ impl AppError {
     }
 }
 
-// Structure for JSON error response
-#[derive(Serialize)]
-struct ErrorResponse {
-    status: u16,
-    error: String,
-    message: String,
-}
-
+// Implementation of Display for AppError
 impl fmt::Display for AppError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.inner)
+    }
+}
+
+// Implementation of std::error::Error for AppError
+impl StdError for AppError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        self.inner.source()
     }
 }
 
@@ -96,4 +97,12 @@ impl ResponseError for AppError {
         };
         HttpResponse::build(self.status).json(response)
     }
+}
+
+// Structure for JSON error response
+#[derive(Serialize)]
+struct ErrorResponse {
+    status: u16,
+    error: String,
+    message: String,
 }

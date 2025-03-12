@@ -23,7 +23,6 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     )
 )]
 async fn create_snapshot(
-    _pool: web::Data<sqlx::PgPool>,
     snapshot_service: web::Data<SnapshotService>,
 ) -> Result<impl Responder, AppError> {
     let response = snapshot_service.create().await?;
@@ -40,7 +39,6 @@ async fn create_snapshot(
     )
 )]
 async fn get_snapshots(
-    _pool: web::Data<sqlx::PgPool>,
     snapshot_service: web::Data<SnapshotService>,
 ) -> Result<impl Responder, AppError> {
     let snapshots = snapshot_service.get_all().await?;
