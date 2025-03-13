@@ -13,6 +13,7 @@ mod models;
 mod repository;
 mod routes;
 mod services;
+mod utils;
 
 use db::connect;
 use error::AppError;

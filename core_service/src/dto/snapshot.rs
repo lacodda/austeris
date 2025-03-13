@@ -1,4 +1,5 @@
 use crate::models::snapshot::SnapshotDb;
+use crate::utils::datetime::format_iso8601;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -34,7 +35,7 @@ impl From<SnapshotDb> for SnapshotDto {
             .collect();
         Self {
             id: record.id,
-            created_at: record.created_at.to_string(),
+            created_at: format_iso8601(record.created_at),
             assets,
             diff: None,
         }

@@ -3,6 +3,7 @@ use crate::repository::asset_price::AssetPriceRepository;
 use crate::repository::transaction::TransactionRepository;
 use crate::services::cmc::CmcService;
 use crate::services::redis::RedisService;
+use crate::utils::datetime::parse_iso8601;
 use actix_web::web;
 use anyhow::Result;
 use chrono::{DateTime, Duration, Utc};
@@ -80,17 +81,7 @@ impl PortfolioService {
             if *amount > 0.0 {
                 match self.redis_service.get_price(*cmc_id).await? {
                     Some(cached) => {
-                        let timestamp = PrimitiveDateTime::parse(
-                            &cached.timestamp,
-                            &time::format_description::well_known::Iso8601::DEFAULT,
-                        )
-                        .map_err(|e| {
-                            anyhow::anyhow!(
-                                "Invalid timestamp in Redis for cmc_id {}: {}",
-                                cmc_id,
-                                e
-                            )
-                        })?;
+                        let timestamp = parse_iso8601(&cached.timestamp)?;
                         let timestamp_offset = timestamp.assume_utc();
                         let timestamp_utc: DateTime<Utc> = DateTime::from_timestamp(
                             timestamp_offset.unix_timestamp(),

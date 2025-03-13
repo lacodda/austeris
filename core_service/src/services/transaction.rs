@@ -2,6 +2,7 @@ use crate::dto::transaction::{CreateTransactionDto, TransactionDto};
 use crate::error::AppError;
 use crate::repository::asset::AssetRepository;
 use crate::repository::wallet::WalletRepository;
+use crate::utils::datetime::format_iso8601;
 use actix_web::web;
 use anyhow::Result;
 use sqlx::PgPool;
@@ -83,7 +84,7 @@ impl TransactionService {
             transaction_type: record.transaction_type,
             fee: record.fee,
             notes: record.notes,
-            created_at: record.created_at.to_string(),
+            created_at: format_iso8601(record.created_at),
         })
     }
 }

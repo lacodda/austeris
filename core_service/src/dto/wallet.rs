@@ -1,4 +1,5 @@
 use crate::models::wallet::WalletDb;
+use crate::utils::datetime::format_iso8601;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use utoipa::ToSchema;
@@ -23,7 +24,7 @@ impl From<WalletDb> for WalletDto {
             name: record.name,
             wallet_type: record.wallet_type,
             address: record.address,
-            created_at: record.created_at.to_string(),
+            created_at: format_iso8601(record.created_at),
         }
     }
 }

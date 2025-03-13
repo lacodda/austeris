@@ -1,4 +1,5 @@
 use crate::models::asset::AssetDb;
+use crate::utils::datetime::format_iso8601;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use validator::Validate;
@@ -25,7 +26,7 @@ impl From<AssetDb> for AssetDto {
             cmc_id: record.cmc_id,
             decimals: record.decimals,
             rank: record.rank,
-            created_at: record.created_at.to_string(),
+            created_at: format_iso8601(record.created_at),
         }
     }
 }

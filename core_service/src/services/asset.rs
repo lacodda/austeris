@@ -7,6 +7,7 @@ use crate::repository::asset::AssetRepository;
 use crate::repository::asset_price::AssetPriceRepository;
 use crate::services::cmc::CmcService;
 use crate::services::redis::RedisService;
+use crate::utils::datetime::{format_iso8601, parse_iso8601};
 use actix_web::web;
 use anyhow::{Ok, Result};
 use sqlx::PgPool;
@@ -108,7 +109,7 @@ impl AssetService {
                     symbol,
                     name,
                     price_usd,
-                    timestamp: timestamp.to_string(),
+                    timestamp: format_iso8601(timestamp),
                 },
             )
             .collect::<Vec<_>>();
@@ -128,24 +129,11 @@ impl AssetService {
                 .collect::<Vec<i32>>()
         });
 
-        let start_date = time::PrimitiveDateTime::parse(
-            &query.start_date,
-            &time::format_description::well_known::Iso8601::DEFAULT,
-        )
-        .map_err(|e| AppError::bad_request(anyhow::anyhow!("Invalid start_date format: {}", e)))?;
-
+        let start_date = parse_iso8601(&query.start_date).map_err(|e| AppError::bad_request(e))?;
         let end_date = query
             .end_date
             .as_ref()
-            .map(|end| {
-                time::PrimitiveDateTime::parse(
-                    end,
-                    &time::format_description::well_known::Iso8601::DEFAULT,
-                )
-                .map_err(|e| {
-                    AppError::bad_request(anyhow::anyhow!("Invalid end_date format: {}", e))
-                })
-            })
+            .map(|end| parse_iso8601(end).map_err(|e| AppError::bad_request(e)))
             .transpose()?;
 
         let history = price_repo
@@ -160,7 +148,7 @@ impl AssetService {
                     cmc_id,
                     symbol,
                     price_usd,
-                    timestamp: timestamp.to_string(),
+                    timestamp: format_iso8601(timestamp),
                 },
             )
             .collect::<Vec<_>>();

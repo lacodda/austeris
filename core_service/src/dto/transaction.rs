@@ -1,4 +1,5 @@
 use crate::models::transaction::TransactionDb;
+use crate::utils::datetime::format_iso8601;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use utoipa::ToSchema;
@@ -30,7 +31,7 @@ impl From<TransactionDb> for TransactionDto {
             transaction_type: record.transaction_type,
             fee: record.fee,
             notes: record.notes,
-            created_at: record.created_at.to_string(),
+            created_at: format_iso8601(record.created_at),
         }
     }
 }

@@ -1,8 +1,7 @@
 use crate::models::transaction::{FilterParams, TransactionDb};
 use anyhow::Result;
-use sqlx::types::time::PrimitiveDateTime;
 use sqlx::PgPool;
-use time::format_description::well_known::Iso8601;
+use crate::utils::datetime::{format_iso8601, parse_iso8601};
 
 // Repository for transaction-related database operations
 pub struct TransactionRepository<'a> {
@@ -43,9 +42,8 @@ impl<'a> TransactionRepository<'a> {
             sql.push_str(&format!(" AND t.wallet_id = {}", wallet_id));
         }
         if let Some(start_date) = filters.start_date {
-            let parsed_date = PrimitiveDateTime::parse(&start_date, &Iso8601::DEFAULT)
-                .map_err(|_| anyhow::anyhow!("Invalid start_date format"))?;
-            sql.push_str(&format!(" AND t.created_at >= '{}'", parsed_date));
+            let parsed_date = parse_iso8601(&start_date)?;
+            sql.push_str(&format!(" AND t.created_at >= '{}'", format_iso8601(parsed_date)));
         }
         sql.push_str(&format!(
             " LIMIT {} OFFSET {}",

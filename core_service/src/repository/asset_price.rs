@@ -1,5 +1,6 @@
 use crate::models::cmc::CmcQuote;
 use crate::services::redis::RedisService;
+use crate::utils::datetime::format_iso8601;
 use anyhow::Result;
 use sqlx::types::time::PrimitiveDateTime;
 use sqlx::{query_builder::QueryBuilder, PgPool, Postgres};
@@ -45,13 +46,8 @@ impl<'a> AssetPriceRepository<'a> {
                     inserted_count += 1;
 
                     // Cache the price in Redis with the timestamp returned from DB
-                    let timestamp = result
-                        .timestamp
-                        .assume_utc()
-                        .format(&time::format_description::well_known::Iso8601::DEFAULT)
-                        .map_err(|e| anyhow::anyhow!("Failed to format timestamp: {}", e))?;
                     self.redis
-                        .save_price(asset_id, price_usd, timestamp.to_string())
+                        .save_price(asset_id, price_usd, format_iso8601(result.timestamp))
                         .await?;
                 }
             }
