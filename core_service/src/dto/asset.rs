@@ -1,3 +1,4 @@
+use crate::models::asset::AssetDb;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use validator::Validate;
@@ -13,6 +14,20 @@ pub struct AssetDto {
     pub rank: Option<i32>,
     #[schema(value_type = String)]
     pub created_at: String,
+}
+
+impl From<AssetDb> for AssetDto {
+    fn from(record: AssetDb) -> Self {
+        Self {
+            id: record.id,
+            symbol: record.symbol,
+            name: record.name,
+            cmc_id: record.cmc_id,
+            decimals: record.decimals,
+            rank: record.rank,
+            created_at: record.created_at.to_string(),
+        }
+    }
 }
 
 // DTO for creating a new asset via API

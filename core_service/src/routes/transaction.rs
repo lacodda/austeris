@@ -47,17 +47,7 @@ async fn get_transactions(
         .map_err(AppError::internal)?;
     let response = transactions
         .into_iter()
-        .map(|record| TransactionDto {
-            id: record.id,
-            asset: record.asset,
-            wallet: record.wallet,
-            amount: record.amount,
-            price: record.price,
-            transaction_type: record.transaction_type,
-            fee: record.fee,
-            notes: record.notes,
-            created_at: record.created_at.to_string(),
-        })
+        .map(TransactionDto::from)
         .collect::<Vec<_>>();
     Ok(HttpResponse::Ok().json(response))
 }

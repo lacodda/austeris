@@ -1,4 +1,4 @@
-use crate::dto::snapshot::{SnapshotAssetDto, SnapshotDiffDto, SnapshotDto};
+use crate::dto::snapshot::{SnapshotDiffDto, SnapshotDto};
 use crate::error::AppError;
 use crate::models::snapshot::SnapshotDb;
 use crate::services::portfolio::PortfolioService;
@@ -45,13 +45,7 @@ impl SnapshotService {
         .await
         .map_err(AppError::internal)?;
 
-        // Map to DTO without diff
-        Ok(SnapshotDto {
-            id: record.id,
-            created_at: record.created_at.to_string(),
-            assets: snapshot_assets,
-            diff: None,
-        })
+        Ok(record.into())
     }
 
     // Retrieves all snapshots with differences from current state
@@ -79,21 +73,11 @@ impl SnapshotService {
         let response: Vec<SnapshotDto> = snapshots
             .into_iter()
             .map(|record| {
-                let snapshot_assets: Vec<SnapshotAssetDto> = record
-                    .assets
-                    .0
-                    .clone()
-                    .into_iter()
-                    .map(|asset| SnapshotAssetDto {
-                        symbol: asset.symbol,
-                        amount: asset.amount,
-                        cmc_id: asset.cmc_id,
-                    })
-                    .collect();
+                let mut dto: SnapshotDto = record.into();
                 let mut diff_map: HashMap<String, SnapshotDiffDto> = HashMap::new();
 
                 // Calculate differences between snapshot and current state
-                for asset in &snapshot_assets {
+                for asset in &dto.assets {
                     let current = current_assets
                         .get(&asset.symbol)
                         .map(|(amt, _)| *amt)
@@ -113,8 +97,7 @@ impl SnapshotService {
 
                 // Include assets present now but not in the snapshot
                 for (symbol, (current_amount, cmc_id)) in &current_assets {
-                    if *current_amount > 0.0 && !snapshot_assets.iter().any(|a| &a.symbol == symbol)
-                    {
+                    if *current_amount > 0.0 && !dto.assets.iter().any(|a| &a.symbol == symbol) {
                         diff_map.insert(
                             symbol.clone(),
                             SnapshotDiffDto {
@@ -126,12 +109,8 @@ impl SnapshotService {
                     }
                 }
 
-                SnapshotDto {
-                    id: record.id,
-                    created_at: record.created_at.to_string(),
-                    assets: snapshot_assets,
-                    diff: Some(diff_map.into_values().collect()),
-                }
+                dto.diff = Some(diff_map.into_values().collect());
+                dto
             })
             .collect();
 

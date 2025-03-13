@@ -22,34 +22,13 @@ impl WalletService {
         let record = repo
             .create(wallet.name, wallet.wallet_type, wallet.address)
             .await?;
-
-        // Map the database record to DTO
-        Ok(WalletDto {
-            id: record.id,
-            name: record.name,
-            wallet_type: record.wallet_type,
-            address: record.address,
-            created_at: record.created_at.to_string(),
-        })
+        Ok(record.into())
     }
 
     // Retrieves all wallets
     pub async fn get_all(&self) -> Result<Vec<WalletDto>> {
         let repo = WalletRepository::new(self.pool.as_ref());
         let wallets = repo.get_all().await?;
-
-        // Map database records to DTOs
-        let response = wallets
-            .into_iter()
-            .map(|record| WalletDto {
-                id: record.id,
-                name: record.name,
-                wallet_type: record.wallet_type,
-                address: record.address,
-                created_at: record.created_at.to_string(),
-            })
-            .collect();
-
-        Ok(response)
+        Ok(wallets.into_iter().map(WalletDto::from).collect())
     }
 }

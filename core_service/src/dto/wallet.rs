@@ -1,3 +1,4 @@
+use crate::models::wallet::WalletDb;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use utoipa::ToSchema;
@@ -13,6 +14,18 @@ pub struct WalletDto {
     pub address: Option<String>,
     #[schema(value_type = String)]
     pub created_at: String,
+}
+
+impl From<WalletDb> for WalletDto {
+    fn from(record: WalletDb) -> Self {
+        Self {
+            id: record.id,
+            name: record.name,
+            wallet_type: record.wallet_type,
+            address: record.address,
+            created_at: record.created_at.to_string(),
+        }
+    }
 }
 
 // DTO for creating a new wallet via API

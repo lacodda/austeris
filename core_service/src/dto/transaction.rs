@@ -1,3 +1,4 @@
+use crate::models::transaction::TransactionDb;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use utoipa::ToSchema;
@@ -16,6 +17,22 @@ pub struct TransactionDto {
     pub notes: Option<String>,
     #[schema(value_type = String)]
     pub created_at: String,
+}
+
+impl From<TransactionDb> for TransactionDto {
+    fn from(record: TransactionDb) -> Self {
+        Self {
+            id: record.id,
+            asset: record.asset,
+            wallet: record.wallet,
+            amount: record.amount,
+            price: record.price,
+            transaction_type: record.transaction_type,
+            fee: record.fee,
+            notes: record.notes,
+            created_at: record.created_at.to_string(),
+        }
+    }
 }
 
 // DTO for creating a new transaction via API

@@ -1,3 +1,4 @@
+use crate::models::snapshot::SnapshotDb;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -17,6 +18,27 @@ pub struct SnapshotDto {
     pub assets: Vec<SnapshotAssetDto>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub diff: Option<Vec<SnapshotDiffDto>>,
+}
+
+impl From<SnapshotDb> for SnapshotDto {
+    fn from(record: SnapshotDb) -> Self {
+        let assets = record
+            .assets
+            .0
+            .into_iter()
+            .map(|asset| SnapshotAssetDto {
+                symbol: asset.symbol,
+                amount: asset.amount,
+                cmc_id: asset.cmc_id,
+            })
+            .collect();
+        Self {
+            id: record.id,
+            created_at: record.created_at.to_string(),
+            assets,
+            diff: None,
+        }
+    }
 }
 
 // DTO for difference in asset amounts

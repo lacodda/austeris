@@ -45,39 +45,14 @@ impl AssetService {
                 asset.rank,
             )
             .await?;
-
-        // Map the database record to DTO
-        Ok(AssetDto {
-            id: record.id,
-            symbol: record.symbol,
-            name: record.name,
-            cmc_id: record.cmc_id,
-            decimals: record.decimals,
-            rank: record.rank,
-            created_at: record.created_at.to_string(),
-        })
+        Ok(record.into())
     }
 
     // Retrieves all assets
     pub async fn get_all(&self) -> Result<Vec<AssetDto>> {
         let repo = AssetRepository::new(self.pool.as_ref());
         let assets = repo.get_all().await?;
-
-        // Map database records to DTOs
-        let response = assets
-            .into_iter()
-            .map(|record| AssetDto {
-                id: record.id,
-                symbol: record.symbol,
-                name: record.name,
-                cmc_id: record.cmc_id,
-                decimals: record.decimals,
-                rank: record.rank,
-                created_at: record.created_at.to_string(),
-            })
-            .collect();
-
-        Ok(response)
+        Ok(assets.into_iter().map(AssetDto::from).collect())
     }
 
     // Updates the assets table with data from CoinMarketCap and returns the number of updated assets
@@ -89,11 +64,11 @@ impl AssetService {
         for listing in listings {
             let result = sqlx::query!(
                 r#"
-            INSERT INTO assets (symbol, name, cmc_id, rank)
-            VALUES ($1, $2, $3, $4)
-            ON CONFLICT (cmc_id) DO UPDATE
-            SET symbol = EXCLUDED.symbol, name = EXCLUDED.name, rank = EXCLUDED.rank
-            "#,
+                INSERT INTO assets (symbol, name, cmc_id, rank)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (cmc_id) DO UPDATE
+                SET symbol = EXCLUDED.symbol, name = EXCLUDED.name, rank = EXCLUDED.rank
+                "#,
                 listing.symbol,
                 listing.name,
                 listing.id,
@@ -125,7 +100,6 @@ impl AssetService {
         });
 
         let prices = price_repo.get_latest_prices_with_assets(asset_ids).await?;
-
         let response = prices
             .into_iter()
             .map(
@@ -138,7 +112,6 @@ impl AssetService {
                 },
             )
             .collect::<Vec<_>>();
-
         Ok(response)
     }
 
@@ -191,7 +164,6 @@ impl AssetService {
                 },
             )
             .collect::<Vec<_>>();
-
         Ok(response)
     }
 }
