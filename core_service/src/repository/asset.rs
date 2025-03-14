@@ -1,4 +1,4 @@
-use crate::models::asset::AssetDb;
+use crate::{dto::asset::CreateAssetDto, models::asset::AssetDb};
 use anyhow::Result;
 use sqlx::PgPool;
 
@@ -10,15 +10,6 @@ pub struct AssetRepository<'a> {
 impl<'a> AssetRepository<'a> {
     pub fn new(pool: &'a PgPool) -> Self {
         Self { pool }
-    }
-
-    // Checks if an asset with the given ID exists
-    pub async fn exists(&self, asset_id: i32) -> Result<bool> {
-        let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM assets WHERE id = $1")
-            .bind(asset_id)
-            .fetch_one(self.pool)
-            .await?;
-        Ok(count > 0)
     }
 
     // Creates a new asset in the database
@@ -61,5 +52,38 @@ impl<'a> AssetRepository<'a> {
         .fetch_all(self.pool)
         .await?;
         Ok(assets)
+    }
+
+    // Checks if an asset with the given ID exists
+    pub async fn exists(&self, id: i32) -> Result<bool> {
+        let exists = sqlx::query!("SELECT EXISTS(SELECT 1 FROM assets WHERE id = $1)", id)
+            .fetch_one(self.pool)
+            .await?
+            .exists
+            .unwrap_or(false);
+        Ok(exists)
+    }
+
+    // Update assets
+    pub async fn update_assets(&self, listings: Vec<CreateAssetDto>) -> Result<usize> {
+        let mut updated_count = 0;
+        for listing in listings {
+            let result = sqlx::query!(
+                r#"
+                INSERT INTO assets (symbol, name, cmc_id, rank)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (cmc_id) DO UPDATE
+                SET symbol = EXCLUDED.symbol, name = EXCLUDED.name, rank = EXCLUDED.rank
+                "#,
+                listing.symbol,
+                listing.name,
+                listing.cmc_id,
+                listing.rank.unwrap_or(0),
+            )
+            .execute(self.pool)
+            .await?;
+            updated_count += result.rows_affected() as usize;
+        }
+        Ok(updated_count)
     }
 }

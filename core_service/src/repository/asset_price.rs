@@ -3,7 +3,7 @@ use crate::services::redis::RedisService;
 use crate::utils::datetime::format_iso8601;
 use anyhow::Result;
 use sqlx::types::time::PrimitiveDateTime;
-use sqlx::{query_builder::QueryBuilder, PgPool, Postgres};
+use sqlx::{PgPool, Postgres, QueryBuilder, Row};
 
 // Repository for asset price-related database operations
 pub struct AssetPriceRepository<'a> {
@@ -87,13 +87,13 @@ impl<'a> AssetPriceRepository<'a> {
         let mut query_builder: QueryBuilder<Postgres> = QueryBuilder::new(
             r#"
             SELECT 
-                a.cmc_id, 
-                a.symbol, 
-                a.name, 
-                ap.price_usd, 
+                a.cmc_id,
+                a.symbol,
+                a.name,
+                ap.price_usd,
                 ap.timestamp
             FROM asset_prices ap
-            JOIN assets a ON a.id = ap.asset_id
+            JOIN assets a ON ap.asset_id = a.id
             WHERE ap.timestamp = (
                 SELECT MAX(timestamp)
                 FROM asset_prices
@@ -111,14 +111,21 @@ impl<'a> AssetPriceRepository<'a> {
             }
         }
 
-        // Add sorting by rank
-        query_builder.push(" ORDER BY a.rank ASC");
-
         let prices = query_builder
-            .build_query_as::<(i32, String, String, f64, PrimitiveDateTime)>()
+            .build()
             .fetch_all(self.pool)
-            .await?;
-
+            .await?
+            .into_iter()
+            .map(|row| {
+                Ok((
+                    row.get("cmc_id"),
+                    row.get("symbol"),
+                    row.get("name"),
+                    row.get("price_usd"),
+                    row.get("timestamp"),
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
         Ok(prices)
     }
 
@@ -132,12 +139,12 @@ impl<'a> AssetPriceRepository<'a> {
         let mut query_builder: QueryBuilder<Postgres> = QueryBuilder::new(
             r#"
             SELECT 
-                a.cmc_id, 
-                a.symbol, 
-                ap.price_usd, 
+                a.cmc_id,
+                a.symbol,
+                ap.price_usd,
                 ap.timestamp
             FROM asset_prices ap
-            JOIN assets a ON a.id = ap.asset_id
+            JOIN assets a ON ap.asset_id = a.id
             WHERE ap.timestamp >= 
             "#,
         );
@@ -159,10 +166,19 @@ impl<'a> AssetPriceRepository<'a> {
         query_builder.push(" ORDER BY ap.timestamp ASC");
 
         let history = query_builder
-            .build_query_as::<(i32, String, f64, PrimitiveDateTime)>()
+            .build()
             .fetch_all(self.pool)
-            .await?;
-
+            .await?
+            .into_iter()
+            .map(|row| {
+                Ok((
+                    row.get("cmc_id"),
+                    row.get("symbol"),
+                    row.get("price_usd"),
+                    row.get("timestamp"),
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
         Ok(history)
     }
 }

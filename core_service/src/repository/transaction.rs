@@ -1,7 +1,8 @@
+use crate::dto::transaction::CreateTransactionDto;
 use crate::models::transaction::{FilterParams, TransactionDb};
+use crate::utils::datetime::parse_iso8601;
 use anyhow::Result;
-use sqlx::PgPool;
-use crate::utils::datetime::{format_iso8601, parse_iso8601};
+use sqlx::{PgPool, Postgres, QueryBuilder};
 
 // Repository for transaction-related database operations
 pub struct TransactionRepository<'a> {
@@ -14,17 +15,49 @@ impl<'a> TransactionRepository<'a> {
         Self { pool }
     }
 
+    // Creates a new transaction in the database
+    pub async fn create(&self, transaction: CreateTransactionDto) -> Result<TransactionDb> {
+        let record = sqlx::query_as!(
+            TransactionDb,
+            r#"
+            INSERT INTO transactions 
+                (asset_id, wallet_id, amount, price, type, fee, notes)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            RETURNING 
+                id, 
+                (SELECT symbol FROM assets WHERE id = $1) AS "asset!",
+                (SELECT name FROM wallets WHERE id = $2) AS "wallet!",
+                amount,
+                price,
+                type AS transaction_type,
+                fee,
+                notes,
+                created_at
+            "#,
+            transaction.asset_id,
+            transaction.wallet_id,
+            transaction.amount,
+            transaction.price,
+            transaction.transaction_type,
+            transaction.fee,
+            transaction.notes,
+        )
+        .fetch_one(self.pool)
+        .await?;
+        Ok(record)
+    }
+
     // Fetches transactions with optional filters
     pub async fn get_transactions(&self, filters: FilterParams) -> Result<Vec<TransactionDb>> {
-        let mut sql = String::from(
+        let mut query_builder: QueryBuilder<Postgres> = QueryBuilder::new(
             r#"
             SELECT 
                 t.id, 
-                a.symbol as asset, 
-                w.name as wallet,
+                a.symbol AS asset, 
+                w.name AS wallet,
                 t.amount,
                 t.price,
-                t.type as transaction_type,
+                t.type AS transaction_type,
                 t.fee,
                 t.notes,
                 t.created_at
@@ -36,24 +69,29 @@ impl<'a> TransactionRepository<'a> {
         );
 
         if let Some(asset_id) = filters.asset_id {
-            sql.push_str(&format!(" AND t.asset_id = {}", asset_id));
+            query_builder.push(" AND t.asset_id = ");
+            query_builder.push_bind(asset_id);
         }
+
         if let Some(wallet_id) = filters.wallet_id {
-            sql.push_str(&format!(" AND t.wallet_id = {}", wallet_id));
+            query_builder.push(" AND t.wallet_id = ");
+            query_builder.push_bind(wallet_id);
         }
+
         if let Some(start_date) = filters.start_date {
             let parsed_date = parse_iso8601(&start_date)?;
-            sql.push_str(&format!(" AND t.created_at >= '{}'", format_iso8601(parsed_date)));
+            query_builder.push(" AND t.created_at >= ");
+            query_builder.push_bind(parsed_date);
         }
-        sql.push_str(&format!(
-            " LIMIT {} OFFSET {}",
-            filters.limit.unwrap_or(10),
-            filters.offset.unwrap_or(0)
-        ));
 
-        let transactions = sqlx::query_as::<_, TransactionDb>(&sql)
-            .fetch_all(self.pool)
-            .await?;
+        query_builder.push(" LIMIT ");
+        query_builder.push_bind(filters.limit.unwrap_or(10));
+
+        query_builder.push(" OFFSET ");
+        query_builder.push_bind(filters.offset.unwrap_or(0));
+
+        let query = query_builder.build_query_as::<TransactionDb>();
+        let transactions = query.fetch_all(self.pool).await?;
         Ok(transactions)
     }
 
@@ -63,11 +101,11 @@ impl<'a> TransactionRepository<'a> {
             r#"
             SELECT 
                 t.id, 
-                a.symbol as asset, 
-                w.name as wallet,
+                a.symbol AS asset, 
+                w.name AS wallet,
                 t.amount,
                 t.price,
-                t.type as transaction_type,
+                t.type AS transaction_type,
                 t.fee,
                 t.notes,
                 t.created_at

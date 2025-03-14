@@ -1,8 +1,8 @@
 use crate::dto::transaction::{CreateTransactionDto, TransactionDto};
 use crate::error::AppError;
 use crate::repository::asset::AssetRepository;
+use crate::repository::transaction::TransactionRepository;
 use crate::repository::wallet::WalletRepository;
-use crate::utils::datetime::format_iso8601;
 use actix_web::web;
 use anyhow::Result;
 use sqlx::PgPool;
@@ -26,6 +26,7 @@ impl TransactionService {
     ) -> Result<TransactionDto, AppError> {
         let asset_repo = AssetRepository::new(self.pool.as_ref());
         let wallet_repo = WalletRepository::new(self.pool.as_ref());
+        let transaction_repo = TransactionRepository::new(self.pool.as_ref());
 
         // Check if asset_id exists
         if !asset_repo
@@ -45,46 +46,10 @@ impl TransactionService {
             return Err(AppError::bad_request(anyhow::anyhow!("Wallet not found")));
         }
 
-        // Insert the transaction into the database and fetch full details
-        let record = sqlx::query!(
-            r#"
-            INSERT INTO transactions 
-                (asset_id, wallet_id, amount, price, type, fee, notes)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-            RETURNING 
-                id, 
-                (SELECT symbol FROM assets WHERE id = $1) AS asset,
-                (SELECT name FROM wallets WHERE id = $2) AS wallet,
-                amount,
-                price,
-                type AS transaction_type,
-                fee,
-                notes,
-                created_at
-            "#,
-            transaction.asset_id,
-            transaction.wallet_id,
-            transaction.amount,
-            transaction.price,
-            transaction.transaction_type,
-            transaction.fee,
-            transaction.notes,
-        )
-        .fetch_one(self.pool.as_ref())
-        .await
-        .map_err(AppError::internal)?;
-
-        // Map the database record to DTO
-        Ok(TransactionDto {
-            id: record.id,
-            asset: record.asset.unwrap(),
-            wallet: record.wallet.unwrap(),
-            amount: record.amount,
-            price: record.price,
-            transaction_type: record.transaction_type,
-            fee: record.fee,
-            notes: record.notes,
-            created_at: format_iso8601(record.created_at),
-        })
+        let record = transaction_repo
+            .create(transaction)
+            .await
+            .map_err(AppError::internal)?;
+        Ok(record.into())
     }
 }

@@ -59,27 +59,21 @@ impl AssetService {
     // Updates the assets table with data from CoinMarketCap and returns the number of updated assets
     pub async fn update(&self) -> Result<UpdateAssetsResponse> {
         let listings = self.cmc_service.fetch_cmc_listings().await?;
-        let mut updated_count = 0;
-
-        // Iterate over listings and upsert into the assets table
-        for listing in listings {
-            let result = sqlx::query!(
-                r#"
-                INSERT INTO assets (symbol, name, cmc_id, rank)
-                VALUES ($1, $2, $3, $4)
-                ON CONFLICT (cmc_id) DO UPDATE
-                SET symbol = EXCLUDED.symbol, name = EXCLUDED.name, rank = EXCLUDED.rank
-                "#,
-                listing.symbol,
-                listing.name,
-                listing.id,
-                listing.cmc_rank,
+        let repo = AssetRepository::new(self.pool.as_ref());
+        let updated_count = repo
+            .update_assets(
+                listings
+                    .into_iter()
+                    .map(|l| CreateAssetDto {
+                        symbol: l.symbol,
+                        name: l.name,
+                        cmc_id: l.id,
+                        decimals: None,
+                        rank: Some(l.cmc_rank),
+                    })
+                    .collect(),
             )
-            .execute(self.pool.as_ref())
             .await?;
-            updated_count += result.rows_affected() as usize;
-        }
-
         let response = UpdateAssetsResponse {
             updated_count,
             updated_at: chrono::Utc::now().to_rfc3339(),
