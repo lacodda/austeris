@@ -1,4 +1,5 @@
 use crate::models::cmc::{CmcListing, CmcQuote, CmcQuoteResponse, CmcResponse};
+use crate::repository::asset::AssetRepository;
 use anyhow::Result;
 use sqlx::PgPool;
 use std::env;
@@ -35,12 +36,10 @@ impl CmcService {
         Ok(cmc_response.data)
     }
 
-    // Fetches quotes for all assets in the database using their cmc_id
+    // Fetches quotes for all assets using their cmc_id
     pub async fn fetch_quotes_for_assets(&self, pool: &PgPool) -> Result<Vec<(i32, CmcQuote)>> {
-        // Fetch all cmc_ids from the assets table
-        let cmc_ids: Vec<i32> = sqlx::query_scalar!("SELECT cmc_id FROM assets")
-            .fetch_all(pool)
-            .await?;
+        let asset_repo = AssetRepository::new(pool);
+        let cmc_ids = asset_repo.get_all_cmc_ids().await?;
 
         if cmc_ids.is_empty() {
             return Ok(Vec::new());

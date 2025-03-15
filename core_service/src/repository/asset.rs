@@ -64,7 +64,7 @@ impl<'a> AssetRepository<'a> {
         Ok(exists)
     }
 
-    // Update assets
+    // Updates assets in the database
     pub async fn update_assets(&self, listings: Vec<CreateAssetDto>) -> Result<usize> {
         let mut updated_count = 0;
         for listing in listings {
@@ -85,5 +85,21 @@ impl<'a> AssetRepository<'a> {
             updated_count += result.rows_affected() as usize;
         }
         Ok(updated_count)
+    }
+
+    // Fetches all cmc_ids from the assets table
+    pub async fn get_all_cmc_ids(&self) -> Result<Vec<i32>> {
+        let cmc_ids = sqlx::query_scalar!("SELECT cmc_id FROM assets")
+            .fetch_all(self.pool)
+            .await?;
+        Ok(cmc_ids)
+    }
+
+    // Fetches cmc_id by asset_id
+    pub async fn get_cmc_id_by_asset_id(&self, asset_id: i32) -> Result<Option<i32>> {
+        let cmc_id = sqlx::query_scalar!("SELECT cmc_id FROM assets WHERE id = $1", asset_id)
+            .fetch_optional(self.pool)
+            .await?;
+        Ok(cmc_id)
     }
 }

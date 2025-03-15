@@ -1,4 +1,5 @@
 use crate::dto::snapshot::SnapshotAssetDto;
+use crate::repository::asset::AssetRepository;
 use crate::repository::asset_price::AssetPriceRepository;
 use crate::repository::transaction::TransactionRepository;
 use crate::services::cmc::CmcService;
@@ -36,6 +37,7 @@ impl PortfolioService {
     // Calculates current asset holdings from all transactions
     pub async fn get_current_assets(&self) -> Result<HashMap<String, (f64, i32)>> {
         let transaction_repo = TransactionRepository::new(self.pool.as_ref());
+        let asset_repo = AssetRepository::new(self.pool.as_ref());
         let transactions = transaction_repo.get_all_transactions().await?;
         let mut asset_amounts: HashMap<String, (f64, i32)> = HashMap::new();
 
@@ -44,13 +46,10 @@ impl PortfolioService {
                 .entry(record.asset.clone())
                 .or_insert((0.0, 0));
             if *cmc_id == 0 {
-                // Check if cmc_id needs to be fetched
-                let asset_cmc_id = sqlx::query_scalar!(
-                    "SELECT cmc_id FROM assets WHERE symbol = $1",
-                    record.asset
-                )
-                .fetch_one(self.pool.as_ref())
-                .await?;
+                let asset_cmc_id = asset_repo
+                    .get_cmc_id_by_asset_id(record.id) // Assuming id is tied to asset_id in transactions
+                    .await?
+                    .unwrap_or(0); // Default to 0 if not found
                 *cmc_id = asset_cmc_id;
             }
             if record.transaction_type == "BUY" {
@@ -126,7 +125,7 @@ impl PortfolioService {
                         if let Some((_, (amount, _))) =
                             asset_amounts.iter().find(|(_, (_, id))| id == cmc_id)
                         {
-                            total_value += amount * price; // amount is &f64, price is &f64
+                            total_value += amount * price;
                             price_map.insert(*cmc_id, (*price, *timestamp));
                         }
                     } else {
@@ -137,7 +136,6 @@ impl PortfolioService {
                 }
             }
 
-            // Fetch from CMC if still missing or outdated
             if !still_missing.is_empty() {
                 let fresh_quotes = self
                     .cmc_service
@@ -153,7 +151,7 @@ impl PortfolioService {
                         if let Some((_, (amount, _))) =
                             asset_amounts.iter().find(|(_, (_, id))| id == &cmc_id)
                         {
-                            total_value += amount * price; // amount is &f64, price is f64
+                            total_value += amount * price;
                         }
                     } else {
                         log::warn!("No price available for cmc_id {} after CMC fetch", cmc_id);
