@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT cmc_id FROM assets",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "cmc_id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "2fc8b3d608634d9f26b894cd65829cd3e62acb6d7624c43755d1220a6f74e562"
+}

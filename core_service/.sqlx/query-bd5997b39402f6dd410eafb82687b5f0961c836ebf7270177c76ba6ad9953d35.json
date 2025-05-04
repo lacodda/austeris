@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                        INSERT INTO asset_prices (asset_id, price_usd)\n                        VALUES ($1, $2)\n                        ON CONFLICT (asset_id, timestamp) DO NOTHING\n                        RETURNING timestamp\n                        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "timestamp",
+        "type_info": "Timestamp"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "bd5997b39402f6dd410eafb82687b5f0961c836ebf7270177c76ba6ad9953d35"
+}

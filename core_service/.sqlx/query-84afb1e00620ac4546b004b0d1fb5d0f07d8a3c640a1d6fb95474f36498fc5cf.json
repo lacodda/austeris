@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                INSERT INTO assets (symbol, name, cmc_id, rank)\n                VALUES ($1, $2, $3, $4)\n                ON CONFLICT (cmc_id) DO UPDATE\n                SET symbol = EXCLUDED.symbol, name = EXCLUDED.name, rank = EXCLUDED.rank\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Varchar",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "84afb1e00620ac4546b004b0d1fb5d0f07d8a3c640a1d6fb95474f36498fc5cf"
+}

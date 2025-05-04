@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT a.cmc_id, ap.price_usd, ap.timestamp\n            FROM asset_prices ap\n            JOIN assets a ON a.id = ap.asset_id\n            WHERE ap.timestamp = (\n                SELECT MAX(timestamp)\n                FROM asset_prices\n                WHERE asset_id = ap.asset_id\n            )\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "cmc_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "price_usd",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 2,
+        "name": "timestamp",
+        "type_info": "Timestamp"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "e29218c81a395df34122279db7f6595c9844a96b587b4aeff168f76ccd71d1eb"
+}

@@ -1,0 +1,48 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO wallets (name, type, address)\n            VALUES ($1, $2, $3)\n            RETURNING id, name, type AS wallet_type, address, created_at\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "wallet_type",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "address",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "created_at",
+        "type_info": "Timestamp"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Varchar",
+        "Varchar"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "dd564782b4a7e78d8f777dfeb0ef72f69faa9c2efb5f7bc06d3df728989ba3ad"
+}

@@ -1,0 +1,62 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO assets (symbol, name, cmc_id, decimals, rank)\n            VALUES ($1, $2, $3, $4, $5)\n            RETURNING id, symbol, name, cmc_id, decimals, rank, created_at\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "symbol",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "cmc_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "decimals",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "rank",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "created_at",
+        "type_info": "Timestamp"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Varchar",
+        "Int4",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "c24f05b175b0acb51eb1e598fd36d36cc320bc9fe1c38724fd7bdf962441d26f"
+}

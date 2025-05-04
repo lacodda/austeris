@@ -1,0 +1,76 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO transactions \n                (asset_id, wallet_id, amount, price, type, fee, notes)\n            VALUES ($1, $2, $3, $4, $5, $6, $7)\n            RETURNING \n                id, \n                (SELECT symbol FROM assets WHERE id = $1) AS \"asset!\",\n                (SELECT name FROM wallets WHERE id = $2) AS \"wallet!\",\n                amount,\n                price,\n                type AS transaction_type,\n                fee,\n                notes,\n                created_at\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "asset!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "wallet!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "amount",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 4,
+        "name": "price",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 5,
+        "name": "transaction_type",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 6,
+        "name": "fee",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 7,
+        "name": "notes",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "created_at",
+        "type_info": "Timestamp"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Float8",
+        "Float8",
+        "Varchar",
+        "Float8",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      null,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "a09bd6a64653060265f07ba3bb0f6c2b7841c4eb2d767c5230ba09983ced5ee3"
+}
