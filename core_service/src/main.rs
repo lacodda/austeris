@@ -2,6 +2,7 @@ use actix_web::{web, App, HttpServer};
 use anyhow::Result;
 use env_logger;
 use log::LevelFilter;
+use std::env;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -73,8 +74,12 @@ async fn main() -> Result<()> {
     env_logger::Builder::new()
         .filter_level(LevelFilter::Info)
         .init();
+    let port = env::var("APP_PORT")
+        .unwrap_or_else(|_| "9000".to_string())
+        .parse::<u16>()
+        .expect("PORT must be a valid number");
 
-    log::info!("Starting application on 127.0.0.1:9000");
+    log::info!("Starting application on 127.0.0.1:{}", port);
 
     // Establish database connection
     let pool = connect().await?;
@@ -155,7 +160,7 @@ async fn main() -> Result<()> {
             .configure(transaction::configure)
             .configure(snapshots::configure)
     })
-    .bind("127.0.0.1:9000")?
+    .bind(("0.0.0.0", port))?
     .run()
     .await?;
 
