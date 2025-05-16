@@ -2,11 +2,12 @@ version: '3.8'
 services:
   core_service:
     build:
-      context: . # Use root directory as context
+      context: .
       dockerfile: core_service/Dockerfile
       args:
         - MIGRATIONS_PATH=migrations
         - APP_PORT=${APP_PORT}
+        - DATABASE_URL=${DATABASE_URL}
     ports:
       - "${APP_PORT}:${APP_PORT}"
     environment:
@@ -28,6 +29,8 @@ services:
 
   postgres:
     image: postgres:17.5-alpine
+    ports:
+      - "${POSTGRES_PORT}:5432"
     environment:
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
@@ -45,6 +48,8 @@ services:
 
   redis:
     image: redis:8-alpine
+    ports:
+      - "${REDIS_PORT}:6379"
     volumes:
       - redis_data:/data
     healthcheck:

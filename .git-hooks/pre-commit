@@ -1,0 +1,18 @@
+#!/bin/bash
+
+# Load environment variables from .env
+if [ -f ".env" ]; then
+  export $(grep -v '^#' .env | xargs)
+fi
+
+# Run sqlx prepare in check mode
+echo "[pre-commit] Checking SQLx query cache..."
+make check_prepare
+
+# If the check fails, regenerate and commit the cache before proceeding
+if [ $? -ne 0 ]; then
+  echo "[pre-commit] Query cache is outdated. Regenerating and committing..."
+  make auto_prepare
+else
+  echo "[pre-commit] SQLx query cache is up to date."
+fi
