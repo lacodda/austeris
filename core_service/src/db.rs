@@ -14,7 +14,7 @@ pub async fn connect() -> Result<sqlx::PgPool> {
         .parse::<u32>()
         .expect("SQLX_MAX_CONNECTIONS must be a valid number");
     let acquire_timeout = env::var("SQLX_ACQUIRE_TIMEOUT")
-        .unwrap_or_else(|_| "60".to_string())
+        .unwrap_or_else(|_| "30".to_string())
         .parse::<u64>()
         .expect("SQLX_ACQUIRE_TIMEOUT must be a valid number");
 
