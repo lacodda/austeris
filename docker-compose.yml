@@ -1,31 +1,84 @@
-version: '3.8'
+version: "3.8"
 services:
-  core_service:
-    build:
-      context: .
-      dockerfile: core_service/Dockerfile
-      args:
-        - MIGRATIONS_PATH=migrations
-        - APP_PORT=${APP_PORT}
-        - DATABASE_URL=${DATABASE_URL}
+  api-gateway:
+    image: traefik:v2.10
     ports:
-      - "${APP_PORT}:${APP_PORT}"
-    environment:
-      - DATABASE_URL=${DATABASE_URL}
-      - REDIS_URL=${REDIS_URL}
-      - COINMARKETCAP_API_KEY=${COINMARKETCAP_API_KEY}
-      - APP_PORT=${APP_PORT}
-      - RUST_LOG=${RUST_LOG}
-      - SQLX_MAX_CONNECTIONS=${SQLX_MAX_CONNECTIONS}
-      - SQLX_ACQUIRE_TIMEOUT=${SQLX_ACQUIRE_TIMEOUT}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+      - "${APP_PORT}:8080"
+    volumes:
+      - ./traefik.yml:/etc/traefik/traefik.yml
     networks:
       - austeris-network
-    restart: unless-stopped
+
+  asset-service:
+    build:
+      context: .
+      dockerfile: asset-service/Dockerfile
+    environment:
+      - DATABASE_URL=${DATABASE_URL}?currentSchema=assets
+      - REDIS_URL=${REDIS_URL}
+      - APP_PORT=${ASSET_SERVICE_PORT}
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - austeris-network
+
+  wallet-service:
+    build:
+      context: .
+      dockerfile: wallet-service/Dockerfile
+    environment:
+      - DATABASE_URL=${DATABASE_URL}?currentSchema=wallets
+      - REDIS_URL=${REDIS_URL}
+      - APP_PORT=${WALLET_SERVICE_PORT}
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - austeris-network
+
+  transaction-service:
+    build:
+      context: .
+      dockerfile: transaction-service/Dockerfile
+    environment:
+      - DATABASE_URL=${DATABASE_URL}?currentSchema=transactions
+      - REDIS_URL=${REDIS_URL}
+      - APP_PORT=${TRANSACTION_SERVICE_PORT}
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - austeris-network
+
+  snapshot-service:
+    build:
+      context: .
+      dockerfile: snapshot-service/Dockerfile
+    environment:
+      - DATABASE_URL=${DATABASE_URL}?currentSchema=snapshots
+      - REDIS_URL=${REDIS_URL}
+      - APP_PORT=${SNAPSHOT_SERVICE_PORT}
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - austeris-network
+
+  user-service:
+    build:
+      context: .
+      dockerfile: user-service/Dockerfile
+    environment:
+      - DATABASE_URL=${DATABASE_URL}?currentSchema=users
+      - REDIS_URL=${REDIS_URL}
+      - APP_PORT=${USER_SERVICE_PORT}
+      - JWT_SECRET=${JWT_SECRET}
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - austeris-network
 
   postgres:
     image: postgres:17.5-alpine

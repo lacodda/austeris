@@ -1,0 +1,13 @@
+[package]
+name = "austeris-common"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "austeris_common"
+path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "2.0"
+actix-web = "4.4"

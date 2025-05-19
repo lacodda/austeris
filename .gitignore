@@ -1,5 +1,5 @@
 # Rust build artifacts
-/core_service/target/
+/*/target/
 /**/*.rs.bk
 
 # Docker-related files

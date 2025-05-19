@@ -1,0 +1,21 @@
+entryPoints:
+  web:
+    address: ":8080"
+
+http:
+  routers:
+    api:
+      rule: "PathPrefix(`/api`)"
+      service: api
+      entryPoints:
+        - web
+
+  services:
+    api:
+      loadBalancer:
+        servers:
+          - url: "http://asset-service:8081"
+          - url: "http://wallet-service:8082"
+          - url: "http://transaction-service:8083"
+          - url: "http://snapshot-service:8084"
+          - url: "http://user-service:8085"
