@@ -1,6 +1,6 @@
 # Stage 1: Build austeris-common
 ARG RUST_VERSION=1.86
-FROM rust:${RUST_VERSION}-slim-bullseye AS common-builder
+FROM rust:${RUST_VERSION}-bullseye AS common-builder
 WORKDIR /usr/src/austeris/austeris-common
 COPY austeris-common/Cargo.toml ./
 COPY austeris-common/src ./src

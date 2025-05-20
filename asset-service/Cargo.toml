@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 actix-web = "4.4"
-sqlx = { version = "0.8.5", features = ["postgres", "runtime-tokio-native-tls"] }
+sqlx = { version = "0.8.5", features = ["postgres", "runtime-tokio-native-tls", "time", "chrono", "bigdecimal", "uuid"] }
 utoipa = { version = "5.3.1", features = ["actix_extras"] }
 tonic = "0.13"
 prost = "0.13"

@@ -1,0 +1,101 @@
+// Unified error handling for Austeris services
+use actix_web::{http::StatusCode, HttpResponse, ResponseError};
+use actix_web_validator::Error as ValidatorError;
+use serde::{Deserialize, Serialize};
+use std::error::Error as StdError;
+use std::fmt;
+
+#[derive(Debug)]
+pub struct AppError {
+    inner: anyhow::Error,
+    status: StatusCode,
+}
+
+impl AppError {
+    pub fn new(err: anyhow::Error, status: StatusCode) -> Self {
+        log::error!("Error occurred: {}", err); // Log the error
+        Self { inner: err, status }
+    }
+
+    pub fn internal(err: impl Into<anyhow::Error>) -> Self {
+        Self::new(err.into(), StatusCode::INTERNAL_SERVER_ERROR)
+    }
+
+    pub fn bad_request(err: impl Into<anyhow::Error>) -> Self {
+        Self::new(err.into(), StatusCode::BAD_REQUEST)
+    }
+
+    pub fn service_unavailable(err: impl Into<anyhow::Error>) -> Self {
+        Self::new(err.into(), StatusCode::SERVICE_UNAVAILABLE)
+    }
+}
+
+impl fmt::Display for AppError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.inner)
+    }
+}
+
+impl StdError for AppError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        self.inner.source()
+    }
+}
+
+impl From<anyhow::Error> for AppError {
+    fn from(err: anyhow::Error) -> Self {
+        Self::internal(err)
+    }
+}
+
+impl From<ValidatorError> for AppError {
+    fn from(err: ValidatorError) -> Self {
+        match err {
+            ValidatorError::Validate(e) => {
+                let message = e
+                    .field_errors()
+                    .iter()
+                    .flat_map(|(field, errors)| {
+                        errors.iter().map(move |error| {
+                            let msg = error
+                                .message
+                                .as_ref()
+                                .map(|m| m.to_string())
+                                .unwrap_or_else(|| "Validation failed".to_string());
+                            format!("{}: {}", field, msg)
+                        })
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                Self::bad_request(anyhow::anyhow!("Validation error: {}", message))
+            }
+            _ => Self::internal(anyhow::anyhow!("Unexpected validation error: {}", err)),
+        }
+    }
+}
+
+impl ResponseError for AppError {
+    fn status_code(&self) -> StatusCode {
+        self.status
+    }
+
+    fn error_response(&self) -> HttpResponse {
+        let response = ErrorResponse {
+            status: self.status.as_u16(),
+            error: self
+                .status
+                .canonical_reason()
+                .unwrap_or("Unknown")
+                .to_string(),
+            message: self.inner.to_string(),
+        };
+        HttpResponse::build(self.status).json(response)
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ErrorResponse {
+    pub status: u16,
+    pub error: String,
+    pub message: String,
+}
