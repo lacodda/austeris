@@ -1,3 +1,5 @@
+> **Status (2026-08-28):** austeris is being rebuilt as a self-hosted **home-finance platform** — a bookkeeping core with modules for market prices, portfolios, loans and mortgages, deposits, recurring income and forecasts — on a microservice architecture (axum + gRPC + PostgreSQL, React UI). The decisions are in [`docs/adr/`](https://github.com/lacodda/austeris/tree/main/docs/adr). The text below describes the 2025 crypto-tracker prototype, kept in the tree until the first release of the rebuild (`v0.1.0`) and preserved at the tag `legacy-2025`.
+
 # Austeris: Crypto Portfolio Tracker 📊💸
 
 Austeris is a robust and modern cryptocurrency portfolio tracker built with **Rust** 🦀, leveraging **Docker** 🐳 for containerization, **PostgreSQL** 🐘 for persistent storage, **Redis** 🔴 for caching, and the **CoinMarketCap API** 📈 for real-time market data. It provides a RESTful API to manage assets, wallets, transactions, and portfolio snapshots, with Swagger UI for easy API exploration.
