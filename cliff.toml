@@ -1,0 +1,61 @@
+# git-cliff configuration: https://git-cliff.org/docs/configuration
+
+[changelog]
+header = """
+# Changelog
+
+All notable changes to this project are documented in this file.
+"""
+body = """
+{% if version %}\
+## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else %}\
+## [Unreleased]
+{% endif %}\
+{% if commits | filter(attribute="breaking", value=true) | length > 0 %}
+### Breaking Changes
+{% for commit in commits | filter(attribute="breaking", value=true) %}\
+- {{ commit.breaking_description | upper_first }}
+{% endfor %}\
+{% endif %}\
+{# Breaking commits appear in both places on purpose: the section above is the
+   warning, the group below is the answer to "what was added". Filtering them
+   out of their group leaves a release whose Features section is empty even
+   though it shipped one. #}{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group }}
+{% for commit in commits %}\
+- {{ commit.message | upper_first }}
+{% endfor %}\
+{% endfor %}
+"""
+# Trimming would eat the blank line each version ends with, stacking releases
+# against each other once a second one is cut.
+trim = false
+
+[git]
+# The history before `legacy-2025` belongs to the 2025 crypto tracker, whose
+# code this rebuild deleted. There is no version tag before it to bound the
+# range, so v0.1.0 was generated as `git-cliff --tag v0.1.0 legacy-2025..HEAD`;
+# without that range it took credit for the portfolio snapshots and the Redis
+# cache it threw away. From v0.2.0 on, the previous version tag bounds it and
+# the plain `git-cliff --tag vX.Y.Z` is correct.
+conventional_commits = true
+filter_unconventional = true
+protect_breaking_commits = true
+tag_pattern = "v[0-9].*"
+sort_commits = "oldest"
+commit_parsers = [
+  { message = "^feat", group = "Features" },
+  { message = "^fix", group = "Bug Fixes" },
+  { message = "^perf", group = "Performance" },
+  { message = "^refactor", group = "Refactoring" },
+  { message = "^docs", group = "Documentation" },
+  { message = "^test", group = "Testing" },
+  { message = "^build", group = "Build" },
+  { message = "^ci", group = "CI" },
+  # Dependency updates are the one `chore` a reader of the changelog needs:
+  # they carry the major upgrades that explain a moved MSRV or a changed
+  # requirement. `chore(release)` and the rest stay out.
+  { message = "^chore\\(deps\\)", group = "Dependencies" },
+  { message = "^chore", skip = true },
+]
