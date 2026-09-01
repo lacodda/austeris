@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/austeris", "crates/common"]
+members = ["crates/austeris", "crates/common", "crates/identity", "crates/proto"]
 
 [workspace.package]
 version = "0.2.0"
@@ -15,18 +15,40 @@ authors = ["Kirill Lakhtachev <lahtachev@gmail.com>"]
 
 [workspace.dependencies]
 austeris-common = { path = "crates/common", version = "0.2.0" }
+austeris-identity = { path = "crates/identity", version = "0.2.0" }
+austeris-proto = { path = "crates/proto", version = "0.2.0" }
 
 anyhow = "1.0.104"
+# Passwords are human-chosen and worth guessing at scale, so they get a
+# memory-hard hash rather than a bare digest. Session tokens, which this server
+# issues at full entropy, get SHA-256 instead - there is no dictionary to slow
+# an attacker down with.
+argon2 = "0.6.0"
 axum = "0.8.9"
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "serde"] }
 clap = { version = "4.6.6", features = ["derive"] }
+# Session tokens come from the OS entropy source, not from a counter.
+rand = "0.10.2"
+# The gateway forwards to services over the private compose network, which is
+# plain HTTP by construction - so no TLS stack is pulled in at all. Anything
+# reaching austeris from outside is terminated in front of the gateway.
+reqwest = { version = "0.13.4", default-features = false, features = ["stream"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
-sqlx = { version = "0.9", features = ["runtime-tokio", "tls-rustls", "postgres", "migrate"] }
+prost = "0.14.2"
+sha2 = "0.11.0"
+sqlx = { version = "0.9", features = ["runtime-tokio", "tls-rustls", "postgres", "migrate", "chrono", "uuid"] }
 thiserror = "2.0.19"
 tokio = { version = "1.53.1", features = ["full"] }
+# gRPC between services (ADR 0003). tonic 0.14 keeps the prost codec in its own
+# crate, so the pair moves together.
+tonic = "0.14.6"
+tonic-prost = "0.14.6"
+tonic-prost-build = "0.14.6"
 tower-http = { version = "0.7.0", features = ["trace"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+uuid = { version = "1.26.0", features = ["v4", "serde"] }
 
 http-body-util = "0.1.5"
 tower = { version = "0.5.3", features = ["util"] }

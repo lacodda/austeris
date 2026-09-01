@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+// The identity service's contract with the rest of austeris.
+//
+// This is how a service learns who is calling without ever seeing a password:
+// it hands over the session token it received and gets back a user id, or
+// nothing. Breaking this contract means a new `v2` package, not an edit here
+// (ADR 0001).
+package identity.v1;
+
+service Identity {
+  // Resolves a session token to the person holding it.
+  rpc ValidateSession(ValidateSessionRequest) returns (ValidateSessionResponse);
+}
+
+message ValidateSessionRequest {
+  // The opaque token from the session cookie. Never a password.
+  string token = 1;
+}
+
+message ValidateSessionResponse {
+  // Empty when the token is unknown, expired, or its account is deactivated -
+  // three cases the caller has no business telling apart.
+  string user_id = 1;
+  // The address, for a caller that wants to name the actor in a record it
+  // writes without asking a second time.
+  string email = 2;
+}
