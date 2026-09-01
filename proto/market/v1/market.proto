@@ -40,7 +40,7 @@ message GetPriceAtResponse {
 
 message Price {
   string instrument_id = 1;
-  string quote_currency = 2;
+  string quote_currency = 7;
   // Decimal as a string, never a double: protobuf has no decimal type, and a
   // price that survives the wire as a float is not the price anyone recorded
   // (ADR 0004).
