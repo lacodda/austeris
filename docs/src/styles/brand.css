@@ -1,0 +1,25 @@
+/* Brand accent: austeris orchid. */
+:root {
+	--sl-color-accent: #c25bd9;
+	--sl-color-accent-high: #dfa7ea;
+	--sl-color-accent-low: #4a2153;
+}
+
+:root[data-theme='light'] {
+	--sl-color-accent: #9b3fb0;
+	--sl-color-accent-high: #5f2069;
+	--sl-color-accent-low: #f0d9f5;
+}
+
+/* ---------------------------------------------------------------- header -- */
+
+/* The mark is a square hex tile: let it fill the bar height rather than the
+   2rem it was pinned to, and sit close to the wordmark it belongs with. */
+.site-title {
+	gap: 0.4rem;
+}
+
+.site-title img {
+	width: auto;
+	height: 2.5rem;
+}

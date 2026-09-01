@@ -1,0 +1,41 @@
+---
+title: austeris
+description: Self-hosted home finance - accounts, entries, assets and liabilities in one place.
+template: splash
+hero:
+  tagline: One person's whole financial picture, on their own machine.
+  actions:
+    - text: Get started
+      link: /austeris/getting-started/
+      icon: right-arrow
+    - text: Source
+      link: https://github.com/lacodda/austeris
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+austeris keeps accounts and entries in several currencies, what you own and what
+you owe, loans and deposits, a portfolio of crypto and securities - and computes
+net worth, cash flow and a forecast on top of them.
+
+It is built to be run by one person on their own hardware. There is no hosted
+version, no account to create with anyone, and no telemetry.
+
+<CardGrid stagger>
+	<Card title="Still being built" icon="rocket">
+		This is v0.3.0. Signing in works; nothing books an entry yet. The
+		bookkeeping core arrives in v0.6.0.
+	</Card>
+	<Card title="One binary, several services" icon="puzzle">
+		Each module is its own process with its own schema and its own contract,
+		shipped as one image and one version.
+	</Card>
+	<Card title="Money is exact" icon="approve-check">
+		Decimal everywhere, never a float. A ledger of floats does not add up.
+	</Card>
+	<Card title="Yours only" icon="seti:lock">
+		Self-hosted, no third party, and nothing leaves the machine you run it on.
+	</Card>
+</CardGrid>

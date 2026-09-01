@@ -1,0 +1,71 @@
+---
+title: Architecture
+description: How austeris is put together, and why.
+---
+
+austeris is a set of small services sharing one PostgreSQL and one binary,
+behind a single gateway.
+
+## Services
+
+A service owns a module of the product: `identity` owns people and sessions,
+`ledger` will own accounts and entries, `market` will own instrument prices.
+Each one:
+
+- owns **its own schema** in the shared database, and never reads another
+  service's tables;
+- owns **its own migrations**, applied when it starts;
+- exposes **REST** through the gateway and **gRPC** to its peers.
+
+Data crosses a service boundary only through that service's contract. A report
+spanning services is computed by a service that calls the others, never by SQL
+joining two schemas.
+
+## One binary
+
+Every service is the same executable, picked by a subcommand:
+
+```console
+$ austeris serve gateway
+$ austeris serve identity
+```
+
+They are still separate processes with separate ports, schemas and contracts.
+What they share is a build, an image and a version - so a deployment cannot end
+up running two versions of the platform against one database.
+
+## The gateway
+
+The gateway is the only thing outside the deployment can reach. It:
+
+- routes `/api/v1/{prefix}/...` to the service that owns that prefix - a path
+  with no service behind it is unreachable, not proxied nowhere;
+- validates the session cookie with `identity` over gRPC and passes the caller's
+  id downstream as `x-austeris-user-id`, stripping any such header that arrived
+  from outside;
+- caps how fast one client can ask.
+
+Services listen on the private network only. Nothing but the gateway is
+published.
+
+## Health and readiness
+
+Every service answers two probes, and they are not the same question:
+
+- `/healthz` - the process is alive. It touches nothing, so a database hiccup
+  cannot start a restart loop.
+- `/readyz` - the process can serve: the database answers, and its schema is
+  migrated to the version this build was compiled against.
+
+Compose waits on `/readyz`, which is what stops a service from starting against
+a schema it does not understand.
+
+## Money
+
+Amounts are `NUMERIC` in the database, a decimal type in code, and **strings**
+in JSON and protobuf. Never a float: binary floating point cannot represent
+0.1, so a column of them does not add up, and a bookkeeping product whose
+balances drift is not a bookkeeping product.
+
+A client that wants to do arithmetic on an amount needs a decimal library. That
+is deliberate.
