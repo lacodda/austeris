@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.3.0] - 2026-09-01
+
+### Documentation
+- Add the documentation site
+
+### Features
+- Add people, passwords and sessions
+- Forward to services and vouch for the caller
+
+
 ## [0.2.0] - 2026-09-01
 
 ### Build
