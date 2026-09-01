@@ -1,0 +1,39 @@
+[workspace]
+resolver = "3"
+members = ["crates/austeris", "crates/common"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+# Measured with `cargo +VERSION check --all-targets`, enforced by the msrv CI
+# job, which reads this number from the manifest.
+rust-version = "1.94"
+license = "MIT"
+repository = "https://github.com/lacodda/austeris"
+homepage = "https://github.com/lacodda/austeris"
+authors = ["Kirill Lakhtachev <lahtachev@gmail.com>"]
+
+[workspace.dependencies]
+austeris-common = { path = "crates/common", version = "0.1.0" }
+
+anyhow = "1.0.104"
+axum = "0.8.9"
+clap = { version = "4.6.6", features = ["derive"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sqlx = { version = "0.9", features = ["runtime-tokio", "tls-rustls", "postgres", "migrate"] }
+thiserror = "2.0.19"
+tokio = { version = "1.53.1", features = ["full"] }
+tower-http = { version = "0.7.0", features = ["trace"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+http-body-util = "0.1.5"
+tower = { version = "0.5.3", features = ["util"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }

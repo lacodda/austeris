@@ -1,0 +1,37 @@
+[package]
+name = "austeris"
+description = "Self-hosted home finance: accounts, entries, assets and liabilities in one place"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+readme = "../../README.md"
+keywords = ["finance", "accounting", "self-hosted", "budget", "portfolio"]
+categories = ["finance"]
+
+# One binary serves every service; which one is a subcommand (ADR 0005).
+[[bin]]
+name = "austeris"
+path = "src/main.rs"
+
+[dependencies]
+austeris-common.workspace = true
+
+anyhow.workspace = true
+axum.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+http-body-util.workspace = true
+tower.workspace = true
+
+[lints]
+workspace = true

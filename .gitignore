@@ -1,42 +1,21 @@
 # Rust build artifacts
-/*/target/
-/**/*.rs.bk
+/target/
+**/*.rs.bk
 
-# Docker-related files
+# Local service data
 /postgres-data/
-/redis-data/
-/pgadmin-data/
 
-# Environment variables
+# Environment
 .env
 *.env.local
-*.env.development
-*.env.test
-*.env.production
 
 # Logs
 *.log
 logs/
-*.log.*
 
-# Temporary files
-*.tmp
-*.temp
-*.swp
-*~
-
-# macOS-specific files
-.DS_Store
-
-# Editor/IDE files
+# Editor and OS files
 .idea/
 .vscode/
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
-
-# Test and coverage reports
-/coverage/
-*.lcov
+.DS_Store
+*.swp
+*~
