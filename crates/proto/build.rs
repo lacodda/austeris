@@ -6,7 +6,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // check them from there against `main`.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../proto");
 
-    let files = ["identity/v1/identity.proto"];
+    let files = ["identity/v1/identity.proto", "market/v1/market.proto"];
     for file in files {
         println!("cargo:rerun-if-changed={}", root.join(file).display());
     }

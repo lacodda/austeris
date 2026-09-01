@@ -20,6 +20,7 @@ path = "src/main.rs"
 [dependencies]
 austeris-common.workspace = true
 austeris-identity.workspace = true
+austeris-market.workspace = true
 austeris-proto.workspace = true
 
 anyhow.workspace = true

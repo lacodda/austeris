@@ -53,26 +53,47 @@ async fn serve(service: Service) -> Result<()> {
     // the REST surface is what the gateway forwards to, the gRPC one is what
     // other services call, and only the first should ever be reachable from
     // outside the compose network.
+    // Each service's gRPC server is a different concrete type, so the branches
+    // hand back a spawned task rather than the future itself.
     let (app, grpc) = match service {
         Service::Gateway => (gateway::router(), None),
         Service::Identity => {
-            let pool = db::connect(&config, austeris_identity::SCHEMA).await?;
-            // Each service migrates its own schema on the way up: one binary,
-            // one owner per schema, and no separate step to forget on a deploy.
-            // `austeris migrate --dry-run` exists to see it coming first.
-            austeris_common::migrate::run(&pool, &austeris_identity::MIGRATOR)
-                .await
-                .context("migrating the identity schema")?;
+            let pool = schema_ready(&config, service).await?;
 
             if let Some(password) = austeris_identity::routes::ensure_first_user(&pool, &first_user_email()).await? {
                 announce_first_user(&first_user_email(), &password);
             }
 
-            let grpc = tonic::transport::Server::builder()
+            let address = grpc_address()?;
+            let server = tonic::transport::Server::builder()
                 .add_service(austeris_identity::grpc::Service::new(pool.clone()))
-                .serve(crate::service::grpc_bind().parse().context("AUSTERIS_GRPC_BIND is not an address")?);
+                .serve(address);
 
-            (austeris_identity::routes::router(pool, secure_cookies()), Some(grpc))
+            (
+                austeris_identity::routes::router(pool, secure_cookies()),
+                Some(tokio::spawn(async move { server.await.context("the gRPC listener stopped") })),
+            )
+        }
+        Service::Market => {
+            let pool = schema_ready(&config, service).await?;
+
+            let sources = austeris_market::routes::Sources::from_env();
+            // Said once, at startup, rather than on every refresh: a source
+            // without its key is switched off, not broken.
+            match sources.available().as_slice() {
+                [] => tracing::warn!("no price source is configured; prices will not be refreshed"),
+                names => tracing::info!(sources = names.join(", "), "price sources available"),
+            }
+
+            let address = grpc_address()?;
+            let server = tonic::transport::Server::builder()
+                .add_service(austeris_market::grpc::Service::new(pool.clone()))
+                .serve(address);
+
+            (
+                austeris_market::routes::router(pool, sources),
+                Some(tokio::spawn(async move { server.await.context("the gRPC listener stopped") })),
+            )
         }
     };
 
@@ -89,11 +110,33 @@ async fn serve(service: Service) -> Result<()> {
         // whichever finishes first ends the process rather than leaving half
         // of it answering.
         Some(grpc) => tokio::try_join!(async { axum::serve(listener, app).await.context("the HTTP listener stopped") }, async {
-            grpc.await.context("the gRPC listener stopped")
+            grpc.await.context("the gRPC task stopped")?
         })
         .map(|_| ()),
         None => axum::serve(listener, app).await.context("the HTTP listener stopped"),
     }
+}
+
+/// Opens a service's pool and brings its schema up to this build's version.
+///
+/// Every service does this on the way up: one binary, one owner per schema, and
+/// no separate step to forget on a deploy. `austeris migrate --dry-run` exists
+/// to see it coming first.
+async fn schema_ready(config: &Config, service: Service) -> Result<sqlx::PgPool> {
+    let (Some(schema), Some(migrator)) = (service.schema(), service.migrator()) else {
+        anyhow::bail!("{service} owns no schema");
+    };
+
+    let pool = db::connect(config, schema).await?;
+    austeris_common::migrate::run(&pool, migrator)
+        .await
+        .with_context(|| format!("migrating the {schema} schema"))?;
+    Ok(pool)
+}
+
+/// Where this process serves gRPC.
+fn grpc_address() -> Result<std::net::SocketAddr> {
+    crate::service::grpc_bind().parse().context("AUSTERIS_GRPC_BIND is not an address")
 }
 
 /// The address the first account is created under.

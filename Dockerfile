@@ -21,23 +21,25 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates/austeris/Cargo.toml crates/austeris/
 COPY crates/common/Cargo.toml crates/common/
 COPY crates/identity/Cargo.toml crates/identity/
+COPY crates/market/Cargo.toml crates/market/
 COPY crates/proto/Cargo.toml crates/proto/
 # The proto crate's build script runs even for a dependency-only build, so its
 # inputs come across with the manifests.
 COPY crates/proto/build.rs crates/proto/
 COPY proto ./proto
-RUN mkdir -p crates/austeris/src crates/common/src crates/identity/src crates/proto/src \
+RUN mkdir -p crates/austeris/src crates/common/src crates/identity/src crates/market/src crates/proto/src \
     && echo 'fn main() {}' > crates/austeris/src/main.rs \
     && echo '' > crates/common/src/lib.rs \
     && echo '' > crates/identity/src/lib.rs \
+    && echo '' > crates/market/src/lib.rs \
     && echo '' > crates/proto/src/lib.rs \
     && cargo build --release \
-    && rm -rf crates/austeris/src crates/common/src crates/identity/src crates/proto/src
+    && rm -rf crates/austeris/src crates/common/src crates/identity/src crates/market/src crates/proto/src
 
 COPY crates ./crates
 # Touch the entry points: cargo skips a rebuild when timestamps look older than
 # the artifacts left by the dependency layer.
-RUN touch crates/austeris/src/main.rs crates/common/src/lib.rs crates/identity/src/lib.rs crates/proto/src/lib.rs \
+RUN touch crates/austeris/src/main.rs crates/common/src/lib.rs crates/identity/src/lib.rs crates/market/src/lib.rs crates/proto/src/lib.rs \
     && cargo build --release
 
 FROM debian:trixie-slim

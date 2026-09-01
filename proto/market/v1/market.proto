@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+// The market service's contract with the rest of austeris.
+//
+// Prices only. Who holds an instrument and what they paid is the portfolio's
+// business; this service never learns either (ADR 0001).
+package market.v1;
+
+service Market {
+  // The latest price of each instrument named, in one call.
+  rpc GetPrices(GetPricesRequest) returns (GetPricesResponse);
+  // The price of one instrument as of an instant.
+  rpc GetPriceAt(GetPriceAtRequest) returns (GetPriceAtResponse);
+}
+
+message GetPricesRequest {
+  // Instrument ids, as UUID strings. An id with no price is simply absent from
+  // the response - one unpriced instrument must not lose the whole batch.
+  repeated string instrument_ids = 1;
+  // Currency code the prices are wanted in, e.g. "USD".
+  string quote_currency = 2;
+}
+
+message GetPricesResponse {
+  repeated Price prices = 1;
+}
+
+message GetPriceAtRequest {
+  string instrument_id = 1;
+  string quote_currency = 2;
+  // Unix seconds. The answer is the newest observation not after this instant:
+  // a price is a fact about a moment that has already happened.
+  int64 at_unix_seconds = 3;
+}
+
+message GetPriceAtResponse {
+  // Absent when nothing was observed at or before the instant asked about.
+  optional Price price = 1;
+}
+
+message Price {
+  string instrument_id = 1;
+  string quote_currency = 2;
+  // Decimal as a string, never a double: protobuf has no decimal type, and a
+  // price that survives the wire as a float is not the price anyone recorded
+  // (ADR 0004).
+  string price = 3;
+  // When the source observed it, not when it was stored.
+  int64 observed_at_unix_seconds = 4;
+  // Which source said so.
+  string source = 5;
+}

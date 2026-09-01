@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/austeris", "crates/common", "crates/identity", "crates/proto"]
+members = ["crates/austeris", "crates/common", "crates/identity", "crates/market", "crates/proto"]
 
 [workspace.package]
 version = "0.3.0"
@@ -16,6 +16,7 @@ authors = ["Kirill Lakhtachev <lahtachev@gmail.com>"]
 [workspace.dependencies]
 austeris-common = { path = "crates/common", version = "0.3.0" }
 austeris-identity = { path = "crates/identity", version = "0.3.0" }
+austeris-market = { path = "crates/market", version = "0.3.0" }
 austeris-proto = { path = "crates/proto", version = "0.3.0" }
 
 anyhow = "1.0.104"
@@ -32,12 +33,19 @@ rand = "0.10.2"
 # The gateway forwards to services over the private compose network, which is
 # plain HTTP by construction - so no TLS stack is pulled in at all. Anything
 # reaching austeris from outside is terminated in front of the gateway.
-reqwest = { version = "0.13.4", default-features = false, features = ["stream"] }
+reqwest = { version = "0.13.4", default-features = false, features = ["stream", "query"] }
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.151"
+# `arbitrary_precision` is what actually keeps a price whole. Without it
+# serde_json parses every JSON number into an f64 first, and 61234.567890123456
+# arrives as 61234.56789012346 - before `Decimal` is ever involved. Verified by
+# removing it: two tests in market go red (ADR 0004).
+serde_json = { version = "1.0.151", features = ["arbitrary_precision"] }
 prost = "0.14.2"
+# Money and quantities are decimal, never binary floating point (ADR 0004):
+# a column of floats does not add up, and a ledger that drifts is not a ledger.
+rust_decimal = { version = "1.39.0", features = ["db-postgres", "serde-with-str", "serde-with-arbitrary-precision"] }
 sha2 = "0.11.0"
-sqlx = { version = "0.9", features = ["runtime-tokio", "tls-rustls", "postgres", "migrate", "chrono", "uuid"] }
+sqlx = { version = "0.9", features = ["runtime-tokio", "tls-rustls", "postgres", "migrate", "chrono", "uuid", "rust_decimal"] }
 thiserror = "2.0.19"
 tokio = { version = "1.53.1", features = ["full"] }
 # gRPC between services (ADR 0003). tonic 0.14 keeps the prost codec in its own
