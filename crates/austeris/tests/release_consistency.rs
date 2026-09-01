@@ -132,27 +132,88 @@ fn the_readme_documents_every_environment_variable() {
     // exist. A variable read by the code and missing from the table is
     // invisible until someone reads the source, which is not what a
     // self-hosted product can ask of them.
-    let config = read("crates/common/src/config.rs");
+    //
+    // The whole workspace is searched, not one file: the settings live wherever
+    // they are used - the first-user address in the binary, the cookie flag in
+    // identity, the pool size in common - and a gate that only reads `config.rs`
+    // is blind to every one added anywhere else.
     let readme = read("README.md");
+    let mut checked = 0;
 
-    for line in config.lines() {
-        // The names appear as the argument to `required`/`optional`/`parsed`,
-        // without their `AUSTERIS_` prefix - the prefix is added at lookup.
-        let trimmed = line.trim_start();
-        let Some(rest) = ["optional(\"", "parsed(\""].iter().find_map(|call| trimmed.split_once(call).map(|(_, r)| r)) else {
-            continue;
-        };
-        let Some((name, _)) = rest.split_once('"') else { continue };
-        // The helpers call each other; `name` there is a parameter, not a literal.
-        if name.is_empty() || !name.chars().all(|c| c.is_ascii_uppercase() || c == '_') {
-            continue;
+    for source in rust_sources(&repo_root().join("crates")) {
+        let text = fs::read_to_string(&source).expect("reading a source file");
+        for name in variables_in(&text) {
+            assert!(
+                readme.contains(&name),
+                "{name} is read by {} but missing from the README's configuration table",
+                source.display()
+            );
+            checked += 1;
         }
-
-        assert!(
-            readme.contains(&format!("AUSTERIS_{name}")),
-            "AUSTERIS_{name} is read by the code but missing from the README's configuration table"
-        );
     }
+
+    assert!(
+        checked > 0,
+        "no AUSTERIS_ variable was found anywhere; the search is looking in the wrong place"
+    );
+}
+
+/// Every `AUSTERIS_*` name a source file names, whole or as a suffix format.
+fn variables_in(text: &str) -> Vec<String> {
+    let mut found = Vec::new();
+
+    // Literal names: `"AUSTERIS_BIND"`, `format!("AUSTERIS_{}_ADDR", ...)`.
+    let mut rest = text;
+    while let Some(at) = rest.find("AUSTERIS_") {
+        let tail = &rest[at..];
+        let name: String = tail.chars().take_while(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == '_').collect();
+        // A name built by interpolation ends at the `{`; what survives is the
+        // stem, and the README must at least carry that.
+        if name.len() > "AUSTERIS_".len() {
+            found.push(name);
+        }
+        rest = &tail["AUSTERIS_".len()..];
+    }
+
+    // Names assembled from a bare suffix, as `config.rs` does through its own
+    // prefixing helpers.
+    for call in ["optional(\"", "parsed(\""] {
+        let mut rest = text;
+        while let Some(at) = rest.find(call) {
+            let tail = &rest[at + call.len()..];
+            if let Some((name, _)) = tail.split_once('"')
+                && !name.is_empty()
+                && name.chars().all(|c| c.is_ascii_uppercase() || c == '_')
+            {
+                found.push(format!("AUSTERIS_{name}"));
+            }
+            rest = tail;
+        }
+    }
+
+    found.sort_unstable();
+    found.dedup();
+    found
+}
+
+/// Every `.rs` file under a directory.
+fn rust_sources(root: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut queue = vec![root.to_path_buf()];
+
+    while let Some(dir) = queue.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                queue.push(path);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                found.push(path);
+            }
+        }
+    }
+
+    found
 }
 
 #[test]

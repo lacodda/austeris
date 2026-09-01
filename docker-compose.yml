@@ -29,11 +29,25 @@ services:
     build: .
     command: ["serve", "gateway"]
     environment:
-      AUSTERIS_DATABASE_URL: postgres://austeris:austeris@db:5432/austeris
       AUSTERIS_BIND: 0.0.0.0:8080
       RUST_LOG: ${RUST_LOG:-austeris=info,tower_http=info,warn}
     ports:
+      # The only published port: everything else talks over this network.
       - "${AUSTERIS_PORT:-8084}:8080"
+    depends_on:
+      identity:
+        condition: service_healthy
+
+  identity:
+    build: .
+    command: ["serve", "identity"]
+    environment:
+      AUSTERIS_DATABASE_URL: postgres://austeris:austeris@db:5432/austeris
+      AUSTERIS_BIND: 0.0.0.0:8080
+      # The address the first account is created under on an empty
+      # installation; its password is printed once, into this container's log.
+      AUSTERIS_FIRST_USER: ${AUSTERIS_FIRST_USER:-owner@austeris.local}
+      RUST_LOG: ${RUST_LOG:-austeris=info,tower_http=info,warn}
     depends_on:
       db:
         # Not `service_started`: a service that owns a schema races the database

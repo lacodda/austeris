@@ -32,6 +32,10 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
+      # The proto crate compiles the service contracts at build time (ADR 0003).
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
       - name: Package (Windows)

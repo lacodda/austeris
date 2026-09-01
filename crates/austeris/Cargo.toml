@@ -19,10 +19,15 @@ path = "src/main.rs"
 
 [dependencies]
 austeris-common.workspace = true
+austeris-identity.workspace = true
+austeris-proto.workspace = true
 
 anyhow.workspace = true
 axum.workspace = true
 clap.workspace = true
+reqwest.workspace = true
+sqlx.workspace = true
+tonic.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
