@@ -2,6 +2,22 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.5.0] - 2026-09-01
+
+### Breaking Changes
+- The gRPC services are now `identity.v1.IdentityService`
+and `market.v1.MarketService`. Generated clients follow the new names.
+
+### CI
+- Hold the proto gate to breaking changes again
+
+### Features
+- Merge the services' OpenAPI into one document
+
+### Refactoring
+- Name the services as the linter demands
+
+
 ## [0.4.0] - 2026-09-01
 
 ### Breaking Changes
