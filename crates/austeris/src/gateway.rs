@@ -102,10 +102,15 @@ async fn forward(State(upstream): State<Upstream>, request: Request) -> AppResul
 
     // identity is asked about its own sessions over REST, so it is not asked
     // about them over gRPC first - that would be a second round trip to learn
-    // what the call itself is about to establish.
-    if upstream.service != Service::Identity
-        && let Some(user_id) = caller(&parts).await
-    {
+    // what the call itself is about to establish, and signing in would need a
+    // session to sign in with.
+    if upstream.service != Service::Identity {
+        // A session is required, not merely passed on when present. Everything
+        // behind this gateway is one person's finances; an installation on a
+        // home network must not serve them to whoever asks.
+        let Some(user_id) = caller(&parts).await else {
+            return Err(AppError::new(StatusCode::UNAUTHORIZED, anyhow::anyhow!("not signed in")));
+        };
         outgoing = outgoing.header(USER_HEADER, user_id);
     }
 
@@ -131,10 +136,9 @@ async fn forward(State(upstream): State<Upstream>, request: Request) -> AppResul
 
 /// Asks identity who the session cookie belongs to, if there is one.
 ///
-/// A failure here is not an error the caller sees: the request goes on without
-/// the header, and the service it reaches refuses it as unauthenticated. That
-/// is the same answer as an invalid session, which is what an identity service
-/// that cannot be reached amounts to.
+/// `None` covers every way of not knowing: no cookie, an invalid session, or an
+/// identity service that cannot be reached. The caller is refused in all three
+/// - an installation that cannot check who is asking must not answer.
 async fn caller(parts: &axum::http::request::Parts) -> Option<String> {
     let token = session_cookie(parts)?;
 
@@ -249,6 +253,24 @@ mod tests {
     async fn an_unrouted_path_is_not_reachable() {
         let (status, _) = get("/api/v1/ledger/accounts").await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn a_service_behind_the_gateway_is_not_served_without_a_session() {
+        // Everything behind here is one person's finances. Before this check
+        // existed, `market` answered anyone on the network - found by running
+        // it, not by a test.
+        let (status, _) = get("/api/v1/market/instruments").await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn signing_in_does_not_itself_need_a_session() {
+        // identity is exempt, or there would be no way to obtain the session
+        // every other path demands. It is not running here, so 502 is the
+        // proof the request was forwarded rather than refused.
+        let (status, _) = get("/api/v1/auth/login").await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY);
     }
 
     #[tokio::test]

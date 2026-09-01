@@ -3,7 +3,9 @@ title: Authentication
 description: The endpoints for signing in, signing out, and asking who you are.
 ---
 
-Every path is served by the gateway under `/api/v1/auth`. See
+Every path is served by the gateway under `/api/v1/auth`. These are the only
+paths reachable without a session - everything else behind the gateway answers
+`401` until you have one. See
 [Sessions](/austeris/concepts/sessions/) for what a session is and how a refusal
 behaves.
 

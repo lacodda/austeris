@@ -4,7 +4,7 @@
 
 Self-hosted home finance for one person's whole picture: accounts and entries in several currencies, what you own and what you owe, loans and deposits, a portfolio of crypto and securities — and on top of it net worth, cash flow and a forecast. One PostgreSQL, a service per module behind a single gateway, a React UI compiled into the binary.
 
-> **Status: early.** People can sign in, and that is all — nothing here books an entry yet. `docker compose up` brings up PostgreSQL, the `identity` service and the gateway; an installation with no accounts creates one and prints its password once. Sessions are rows the server can end, passwords are Argon2id, and an address being guessed at locks out whether or not it exists here. The gateway is the only published port: it routes `/api/v1/{prefix}/...` to the service that owns it, validates the session over gRPC and tells that service who is calling. Migrations roll back rather than being restored from a backup. The first prices are `market` (v0.4.0), and the bookkeeping core lands in v0.6.0.
+> **Status: early.** People sign in and prices accrue; nothing here books an entry yet. `docker compose up` brings up PostgreSQL, `identity`, `market` and the gateway; an installation with no accounts creates one and prints its password once. Sessions are rows the server can end, passwords are Argon2id, and an address being guessed at locks out whether or not it exists here. The gateway is the only published port, and **it answers nothing but signing in without a session**: it routes `/api/v1/{prefix}/...` to the service that owns it, validates the session over gRPC and tells that service who is calling. `market` keeps instruments and their prices - decimal to eighteen places, stamped with the instant they were observed, from sources ranked so a second one answers when the first goes quiet. Migrations roll back rather than being restored from a backup. The bookkeeping core lands in v0.6.0.
 >
 > A crypto-portfolio tracker lived in this repository through 2025 and is preserved at the tag [`legacy-2025`](https://github.com/lacodda/austeris/tree/legacy-2025). It is the donor for `market` and `portfolio`, not the code being built on.
 
@@ -16,12 +16,12 @@ Requires Docker.
 $ git clone https://github.com/lacodda/austeris && cd austeris
 $ docker compose up -d
  Container austeris-db-1  Healthy
- Container austeris-identity-1  Starting
  Container austeris-identity-1  Healthy
+ Container austeris-market-1  Healthy
  Container austeris-gateway-1  Started
 ```
 
-An installation with no accounts creates one and prints its password — once,
+An installation with no accounts creates one and prints its password - once,
 into the log of the service that made it:
 
 ```console
@@ -30,7 +30,7 @@ $ docker compose logs identity
   An account was created, because this installation had none:
 
       email:    owner@austeris.local
-      password: ne8yi28x6nd5m8w3asm5
+      password: fcrokhchh87dcpaoquea
 
   This is the only time it is shown. Sign in and change it.
 ```
@@ -38,13 +38,19 @@ $ docker compose logs identity
 ```console
 $ curl -c jar -X POST http://127.0.0.1:8084/api/v1/auth/login \
     -H 'Content-Type: application/json' \
-    -d '{"email":"owner@austeris.local","password":"ne8yi28x6nd5m8w3asm5"}'
+    -d '{"email":"owner@austeris.local","password":"fcrokhchh87dcpaoquea"}'
 {"status":"ok"}
 
-$ curl -b jar http://127.0.0.1:8084/api/v1/auth/me
-{"id":"994b0844-1f5f-49dd-9ae4-01c948e487e0","email":"owner@austeris.local","display_name":"owner@austeris.local"}
+$ curl -b jar -X POST http://127.0.0.1:8084/api/v1/market/instruments \
+    -H 'Content-Type: application/json' \
+    -d '{"kind":"crypto","symbol":"BTC","name":"Bitcoin","decimals":8}'
+{"id":"efafe2e1-506f-4d6f-b13b-ea63b15def93","kind":"crypto","symbol":"BTC","name":"Bitcoin","decimals":8}
 
-# A path with no service behind it is unreachable, not proxied nowhere.
+# Without a session, nothing behind the gateway answers.
+$ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8084/api/v1/market/instruments
+401
+
+# And a path with no service behind it is unreachable, not proxied nowhere.
 $ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8084/api/v1/ledger/accounts
 404
 ```
@@ -79,6 +85,7 @@ Every variable is prefixed `AUSTERIS_`, and no binary reads a `.env` file: whate
 | `AUSTERIS_ACQUIRE_TIMEOUT_SECS` | `30` | How long a request waits for a free connection. |
 | `AUSTERIS_GRPC_BIND` | `0.0.0.0:9090` | Where a service serves gRPC to its peers. Never publish this port. |
 | `AUSTERIS_FIRST_USER` | `owner@austeris.local` | The address the first account is created under, on an installation that has none. |
+| `AUSTERIS_CMC_API_KEY` | unset | CoinMarketCap key. Without it that price source is switched off: the service starts, says so once, and serves whatever prices are already stored. |
 | `AUSTERIS_SECURE_COOKIES` | unset | Set to `true` to mark session cookies `Secure`. Leave it off on plain HTTP, or the browser drops every session cookie and signing in fails with nothing saying why. |
 | `RUST_LOG` | `austeris=info,tower_http=info,warn` | Log filter. |
 

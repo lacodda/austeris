@@ -9,7 +9,8 @@ behind a single gateway.
 ## Services
 
 A service owns a module of the product: `identity` owns people and sessions,
-`ledger` will own accounts and entries, `market` will own instrument prices.
+`market` owns instruments and their prices, `ledger` will own accounts and
+entries.
 Each one:
 
 - owns **its own schema** in the shared database, and never reads another
@@ -40,9 +41,9 @@ The gateway is the only thing outside the deployment can reach. It:
 
 - routes `/api/v1/{prefix}/...` to the service that owns that prefix - a path
   with no service behind it is unreachable, not proxied nowhere;
-- validates the session cookie with `identity` over gRPC and passes the caller's
-  id downstream as `x-austeris-user-id`, stripping any such header that arrived
-  from outside;
+- **requires a session** for everything except signing in, validating the cookie
+  with `identity` over gRPC and passing the caller's id downstream as
+  `x-austeris-user-id`, stripping any such header that arrived from outside;
 - caps how fast one client can ask.
 
 Services listen on the private network only. Nothing but the gateway is
