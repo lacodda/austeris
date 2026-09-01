@@ -56,6 +56,10 @@ tonic-prost-build = "0.14.6"
 tower-http = { version = "0.7.0", features = ["trace"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+# The REST surface describes itself: each service annotates its handlers, the
+# gateway merges the pieces into one document and serves it (ADR 0006).
+utoipa = { version = "5.5.0", features = ["axum_extras", "chrono", "uuid", "decimal"] }
+utoipa-swagger-ui = { version = "9.0.2", features = ["axum", "vendored"] }
 uuid = { version = "1.26.0", features = ["v4", "serde"] }
 
 http-body-util = "0.1.5"

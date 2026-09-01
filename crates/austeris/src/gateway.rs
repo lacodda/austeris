@@ -56,6 +56,11 @@ pub fn router() -> Router {
 
     Router::new()
         .merge(health::routes::<()>(None))
+        // The spec and its viewer sit outside the session check on purpose: a
+        // reader has to see what to call before they can sign in, and the shape
+        // of this API is public in the repository anyway. It describes the
+        // surface, never the data behind it.
+        .merge(utoipa_swagger_ui::SwaggerUi::new("/docs").url("/openapi.json", crate::openapi::document()))
         .nest("/api/v1", api)
         .fallback(not_found)
         // Applied last so it wraps everything, health probes included: an
@@ -253,6 +258,22 @@ mod tests {
     async fn an_unrouted_path_is_not_reachable() {
         let (status, _) = get("/api/v1/ledger/accounts").await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn the_spec_and_its_viewer_are_reachable_without_signing_in() {
+        // A reader has to see what to call before they have anything to call
+        // it with. The spec describes the surface, never the data behind it.
+        let (status, body) = get("/openapi.json").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            body.contains("/api/v1/auth/login"),
+            "the spec is empty or wrong: {}",
+            &body[..body.len().min(200)]
+        );
+
+        let (status, _) = get("/docs/").await;
+        assert_eq!(status, StatusCode::OK, "the viewer is not being served");
     }
 
     #[tokio::test]

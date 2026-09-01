@@ -114,6 +114,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # The site renders its API reference from the spec the binary prints, so
+      # building the docs means building the binary (ADR 0006).
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: pnpm/action-setup@v6
         with:
           version: 10
@@ -128,3 +135,23 @@ jobs:
       - name: Build
         run: pnpm build
         working-directory: docs
+
+  # A contract outlives the release that introduced it. This job refuses a
+  # change to an existing package that would break a client already speaking
+  # it - the answer to needing one is a new package (`identity.v2`), never an
+  # edit to `v1` (ADR 0001). Checked against `main` rather than against the
+  # previous commit, so a branch cannot break a contract in steps.
+  proto:
+    name: proto
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: bufbuild/buf-action@v1
+        with:
+          # The action's own push/PR handling would try to publish to the BSR,
+          # which this project does not use: the contracts live in the repo.
+          setup_only: true
+      - name: Lint
+        run: buf lint
+      - name: Check for breaking changes
+        run: buf breaking --against "https://github.com/lacodda/austeris.git#branch=main"

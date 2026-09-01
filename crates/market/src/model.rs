@@ -10,7 +10,7 @@ use uuid::Uuid;
 /// Only `Crypto` has a source behind it today; the rest exist because the
 /// column does, and adding a variant later would be a schema change in the
 /// middle of a release that is about something else.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type, utoipa::ToSchema)]
 #[sqlx(type_name = "instrument_kind", rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
 pub enum Kind {
@@ -29,7 +29,7 @@ pub enum Kind {
 }
 
 /// Something that can be priced.
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, utoipa::ToSchema)]
 pub struct Instrument {
     /// Stable identifier, used by every other service.
     pub id: Uuid,
@@ -44,7 +44,7 @@ pub struct Instrument {
 }
 
 /// A price, as observed by one source at one instant.
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, utoipa::ToSchema)]
 pub struct Price {
     /// What was priced.
     pub instrument_id: Uuid,
@@ -56,6 +56,7 @@ pub struct Price {
     /// browser is an IEEE double, and the value is lost before it renders
     /// (ADR 0004).
     #[serde(with = "rust_decimal::serde::str")]
+    #[schema(value_type = String, example = "61234.567890123456789000")]
     pub price: Decimal,
     /// Which source said so.
     pub source: String,

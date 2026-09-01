@@ -1,0 +1,16 @@
+# buf's view of the service contracts.
+#
+# The gate that matters here is `buf breaking`: a change to an existing package
+# that would break a client is refused, and the answer is a new package
+# (`identity.v2`), never an edit to `v1` (ADR 0001). Services are released
+# together today, but a contract outlives the release that introduced it, and a
+# silently changed field number is the kind of thing found in production.
+version: v2
+modules:
+  - path: proto
+lint:
+  use:
+    - STANDARD
+breaking:
+  use:
+    - FILE

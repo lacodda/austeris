@@ -71,7 +71,7 @@ pub fn router(pool: PgPool, sources: Sources) -> Router {
 }
 
 /// What creating an instrument carries.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct NewInstrument {
     /// What kind of thing it is.
     pub kind: Kind,
@@ -84,7 +84,7 @@ pub struct NewInstrument {
 }
 
 /// What binding a source carries.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct NewBinding {
     /// Which source, by the name it records prices under.
     pub source: String,
@@ -99,10 +99,26 @@ fn default_priority() -> i32 {
     100
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/market/instruments",
+    tag = "market",
+    responses((status = 200, description = "Everything that can be priced", body = Vec<Instrument>)),
+)]
 async fn list_instruments(State(state): State<ServiceState>) -> AppResult<Json<Vec<Instrument>>> {
     Ok(Json(repository::instruments(&state.pool).await?))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/market/instruments/{id}",
+    tag = "market",
+    params(("id" = Uuid, Path, description = "The instrument")),
+    responses(
+        (status = 200, description = "The instrument", body = Instrument),
+        (status = 404, description = "No such instrument", body = austeris_common::error::ErrorBody),
+    ),
+)]
 async fn read_instrument(State(state): State<ServiceState>, Path(id): Path<Uuid>) -> AppResult<Json<Instrument>> {
     repository::instrument(&state.pool, id)
         .await?
@@ -110,6 +126,18 @@ async fn read_instrument(State(state): State<ServiceState>, Path(id): Path<Uuid>
         .ok_or_else(|| AppError::not_found(anyhow::anyhow!("no such instrument")))
 }
 
+/// Creating one that already exists updates its name and returns the same id,
+/// so a sync run twice does not produce two Bitcoins.
+#[utoipa::path(
+    post,
+    path = "/api/v1/market/instruments",
+    tag = "market",
+    request_body = NewInstrument,
+    responses(
+        (status = 201, description = "The instrument, created or updated", body = Instrument),
+        (status = 400, description = "An instrument needs a symbol", body = austeris_common::error::ErrorBody),
+    ),
+)]
 async fn create_instrument(State(state): State<ServiceState>, Json(new): Json<NewInstrument>) -> AppResult<(StatusCode, Json<Instrument>)> {
     if new.symbol.trim().is_empty() {
         return Err(AppError::bad_request(anyhow::anyhow!("an instrument needs a symbol")));
@@ -119,6 +147,18 @@ async fn create_instrument(State(state): State<ServiceState>, Json(new): Json<Ne
     Ok((StatusCode::CREATED, Json(instrument)))
 }
 
+/// Points a source at an instrument. `priority` is a rank: lower wins.
+#[utoipa::path(
+    post,
+    path = "/api/v1/market/instruments/{id}/sources",
+    tag = "market",
+    params(("id" = Uuid, Path, description = "The instrument")),
+    request_body = NewBinding,
+    responses(
+        (status = 204, description = "Bound"),
+        (status = 404, description = "No such instrument", body = austeris_common::error::ErrorBody),
+    ),
+)]
 async fn bind_source(State(state): State<ServiceState>, Path(id): Path<Uuid>, Json(new): Json<NewBinding>) -> AppResult<StatusCode> {
     // Binding a source to an instrument that does not exist would be accepted
     // by the foreign key and rejected as a 500; saying so is better.
@@ -131,7 +171,7 @@ async fn bind_source(State(state): State<ServiceState>, Path(id): Path<Uuid>, Js
 }
 
 /// Which instruments and currency a price query is about.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
 pub struct PriceQuery {
     /// Comma-separated instrument ids. Every instrument when omitted.
     pub instruments: Option<String>,
@@ -144,6 +184,15 @@ fn default_currency() -> String {
     "USD".to_owned()
 }
 
+/// An instrument with no price is absent from the answer rather than an error:
+/// one unpriced instrument must not cost a whole batch.
+#[utoipa::path(
+    get,
+    path = "/api/v1/market/prices",
+    tag = "market",
+    params(PriceQuery),
+    responses((status = 200, description = "The latest price of each instrument", body = Vec<Price>)),
+)]
 async fn latest_prices(State(state): State<ServiceState>, Query(query): Query<PriceQuery>) -> AppResult<Json<Vec<Price>>> {
     let ids = match &query.instruments {
         Some(list) => list
@@ -161,7 +210,7 @@ async fn latest_prices(State(state): State<ServiceState>, Query(query): Query<Pr
 }
 
 /// The window a history is asked for.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
 pub struct HistoryQuery {
     /// Currency code. USD when omitted.
     #[serde(default = "default_currency")]
@@ -172,6 +221,17 @@ pub struct HistoryQuery {
     pub to: Option<DateTime<Utc>>,
 }
 
+/// Every observation in a window, oldest first.
+#[utoipa::path(
+    get,
+    path = "/api/v1/market/prices/{id}/history",
+    tag = "market",
+    params(("id" = Uuid, Path, description = "The instrument"), HistoryQuery),
+    responses(
+        (status = 200, description = "The observations inside the window", body = Vec<Price>),
+        (status = 400, description = "The window ends before it starts", body = austeris_common::error::ErrorBody),
+    ),
+)]
 async fn price_history(State(state): State<ServiceState>, Path(id): Path<Uuid>, Query(query): Query<HistoryQuery>) -> AppResult<Json<Vec<Price>>> {
     let to = query.to.unwrap_or_else(Utc::now);
     let from = query.from.unwrap_or(to - Duration::days(30));
@@ -184,7 +244,7 @@ async fn price_history(State(state): State<ServiceState>, Path(id): Path<Uuid>, 
 }
 
 /// How much of a source's catalogue to take.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
 pub struct SyncQuery {
     /// How many instruments to import, most prominent first. A hundred when
     /// omitted - enough to cover what a person actually holds without pulling
@@ -198,7 +258,7 @@ fn default_sync_limit() -> usize {
 }
 
 /// What a sync did.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct Synced {
     /// How many instruments exist after it.
     pub instruments: usize,
@@ -210,6 +270,16 @@ pub struct Synced {
 ///
 /// Idempotent: running it twice updates names and leaves ids alone, so nothing
 /// that references an instrument breaks.
+#[utoipa::path(
+    post,
+    path = "/api/v1/market/instruments/sync",
+    tag = "market",
+    params(SyncQuery),
+    responses(
+        (status = 200, description = "What was imported", body = Synced),
+        (status = 503, description = "The source is switched off; set AUSTERIS_CMC_API_KEY", body = austeris_common::error::ErrorBody),
+    ),
+)]
 async fn sync_instruments(State(state): State<ServiceState>, Query(query): Query<SyncQuery>) -> AppResult<Json<Synced>> {
     let source = &state.sources.coinmarketcap;
     if !source.is_available() {
@@ -237,7 +307,7 @@ async fn sync_instruments(State(state): State<ServiceState>, Query(query): Query
 }
 
 /// What a refresh did.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct Refreshed {
     /// How many prices were recorded.
     pub recorded: usize,
@@ -253,6 +323,12 @@ pub struct Refreshed {
 /// Sources are independent: one failing costs its own instruments' prices and
 /// nothing else. In 2025 there was one source, it went down, and prices simply
 /// stopped accruing with nothing saying so.
+#[utoipa::path(
+    post,
+    path = "/api/v1/market/prices/refresh",
+    tag = "market",
+    responses((status = 200, description = "What was recorded, and which sources failed", body = Refreshed)),
+)]
 async fn refresh_prices(State(state): State<ServiceState>) -> AppResult<Json<Refreshed>> {
     let mut recorded = 0;
     let mut answered = Vec::new();
@@ -301,3 +377,14 @@ async fn refresh_prices(State(state): State<ServiceState>) -> AppResult<Json<Ref
         failed,
     }))
 }
+
+/// This service's share of the platform's `OpenAPI` document.
+///
+/// The paths are the public ones - what a client calls through the gateway.
+#[derive(utoipa::OpenApi)]
+#[openapi(
+    paths(list_instruments, read_instrument, create_instrument, bind_source, sync_instruments, latest_prices, price_history, refresh_prices),
+    components(schemas(Instrument, Price, Kind, NewInstrument, NewBinding, Synced, Refreshed)),
+    tags((name = "market", description = "Instruments and their prices")),
+)]
+pub struct ApiDoc;

@@ -6,6 +6,7 @@
 
 mod gateway;
 mod migrate;
+mod openapi;
 mod ratelimit;
 mod service;
 
@@ -32,6 +33,12 @@ enum Command {
     },
     /// Applies pending migrations, or rolls a schema back.
     Migrate(migrate::Args),
+    /// Prints the `OpenAPI` document to stdout.
+    ///
+    /// The documentation site builds its API reference from this, so the
+    /// reference is generated from the binary being released rather than from a
+    /// copy checked in beside it that nothing keeps honest.
+    Openapi,
 }
 
 #[tokio::main]
@@ -42,6 +49,10 @@ async fn main() -> Result<()> {
     match cli.command {
         Command::Serve { service } => serve(service).await,
         Command::Migrate(args) => migrate::run(&args).await,
+        Command::Openapi => {
+            println!("{}", serde_json::to_string_pretty(&openapi::document())?);
+            Ok(())
+        }
     }
 }
 

@@ -6,13 +6,19 @@
   "scripts": {
     "dev": "astro dev",
     "start": "astro dev",
-    "build": "astro build",
+    "predev": "node generate-openapi.mjs",
+    "prebuild": "node generate-openapi.mjs",
+    "build": "astro build && node check-api-reference.mjs",
     "preview": "astro preview",
     "astro": "astro"
   },
   "dependencies": {
     "@astrojs/starlight": "^0.41.9",
     "astro": "^7.2.9",
-    "sharp": "^0.35.4"
+    "sharp": "^0.35.4",
+    "starlight-openapi": "^0.26.1"
+  },
+  "devDependencies": {
+    "@astrojs/markdown-satteri": "^0.4.0"
   }
 }

@@ -70,3 +70,25 @@ balances drift is not a bookkeeping product.
 
 A client that wants to do arithmetic on an amount needs a decimal library. That
 is deliberate.
+
+## The contracts
+
+Both surfaces describe themselves, and both are guarded.
+
+Each service annotates its own handlers; the gateway merges them into one
+OpenAPI document and serves it at `/openapi.json`, with a viewer at `/docs`.
+The paths in that document are the public ones - `/api/v1/auth/login`, not the
+`/auth/login` the identity service listens on internally. A document accurate
+about the compose network and useless outside it is not worth generating.
+
+The merge happens at compile time, from the service crates rather than by asking
+the running services: the binary already contains every service, so a spec
+assembled over the network would be the same answer arrived at less reliably -
+and would go blank whenever a service was down.
+
+The API reference on this site is generated from that document at build time.
+A spec checked into the tree is a copy nothing keeps honest.
+
+On the gRPC side, `buf breaking` runs in CI against `main`. A change to an
+existing package that would break a client already speaking it is refused; the
+answer to needing one is a new package (`identity.v2`), never an edit to `v1`.

@@ -4,7 +4,7 @@
 
 Self-hosted home finance for one person's whole picture: accounts and entries in several currencies, what you own and what you owe, loans and deposits, a portfolio of crypto and securities — and on top of it net worth, cash flow and a forecast. One PostgreSQL, a service per module behind a single gateway, a React UI compiled into the binary.
 
-> **Status: early.** People sign in and prices accrue; nothing here books an entry yet. `docker compose up` brings up PostgreSQL, `identity`, `market` and the gateway; an installation with no accounts creates one and prints its password once. Sessions are rows the server can end, passwords are Argon2id, and an address being guessed at locks out whether or not it exists here. The gateway is the only published port, and **it answers nothing but signing in without a session**: it routes `/api/v1/{prefix}/...` to the service that owns it, validates the session over gRPC and tells that service who is calling. `market` keeps instruments and their prices - decimal to eighteen places, stamped with the instant they were observed, from sources ranked so a second one answers when the first goes quiet. Migrations roll back rather than being restored from a backup. The bookkeeping core lands in v0.6.0.
+> **Status: early.** People sign in and prices accrue; nothing here books an entry yet. The REST surface describes itself at `/docs`. `docker compose up` brings up PostgreSQL, `identity`, `market` and the gateway; an installation with no accounts creates one and prints its password once. Sessions are rows the server can end, passwords are Argon2id, and an address being guessed at locks out whether or not it exists here. The gateway is the only published port, and **it answers nothing but signing in without a session**: it routes `/api/v1/{prefix}/...` to the service that owns it, validates the session over gRPC and tells that service who is calling. `market` keeps instruments and their prices - decimal to eighteen places, stamped with the instant they were observed, from sources ranked so a second one answers when the first goes quiet. Migrations roll back rather than being restored from a backup. The bookkeeping core lands in v0.6.0.
 >
 > A crypto-portfolio tracker lived in this repository through 2025 and is preserved at the tag [`legacy-2025`](https://github.com/lacodda/austeris/tree/legacy-2025). It is the donor for `market` and `portfolio`, not the code being built on.
 
@@ -55,6 +55,10 @@ $ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8084/api/v1/ledger/a
 404
 ```
 
+The whole REST surface describes itself: `http://127.0.0.1:8084/docs` renders it,
+`/openapi.json` is the document, and both answer without a session - a reader has
+to see what to call before they have anything to call it with.
+
 Or without Docker, with Rust 1.94 or newer. The gateway owns no schema, so it
 starts on a machine that has no database at all:
 
@@ -65,13 +69,14 @@ $ cargo run -- serve gateway
 
 ## How it is put together
 
-The shape is fixed by five decisions, each written down in [`docs/adr/`](https://github.com/lacodda/austeris/tree/main/docs/adr):
+The shape is fixed by six decisions, each written down in [`docs/adr/`](https://github.com/lacodda/austeris/tree/main/docs/adr):
 
 - **Microservices with guardrails** ([0001](https://github.com/lacodda/austeris/blob/main/docs/adr/0001-microservices-with-guardrails.md)). One workspace, one PostgreSQL, **a schema per service**. A service owns its schema and its migrations and never reads another service's tables — data crosses a boundary only through that service's contract. One gateway is the only public surface.
 - **axum, sqlx, PostgreSQL, React** ([0002](https://github.com/lacodda/austeris/blob/main/docs/adr/0002-service-stack.md)). The stack the rest of the line runs on, so techniques transfer.
 - **gRPC, no broker** ([0003](https://github.com/lacodda/austeris/blob/main/docs/adr/0003-inter-service-transport.md)). Services call each other synchronously; a broker arrives when a genuinely asynchronous flow does, not in advance.
 - **Money is `NUMERIC`** ([0004](https://github.com/lacodda/austeris/blob/main/docs/adr/0004-money-as-numeric-decimal.md)). Decimal in the database, decimal in code, a string on the wire. Never a float — a ledger of floats does not add up.
 - **One binary, many services** ([0005](https://github.com/lacodda/austeris/blob/main/docs/adr/0005-one-binary-many-services.md)). `austeris serve <service>` picks which service a process is. Separate processes, separate schemas, separate contracts — one build, one image, one version.
+- **The contracts describe themselves** ([0006](https://github.com/lacodda/austeris/blob/main/docs/adr/0006-contracts-describe-themselves.md)). Each service annotates its handlers; the gateway merges them into one OpenAPI document, serves it at `/openapi.json` and renders it at `/docs`. `buf breaking` refuses a change to a gRPC contract that would break a client already speaking it.
 
 ## Configuration
 

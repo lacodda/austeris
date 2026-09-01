@@ -101,7 +101,7 @@ impl IntoResponse for AppError {
 }
 
 /// The JSON every failing endpoint in austeris answers with.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ErrorBody {
     /// The HTTP status, repeated in the body so a logged payload is self-contained.
     pub status: u16,

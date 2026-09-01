@@ -45,7 +45,7 @@ pub fn router(pool: PgPool, secure_cookies: bool) -> Router {
 }
 
 /// What a sign-in carries.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct Credentials {
     /// The address, matched case-insensitively.
     pub email: String,
@@ -54,7 +54,7 @@ pub struct Credentials {
 }
 
 /// Who the caller is, as `/auth/me` reports it.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct Identity {
     /// The user id other services are told about.
     pub id: Uuid,
@@ -65,6 +65,21 @@ pub struct Identity {
 }
 
 /// Signs in, or refuses without saying which half was wrong.
+///
+/// An unknown address, a deactivated account and a wrong password are one
+/// answer: distinguishing them turns this form into a way to learn who has an
+/// account here.
+#[utoipa::path(
+    post,
+    path = "/api/v1/auth/login",
+    tag = "auth",
+    request_body = Credentials,
+    responses(
+        (status = 200, description = "Signed in; the session arrives as a cookie"),
+        (status = 401, description = "Wrong email or password", body = austeris_common::error::ErrorBody),
+        (status = 429, description = "Too many failed attempts against this address", body = austeris_common::error::ErrorBody),
+    ),
+)]
 async fn login(State(state): State<ServiceState>, Json(credentials): Json<Credentials>) -> AppResult<Response> {
     // Refusing early: an address under a run of failed guesses stops being
     // worth guessing at, whether or not it is a real account here.
@@ -115,6 +130,15 @@ async fn login(State(state): State<ServiceState>, Json(credentials): Json<Creden
 }
 
 /// Signs out of this session only.
+#[utoipa::path(
+    post,
+    path = "/api/v1/auth/logout",
+    tag = "auth",
+    responses(
+        (status = 200, description = "This session is over; the token stops working at once"),
+        (status = 401, description = "Not signed in", body = austeris_common::error::ErrorBody),
+    ),
+)]
 async fn logout(State(state): State<ServiceState>, holder: Holder) -> AppResult<Response> {
     session::revoke(&state.pool, holder.0.session_id).await?;
     Ok((
@@ -126,6 +150,15 @@ async fn logout(State(state): State<ServiceState>, holder: Holder) -> AppResult<
 }
 
 /// Signs out everywhere - the answer to a laptop left on a train.
+#[utoipa::path(
+    post,
+    path = "/api/v1/auth/logout-everywhere",
+    tag = "auth",
+    responses(
+        (status = 200, description = "Every session is over; the account is untouched"),
+        (status = 401, description = "Not signed in", body = austeris_common::error::ErrorBody),
+    ),
+)]
 async fn logout_everywhere(State(state): State<ServiceState>, holder: Holder) -> AppResult<Response> {
     let ended = session::revoke_all(&state.pool, holder.0.user_id).await?;
     tracing::info!(user_id = %holder.0.user_id, ended, "ended every session");
@@ -138,6 +171,15 @@ async fn logout_everywhere(State(state): State<ServiceState>, holder: Holder) ->
 }
 
 /// Who am I - what an interface calls on load to decide whether to show a form.
+#[utoipa::path(
+    get,
+    path = "/api/v1/auth/me",
+    tag = "auth",
+    responses(
+        (status = 200, description = "The signed-in person", body = Identity),
+        (status = 401, description = "Not signed in", body = austeris_common::error::ErrorBody),
+    ),
+)]
 async fn me(holder: Holder) -> AppResult<Json<Identity>> {
     let holder = holder.0;
     Ok(Json(Identity {
@@ -283,3 +325,17 @@ mod tests {
         assert!(cookie.starts_with("austeris_session=;"), "the value must be cleared: {cookie}");
     }
 }
+
+/// This service's share of the platform's `OpenAPI` document.
+///
+/// The paths are the public ones - what a client calls through the gateway -
+/// rather than the internal ones this router listens on. A document describing
+/// `/auth/login` would be accurate about the compose network and useless to
+/// everyone outside it.
+#[derive(utoipa::OpenApi)]
+#[openapi(
+    paths(login, logout, logout_everywhere, me),
+    components(schemas(Credentials, Identity)),
+    tags((name = "auth", description = "Signing in, signing out, and asking who you are")),
+)]
+pub struct ApiDoc;
