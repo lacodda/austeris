@@ -95,7 +95,7 @@ it already told us. History outlives the binding.
 ## Between services
 
 ```proto
-service Market {
+service MarketService {
   rpc GetPrices(GetPricesRequest) returns (GetPricesResponse);
   rpc GetPriceAt(GetPriceAtRequest) returns (GetPriceAtResponse);
 }

@@ -147,7 +147,7 @@ async fn forward(State(upstream): State<Upstream>, request: Request) -> AppResul
 async fn caller(parts: &axum::http::request::Parts) -> Option<String> {
     let token = session_cookie(parts)?;
 
-    let mut client = austeris_proto::identity::v1::identity_client::IdentityClient::connect(Service::Identity.grpc_address())
+    let mut client = austeris_proto::identity::v1::identity_service_client::IdentityServiceClient::connect(Service::Identity.grpc_address())
         .await
         .inspect_err(|error| tracing::error!(%error, "could not reach identity to validate a session"))
         .ok()?;

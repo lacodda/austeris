@@ -12,7 +12,7 @@ use std::time::Duration;
 use austeris_common::{Config, db};
 // The service is exercised through its own trait rather than over a socket:
 // what is worth testing is the contract's answers, not tonic's transport.
-use austeris_proto::market::v1::market_server::Market as _;
+use austeris_proto::market::v1::market_service_server::MarketService as _;
 
 use austeris_market::model::Kind;
 use austeris_market::routes::Sources;

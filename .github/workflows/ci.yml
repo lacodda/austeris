@@ -153,5 +153,13 @@ jobs:
           setup_only: true
       - name: Lint
         run: buf lint
+      # `continue-on-error` for one commit only: v0.5.0 renames the services to
+      # the suffix the linter demands (`IdentityService`), which is by
+      # definition a breaking change against the `main` that still carries the
+      # old names. Nothing outside this repository speaks these contracts yet -
+      # both ends are compiled together - so the rename is cheap now and
+      # expensive later. Removed in the next commit, when `main` carries the new
+      # names and the gate has something honest to compare against.
       - name: Check for breaking changes
+        continue-on-error: true
         run: buf breaking --against "https://github.com/lacodda/austeris.git#branch=main"

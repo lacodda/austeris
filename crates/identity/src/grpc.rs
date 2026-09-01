@@ -4,7 +4,7 @@
 //! every other service learns who is calling without any of them ever seeing a
 //! password (ADR 0001, ADR 0003).
 
-use austeris_proto::identity::v1::identity_server::{Identity, IdentityServer};
+use austeris_proto::identity::v1::identity_service_server::{IdentityService, IdentityServiceServer};
 use austeris_proto::identity::v1::{ValidateSessionRequest, ValidateSessionResponse};
 use sqlx::PgPool;
 use tonic::{Request, Response, Status};
@@ -19,13 +19,13 @@ pub struct Service {
 impl Service {
     /// Wraps a pool as a gRPC service ready to be served.
     #[must_use]
-    pub fn new(pool: PgPool) -> IdentityServer<Self> {
-        IdentityServer::new(Self { pool })
+    pub fn new(pool: PgPool) -> IdentityServiceServer<Self> {
+        IdentityServiceServer::new(Self { pool })
     }
 }
 
 #[tonic::async_trait]
-impl Identity for Service {
+impl IdentityService for Service {
     async fn validate_session(&self, request: Request<ValidateSessionRequest>) -> Result<Response<ValidateSessionResponse>, Status> {
         let token = request.into_inner().token;
 

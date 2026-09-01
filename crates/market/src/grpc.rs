@@ -4,7 +4,7 @@
 //! the wire as strings, because protobuf has no decimal type and a price that
 //! travels as a double is not the price that was recorded (ADR 0004).
 
-use austeris_proto::market::v1::market_server::{Market, MarketServer};
+use austeris_proto::market::v1::market_service_server::{MarketService, MarketServiceServer};
 use austeris_proto::market::v1::{GetPriceAtRequest, GetPriceAtResponse, GetPricesRequest, GetPricesResponse, Price};
 use chrono::DateTime;
 use sqlx::PgPool;
@@ -21,8 +21,8 @@ pub struct Service {
 impl Service {
     /// Wraps a pool as a gRPC service ready to be served.
     #[must_use]
-    pub fn new(pool: PgPool) -> MarketServer<Self> {
-        MarketServer::new(Self { pool })
+    pub fn new(pool: PgPool) -> MarketServiceServer<Self> {
+        MarketServiceServer::new(Self { pool })
     }
 
     /// The bare service, so tests can call the contract without a socket.
@@ -36,7 +36,7 @@ impl Service {
 }
 
 #[tonic::async_trait]
-impl Market for Service {
+impl MarketService for Service {
     async fn get_prices(&self, request: Request<GetPricesRequest>) -> Result<Response<GetPricesResponse>, Status> {
         let request = request.into_inner();
 

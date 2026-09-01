@@ -8,7 +8,7 @@ syntax = "proto3";
 // (ADR 0001).
 package identity.v1;
 
-service Identity {
+service IdentityService {
   // Resolves a session token to the person holding it.
   rpc ValidateSession(ValidateSessionRequest) returns (ValidateSessionResponse);
 }

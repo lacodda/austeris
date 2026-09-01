@@ -64,7 +64,7 @@ The account itself is untouched: signing in again works.
 Services do not call these paths. They ask `identity` over gRPC:
 
 ```proto
-service Identity {
+service IdentityService {
   rpc ValidateSession(ValidateSessionRequest) returns (ValidateSessionResponse);
 }
 ```

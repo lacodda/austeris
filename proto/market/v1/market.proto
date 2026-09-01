@@ -6,7 +6,7 @@ syntax = "proto3";
 // business; this service never learns either (ADR 0001).
 package market.v1;
 
-service Market {
+service MarketService {
   // The latest price of each instrument named, in one call.
   rpc GetPrices(GetPricesRequest) returns (GetPricesResponse);
   // The price of one instrument as of an instant.
