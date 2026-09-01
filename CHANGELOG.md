@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.4.0] - 2026-09-01
+
+### Breaking Changes
+- `/api/v1/*` other than `/api/v1/auth/*` now answers 401
+without a session cookie. Nothing consumed those paths yet.
+
+### Bug Fixes
+- Require a session for everything but signing in
+
+### Features
+- Add instruments and their prices
+
+
 ## [0.3.0] - 2026-09-01
 
 ### Documentation

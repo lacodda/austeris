@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/austeris", "crates/common", "crates/identity", "crates/market", "crates/proto"]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 # Measured with `cargo +VERSION check --all-targets`, enforced by the msrv CI
 # job, which reads this number from the manifest.
@@ -14,10 +14,10 @@ homepage = "https://github.com/lacodda/austeris"
 authors = ["Kirill Lakhtachev <lahtachev@gmail.com>"]
 
 [workspace.dependencies]
-austeris-common = { path = "crates/common", version = "0.3.0" }
-austeris-identity = { path = "crates/identity", version = "0.3.0" }
-austeris-market = { path = "crates/market", version = "0.3.0" }
-austeris-proto = { path = "crates/proto", version = "0.3.0" }
+austeris-common = { path = "crates/common", version = "0.4.0" }
+austeris-identity = { path = "crates/identity", version = "0.4.0" }
+austeris-market = { path = "crates/market", version = "0.4.0" }
+austeris-proto = { path = "crates/proto", version = "0.4.0" }
 
 anyhow = "1.0.104"
 # Passwords are human-chosen and worth guessing at scale, so they get a

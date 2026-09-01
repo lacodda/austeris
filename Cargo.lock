@@ -139,7 +139,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "austeris"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "austeris-common",
@@ -162,7 +162,7 @@ dependencies = [
 
 [[package]]
 name = "austeris-common"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -180,7 +180,7 @@ dependencies = [
 
 [[package]]
 name = "austeris-identity"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "argon2",
@@ -203,7 +203,7 @@ dependencies = [
 
 [[package]]
 name = "austeris-market"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "austeris-common",
@@ -225,7 +225,7 @@ dependencies = [
 
 [[package]]
 name = "austeris-proto"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "prost",
  "tonic",
