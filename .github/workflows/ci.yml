@@ -33,6 +33,47 @@ jobs:
       - name: Build
         run: cargo build --release
 
+  # The migration tests skip themselves without a database, so a green matrix
+  # above proves nothing about `search_path` scoping or what a rollback leaves
+  # behind - the logic that lives in PostgreSQL rather than in Rust. This job
+  # is where they actually run, against a database migrated from empty on every
+  # push.
+  database:
+    name: database
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: austeris
+          POSTGRES_PASSWORD: austeris
+          POSTGRES_DB: austeris
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U austeris -d austeris"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      AUSTERIS_DATABASE_URL: postgres://austeris:austeris@localhost:5432/austeris
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # A skipped test also reports "ok", so the run is inspected rather than
+      # trusted: if the database never reached the tests, this job must fail
+      # instead of quietly passing on nothing. The whole suite, not a named
+      # list of files - a list silently stops covering the test file added
+      # after it was written.
+      - name: Test against PostgreSQL
+        run: |
+          set -o pipefail
+          cargo test -- --nocapture 2>&1 | tee output.txt
+          if grep -q 'skipped: AUSTERIS_DATABASE_URL is not set' output.txt; then
+            echo "::error::the database tests skipped themselves; AUSTERIS_DATABASE_URL did not reach them"
+            exit 1
+          fi
+
   # rust-version is a promise to anyone running `cargo install`. Without a job
   # that actually builds on it, the number silently rots the first time a new
   # API is used - so read it from the manifest and hold it to it.

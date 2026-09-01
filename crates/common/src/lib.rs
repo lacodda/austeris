@@ -9,6 +9,7 @@ pub mod config;
 pub mod db;
 pub mod error;
 pub mod health;
+pub mod migrate;
 pub mod telemetry;
 
 pub use config::Config;

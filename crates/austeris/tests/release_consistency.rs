@@ -190,3 +190,54 @@ fn the_adr_index_has_no_gaps() {
         assert_eq!(*number, expected, "ADR {expected:04} is missing from docs/adr");
     }
 }
+
+#[test]
+fn every_migration_can_be_undone() {
+    // Rolling back a bad release is a migration, not a restore from backup
+    // (v0.2.0). That only holds while every `.up.sql` has its `.down.sql`:
+    // one missing pair makes the whole rollback refuse, and it is found at the
+    // worst possible moment - during the rollback.
+    let mut checked = 0;
+    for dir in migration_dirs(&repo_root()) {
+        for entry in fs::read_dir(&dir).expect("reading a migrations directory") {
+            let name = entry.expect("a directory entry").file_name().into_string().expect("a UTF-8 file name");
+            let Some(stem) = name.strip_suffix(".up.sql") else { continue };
+
+            let down = dir.join(format!("{stem}.down.sql"));
+            assert!(
+                down.exists(),
+                "{} has no .down.sql; a release carrying it cannot be rolled back",
+                dir.join(&name).display()
+            );
+            checked += 1;
+        }
+    }
+
+    // A gate that checks nothing passes silently. Until a service owns a
+    // schema, the only migrations are the test fixtures - but there must be
+    // some, or this test is measuring an empty search.
+    assert!(checked > 0, "no .up.sql was found anywhere; the search below is looking in the wrong place");
+}
+
+/// Every directory in the workspace holding sqlx migrations.
+fn migration_dirs(root: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut queue = vec![root.join("crates")];
+
+    while let Some(dir) = queue.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            if path.file_name().is_some_and(|n| n == "migrations") {
+                found.push(path);
+            } else {
+                queue.push(path);
+            }
+        }
+    }
+
+    found
+}

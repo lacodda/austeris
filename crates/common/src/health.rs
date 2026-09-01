@@ -96,9 +96,12 @@ async fn check(readiness: &Readiness) -> Result<Option<i64>, String> {
     };
 
     // `applied` is the newest migration in *this schema*, because the pool's
-    // `search_path` puts `_sqlx_migrations` inside it. Two services are never
-    // compared against each other's schema version.
-    let applied: Option<i64> = sqlx::query_scalar("SELECT MAX(version) FROM _sqlx_migrations WHERE success")
+    // `search_path` puts the bookkeeping table inside it. Two services are
+    // never compared against each other's schema version. The table's name
+    // comes from the migrator rather than a literal, so a service that moves
+    // it does not silently get a probe reading a table that is not there.
+    let sql = format!("SELECT MAX(version) FROM \"{}\" WHERE success", readiness.migrator.table_name);
+    let applied: Option<i64> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
         .fetch_one(&mut *connection)
         .await
         .map_err(|e| format!("schema not migrated: {e}"))?;
