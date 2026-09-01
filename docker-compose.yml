@@ -1,0 +1,44 @@
+# Development stack: PostgreSQL, and the gateway built from this tree.
+#
+# The gateway is here rather than left to `cargo run` because it is the only
+# public surface: what a developer opens is the same shape a deployment serves.
+# Services join this file as they are born, each one a second run of the same
+# image with a different `serve` argument (ADR 0005).
+services:
+  db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: austeris
+      POSTGRES_PASSWORD: austeris
+      POSTGRES_DB: austeris
+    ports:
+      # Overridable: another PostgreSQL - another project, or a system install -
+      # may already hold 5432 on a developer machine.
+      - "${AUSTERIS_DB_PORT:-5434}:5432"
+    volumes:
+      # postgres:18+ images keep data in a version-specific subdirectory; the
+      # mount must sit one level up or the entrypoint refuses to start.
+      - db-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U austeris -d austeris"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  gateway:
+    build: .
+    command: ["serve", "gateway"]
+    environment:
+      AUSTERIS_DATABASE_URL: postgres://austeris:austeris@db:5432/austeris
+      AUSTERIS_BIND: 0.0.0.0:8080
+      RUST_LOG: ${RUST_LOG:-austeris=info,tower_http=info,warn}
+    ports:
+      - "${AUSTERIS_PORT:-8084}:8080"
+    depends_on:
+      db:
+        # Not `service_started`: a service that owns a schema races the database
+        # otherwise, and starts by failing its first migration.
+        condition: service_healthy
+
+volumes:
+  db-data:
