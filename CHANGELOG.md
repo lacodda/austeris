@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.2.0] - 2026-09-01
+
+### Build
+- Package the workspace as one image and a compose stack
+
+### Features
+- Add reversible migrations scoped to one service's schema
+
+
 ## [0.1.0] - 2026-09-01
 
 ### CI

@@ -33,12 +33,18 @@ body = """
 trim = false
 
 [git]
-# The history before `legacy-2025` belongs to the 2025 crypto tracker, whose
-# code this rebuild deleted. There is no version tag before it to bound the
-# range, so v0.1.0 was generated as `git-cliff --tag v0.1.0 legacy-2025..HEAD`;
-# without that range it took credit for the portfolio snapshots and the Redis
-# cache it threw away. From v0.2.0 on, the previous version tag bounds it and
-# the plain `git-cliff --tag vX.Y.Z` is correct.
+# ALWAYS cut a release as:
+#
+#     git-cliff --tag vX.Y.Z --unreleased --prepend CHANGELOG.md
+#
+# Never regenerate the whole file. The history before `legacy-2025` belongs to
+# the 2025 crypto tracker whose code this rebuild deleted, and no boundary
+# reaches it: there is no version tag before it, `--latest` walks past it, and
+# path filters do not help because those commits touched Cargo.toml and the
+# Dockerfile too. A full regeneration therefore hands v0.1.0 - the release that
+# threw the tracker away - credit for its portfolio snapshots and Redis cache.
+# Prepending only ever writes the section being released and leaves the ones
+# already written alone.
 conventional_commits = true
 filter_unconventional = true
 protect_breaking_commits = true
