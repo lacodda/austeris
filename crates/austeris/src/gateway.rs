@@ -5,7 +5,10 @@
 //! network only, so the routing table here is also the access-control list: a
 //! path with no entry cannot be reached at all.
 
-use austeris_common::{AppError, AppResult, health};
+// `USER_HEADER` is defined in `common`, beside the extractor that reads it:
+// this is the only writer and every service is a reader, and the two agreeing
+// by coincidence is a bug waiting for someone to edit one of them.
+use austeris_common::{AppError, AppResult, USER_HEADER, health};
 use axum::Router;
 use axum::body::Body;
 use axum::extract::{Request, State};
@@ -13,12 +16,6 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 
 use crate::service::Service;
-
-/// The header a service reads to learn who is calling.
-///
-/// Set by the gateway from a validated session and stripped from anything
-/// arriving from outside - otherwise anyone could simply send it.
-pub const USER_HEADER: &str = "x-austeris-user-id";
 
 /// What forwarding needs: one client, reused across requests.
 ///
@@ -256,7 +253,9 @@ mod tests {
 
     #[tokio::test]
     async fn an_unrouted_path_is_not_reachable() {
-        let (status, _) = get("/api/v1/ledger/accounts").await;
+        // `portfolio` is a module the plan has but the binary does not: a path
+        // with no service behind it must 404 rather than be proxied nowhere.
+        let (status, _) = get("/api/v1/portfolio/positions").await;
         assert_eq!(status, StatusCode::NOT_FOUND);
     }
 
@@ -305,7 +304,8 @@ mod tests {
     #[test]
     fn routing_covers_every_service_prefix_and_nothing_else() {
         assert!(is_routed(&Uri::from_static("/api/v1/auth/login")));
-        assert!(!is_routed(&Uri::from_static("/api/v1/ledger/accounts")));
+        assert!(is_routed(&Uri::from_static("/api/v1/ledger/accounts")));
+        assert!(!is_routed(&Uri::from_static("/api/v1/portfolio/positions")));
         // The prefix must be a whole segment: a service called `auth` must not
         // capture `/api/v1/authority/...`.
         assert!(!is_routed(&Uri::from_static("/api/v1/authority/x")));
