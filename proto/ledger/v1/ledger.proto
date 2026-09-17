@@ -1,0 +1,91 @@
+syntax = "proto3";
+
+// The ledger's contract with the modules that post into it.
+//
+// This is the one way anything becomes an entry. A module - a loan schedule, a
+// salary run, a portfolio trade - works out what happened in its own terms and
+// says it here; the ledger knows nothing about what it was (ADR 0001). Because
+// the ledger holds no module's concepts, adding a module never changes this
+// file.
+package ledger.v1;
+
+service LedgerService {
+  // Records a movement. The lines must sum to zero in every currency they
+  // touch; an entry that does not balance is refused rather than repaired.
+  rpc PostEntry(PostEntryRequest) returns (PostEntryResponse);
+  // What an account holds, as its lines add up.
+  rpc GetBalances(GetBalancesRequest) returns (GetBalancesResponse);
+}
+
+message PostEntryRequest {
+  // Whose books. The caller is a module acting for a person, so it says which.
+  string owner_id = 1;
+  // The day the money moved, as `YYYY-MM-DD`. Not a timestamp: nobody knows the
+  // minute, and a fabricated one sorts wrongly against entries made by hand.
+  string occurred_on = 2;
+  // What a person would call it.
+  string description = 3;
+  // The module's own name for this movement. Posting the same key twice returns
+  // the entry made the first time rather than making a second: a salary run
+  // that retries must not pay twice.
+  //
+  // Required, unlike an entry a person types: a module retries, and one without
+  // a key has no way to say that two attempts are the same movement.
+  string idempotency_key = 4;
+  // Which module is posting. Kept on the entry so it can be traced back.
+  string source = 5;
+  // The sides of the movement, at least two.
+  repeated Line lines = 6;
+}
+
+message PostEntryResponse {
+  // The entry's id.
+  string entry_id = 1;
+  // Whether this call created it. False means the key had already been used and
+  // this is the entry from that first call - not an error, and the caller
+  // usually does not care, but a retry loop that wants to know can ask.
+  bool created = 2;
+}
+
+message Line {
+  // Exactly one of these two. A line is either a movement of an account's
+  // balance or an attribution to a category.
+  oneof side {
+    string account_id = 1;
+    string category_id = 2;
+  }
+  // The signed amount, as a decimal string - never a double: protobuf has no
+  // decimal type, and money that travels as a float is not the money anyone
+  // recorded (ADR 0004). Negative leaves, positive arrives.
+  string amount = 3;
+  // What this line is in, as a currency code.
+  string currency = 4;
+  // What this side was for, when the entry's description is not enough.
+  string note = 5;
+}
+
+message GetBalancesRequest {
+  string owner_id = 1;
+  // As of the end of this day, `YYYY-MM-DD`. Empty means today.
+  string as_of = 2;
+  // Convert every balance into this currency as well, using the rate on
+  // `as_of`. Empty leaves each balance in its account's own currency.
+  string in_currency = 3;
+}
+
+message GetBalancesResponse {
+  repeated Balance balances = 1;
+}
+
+message Balance {
+  string account_id = 1;
+  string name = 2;
+  // The account's own currency.
+  string currency = 3;
+  // Opening balance plus every line, as a decimal string.
+  string amount = 4;
+  // The same in the currency asked for. Empty when none was asked for, or when
+  // no rate for that day was available - empty rather than a zero or a copy of
+  // `amount`, either of which a caller could add up into a wrong total.
+  string converted = 5;
+}
