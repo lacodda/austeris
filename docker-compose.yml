@@ -37,6 +37,8 @@ services:
     depends_on:
       identity:
         condition: service_healthy
+      ledger:
+        condition: service_healthy
       market:
         condition: service_healthy
 
@@ -54,6 +56,17 @@ services:
       db:
         # Not `service_started`: a service that owns a schema races the database
         # otherwise, and starts by failing its first migration.
+        condition: service_healthy
+
+  ledger:
+    build: .
+    command: ["serve", "ledger"]
+    environment:
+      AUSTERIS_DATABASE_URL: postgres://austeris:austeris@db:5432/austeris
+      AUSTERIS_BIND: 0.0.0.0:8080
+      RUST_LOG: ${RUST_LOG:-austeris=info,tower_http=info,warn}
+    depends_on:
+      db:
         condition: service_healthy
 
   market:

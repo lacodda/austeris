@@ -4,6 +4,7 @@
 //! The services stay separate processes with separate schemas and separate
 //! contracts - what they share is a build, an image and a version.
 
+mod add;
 mod gateway;
 mod migrate;
 mod openapi;
@@ -33,6 +34,10 @@ enum Command {
     },
     /// Applies pending migrations, or rolls a schema back.
     Migrate(migrate::Args),
+    /// Records an entry from one typed line: `austeris add 45000 food lunch`.
+    Add(add::AddArgs),
+    /// Signs in, so `add` has a session to record with.
+    Login(add::LoginArgs),
     /// Prints the `OpenAPI` document to stdout.
     ///
     /// The documentation site builds its API reference from this, so the
@@ -49,6 +54,8 @@ async fn main() -> Result<()> {
     match cli.command {
         Command::Serve { service } => serve(service).await,
         Command::Migrate(args) => migrate::run(&args).await,
+        Command::Add(args) => add::add(&args).await,
+        Command::Login(args) => add::login(&args).await,
         Command::Openapi => {
             println!("{}", serde_json::to_string_pretty(&openapi::document())?);
             Ok(())
@@ -82,6 +89,19 @@ async fn serve(service: Service) -> Result<()> {
 
             (
                 austeris_identity::routes::router(pool, secure_cookies()),
+                Some(tokio::spawn(async move { server.await.context("the gRPC listener stopped") })),
+            )
+        }
+        Service::Ledger => {
+            let pool = schema_ready(&config, service).await?;
+
+            let address = grpc_address()?;
+            let server = tonic::transport::Server::builder()
+                .add_service(austeris_ledger::grpc::Service::new(pool.clone()))
+                .serve(address);
+
+            (
+                austeris_ledger::routes::router(pool),
                 Some(tokio::spawn(async move { server.await.context("the gRPC listener stopped") })),
             )
         }

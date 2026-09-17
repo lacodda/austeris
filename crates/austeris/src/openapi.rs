@@ -38,6 +38,7 @@ pub fn document() -> Document {
     document.info.contact = None;
 
     document.merge(austeris_identity::routes::ApiDoc::openapi());
+    document.merge(austeris_ledger::routes::ApiDoc::openapi());
     document.merge(austeris_market::routes::ApiDoc::openapi());
 
     document
@@ -55,6 +56,7 @@ mod tests {
         // A merge that silently dropped a service would leave a document that
         // looks complete and documents half the product.
         assert!(paths.contains(&"/api/v1/auth/login"), "identity is missing: {paths:?}");
+        assert!(paths.contains(&"/api/v1/ledger/accounts"), "ledger is missing: {paths:?}");
         assert!(paths.contains(&"/api/v1/market/instruments"), "market is missing: {paths:?}");
     }
 
@@ -107,7 +109,7 @@ mod tests {
 
         // One field today; written for the list it will become, because the
         // second monetary field is the one nobody thinks to re-check.
-        let decimal_fields: &[&str] = &["price"];
+        let decimal_fields: &[&str] = &["price", "amount", "opening_balance", "rate"];
         for field in decimal_fields {
             let at = json.find(&format!(r#""{field}":"#)).unwrap_or_else(|| panic!("no `{field}` field in the spec"));
             let described = &json[at..(at + 200).min(json.len())];

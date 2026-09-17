@@ -20,13 +20,15 @@ path = "src/main.rs"
 [dependencies]
 austeris-common.workspace = true
 austeris-identity.workspace = true
+austeris-ledger.workspace = true
 austeris-market.workspace = true
 austeris-proto.workspace = true
 
 anyhow.workspace = true
 axum.workspace = true
 clap.workspace = true
-reqwest.workspace = true
+reqwest = { workspace = true, features = ["json"] }
+rpassword.workspace = true
 sqlx.workspace = true
 tonic.workspace = true
 utoipa.workspace = true

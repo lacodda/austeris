@@ -16,13 +16,15 @@ pub enum Service {
     Gateway,
     /// People, passwords and sessions.
     Identity,
+    /// Accounts, categories and the movements between them.
+    Ledger,
     /// Instruments and their prices.
     Market,
 }
 
 impl Service {
     /// Every service, in registration order.
-    pub const ALL: &'static [Self] = &[Self::Gateway, Self::Identity, Self::Market];
+    pub const ALL: &'static [Self] = &[Self::Gateway, Self::Identity, Self::Ledger, Self::Market];
 
     /// The service's name, as it appears in a command line and in a URL.
     #[must_use]
@@ -30,6 +32,7 @@ impl Service {
         match self {
             Self::Gateway => "gateway",
             Self::Identity => "identity",
+            Self::Ledger => "ledger",
             Self::Market => "market",
         }
     }
@@ -43,6 +46,7 @@ impl Service {
         match self {
             Self::Gateway => None,
             Self::Identity => Some(austeris_identity::SCHEMA),
+            Self::Ledger => Some(austeris_ledger::SCHEMA),
             Self::Market => Some(austeris_market::SCHEMA),
         }
     }
@@ -53,6 +57,7 @@ impl Service {
         match self {
             Self::Gateway => None,
             Self::Identity => Some(&austeris_identity::MIGRATOR),
+            Self::Ledger => Some(&austeris_ledger::MIGRATOR),
             Self::Market => Some(&austeris_market::MIGRATOR),
         }
     }
@@ -62,7 +67,7 @@ impl Service {
     /// The gateway is not among them: it does not forward to itself.
     #[must_use]
     pub fn routed() -> &'static [Self] {
-        &[Self::Identity, Self::Market]
+        &[Self::Identity, Self::Ledger, Self::Market]
     }
 
     /// The path prefix under `/api/v1` this service answers on.
@@ -75,6 +80,7 @@ impl Service {
         match self {
             Self::Gateway => "",
             Self::Identity => "auth",
+            Self::Ledger => "ledger",
             Self::Market => "market",
         }
     }
@@ -122,7 +128,7 @@ mod tests {
     fn every_service_is_listed_in_all() {
         // `ALL` drives `migrate` with no argument: a service missing from it
         // has its schema silently left behind at the previous version.
-        for service in [Service::Gateway, Service::Identity, Service::Market] {
+        for service in [Service::Gateway, Service::Identity, Service::Ledger, Service::Market] {
             assert!(Service::ALL.contains(&service), "{service} is missing from Service::ALL");
         }
     }
