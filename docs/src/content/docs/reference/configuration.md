@@ -35,6 +35,18 @@ The defaults are the compose service names, which is what a deployment uses.
 | `AUSTERIS_FIRST_USER` | `owner@austeris.local` | The address the first account is created under, on an installation that has none. |
 | `AUSTERIS_SECURE_COOKIES` | unset | Set to `true` to mark session cookies `Secure`. Leave it off on plain HTTP, or the browser drops every session cookie and sign-in fails with nothing saying why. |
 
+## market
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `AUSTERIS_CMC_API_KEY` | unset | CoinMarketCap key. Without it that price source is switched off: the service starts, says so once, and serves whatever prices are already stored. |
+
+## The CLI
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `AUSTERIS_URL` | `http://127.0.0.1:8084` | Which installation `austeris add` and `austeris login` talk to. Read by the CLI, never by a service. |
+
 ## The compose file
 
 Read by `docker-compose.yml`, not by any binary:
