@@ -1,10 +1,12 @@
 //! The austeris binary.
 //!
-//! One executable runs every service; `serve <service>` picks which (ADR 0005).
-//! The services stay separate processes with separate schemas and separate
-//! contracts - what they share is a build, an image and a version.
+//! One executable runs every service (ADR 0005). `serve` runs all of them in
+//! this one process, `serve <service>` runs one (ADR 0008). Either way the
+//! services keep separate schemas, separate pools and separate contracts - what
+//! they share is a build, an image and a version.
 
 mod add;
+mod demo;
 mod gateway;
 mod migrate;
 mod openapi;
@@ -13,9 +15,14 @@ mod service;
 
 use anyhow::{Context, Result};
 use austeris_common::{Config, db, telemetry};
+use axum::Router;
 use clap::{Parser, Subcommand};
+use tokio::net::TcpListener;
+use tokio::task::JoinSet;
+use tonic::transport::Server;
+use tonic::transport::server::TcpIncoming;
 
-use crate::service::Service;
+use crate::service::{Peers, Service};
 
 /// Self-hosted home finance.
 #[derive(Debug, Parser)]
@@ -27,11 +34,18 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Runs one service in the foreground.
+    /// Runs the installation in the foreground: every service, or one.
     Serve {
-        /// Which service this process is.
-        service: Service,
+        /// Run only this service, for an installation with a container per
+        /// service. Every service, in this one process, when omitted.
+        service: Option<Service>,
     },
+    /// Fills an empty installation with a fictional household.
+    ///
+    /// For a first look and for screenshots: everything it writes is made up,
+    /// and it refuses to run on an installation where a real person has an
+    /// account. Running it again tops the books up to today.
+    Demo,
     /// Applies pending migrations, or rolls a schema back.
     Migrate(migrate::Args),
     /// Records an entry from one typed line: `austeris add 45000 food lunch`.
@@ -53,6 +67,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Serve { service } => serve(service).await,
+        Command::Demo => demo::run().await,
         Command::Migrate(args) => migrate::run(&args).await,
         Command::Add(args) => add::add(&args).await,
         Command::Login(args) => add::login(&args).await,
@@ -63,51 +78,122 @@ async fn main() -> Result<()> {
     }
 }
 
-async fn serve(service: Service) -> Result<()> {
+/// Runs one service, or every one of them in this process.
+async fn serve(which: Option<Service>) -> Result<()> {
     let config = Config::from_env()?;
+    match which {
+        Some(service) => serve_one(&config, service).await,
+        None => serve_all(&config).await,
+    }
+}
 
-    // A service that owns a schema also serves gRPC to its peers, on a second
-    // port. The two are separate listeners rather than one multiplexed port:
-    // the REST surface is what the gateway forwards to, the gRPC one is what
-    // other services call, and only the first should ever be reachable from
-    // outside the compose network.
-    // Each service's gRPC server is a different concrete type, so the branches
-    // hand back a spawned task rather than the future itself.
-    let (app, grpc) = match service {
-        Service::Gateway => (gateway::router(), None),
-        Service::Identity => {
-            let pool = schema_ready(&config, service).await?;
+/// One container per service: this process is `service` and nothing else.
+async fn serve_one(config: &Config, service: Service) -> Result<()> {
+    // Seeding the demo needs every schema at once, which a process owning one
+    // of them does not have. Refused rather than ignored: a flag that is
+    // silently dropped is an installation that is not what its compose file
+    // says it is.
+    if demo::requested() {
+        anyhow::bail!("AUSTERIS_DEMO is honoured by `austeris serve` running every service; with a container per service, run `austeris demo` once instead");
+    }
 
-            if let Some(password) = austeris_identity::routes::ensure_first_user(&pool, &first_user_email()).await? {
-                announce_first_user(&first_user_email(), &password);
+    let mut tasks = JoinSet::new();
+    let app = match service {
+        Service::Gateway => gateway::router(&Peers::from_env()),
+        data => {
+            let pool = schema_ready(config, data).await?;
+            if data == Service::Identity {
+                welcome_first_user(&pool).await?;
             }
+            // A service that owns a schema also serves gRPC to its peers, on a
+            // second port. The two are separate listeners rather than one
+            // multiplexed port: the REST surface is what the gateway forwards
+            // to, the gRPC one is what other services call, and only the first
+            // should ever be reachable from outside the compose network.
+            let grpc = service::grpc_bind();
+            let grpc = TcpIncoming::bind(grpc.parse().context("AUSTERIS_GRPC_BIND is not an address")?)
+                .map_err(|error| anyhow::anyhow!("binding gRPC on {grpc}: {error}"))?;
+            start(data, pool, grpc, &mut tasks)
+        }
+    };
 
-            let address = grpc_address()?;
-            let server = tonic::transport::Server::builder()
+    let listener = TcpListener::bind(&config.bind)
+        .await
+        .with_context(|| format!("binding {} (AUSTERIS_BIND)", config.bind))?;
+    tracing::info!(service = service.as_str(), address = %listener.local_addr()?, "listening");
+    tasks.spawn(http(listener, app));
+    first_to_stop(tasks).await
+}
+
+/// Every service in this one process, behind the gateway on the public port.
+///
+/// Each service keeps its own pool, its own schema and its own listeners - on
+/// loopback ports chosen by the system, so nothing here can collide with
+/// anything else on the machine. The gateway reaches them over those ports
+/// exactly as it reaches containers over the compose network: one way of
+/// talking, whichever shape the installation has (ADR 0008).
+async fn serve_all(config: &Config) -> Result<()> {
+    // Every schema first, and only then any listener: a gateway that answers
+    // before its services have migrated would forward to half an installation.
+    let mut pools = Vec::new();
+    for &service in Service::routed() {
+        pools.push((service, schema_ready(config, service).await?));
+    }
+    let pool_of = |wanted: Service| pools.iter().find(|(service, _)| *service == wanted).map(|(_, pool)| pool.clone());
+    let (Some(identity), Some(ledger), Some(market)) = (pool_of(Service::Identity), pool_of(Service::Ledger), pool_of(Service::Market)) else {
+        anyhow::bail!("a routed service has no pool; Service::routed() and this function disagree");
+    };
+
+    if demo::requested() {
+        demo::seed(&demo::Books { identity, ledger, market }).await?.report();
+    } else {
+        welcome_first_user(&identity).await?;
+    }
+
+    let loopback = std::net::Ipv4Addr::LOCALHOST;
+    let mut tasks = JoinSet::new();
+    let mut bound = Vec::new();
+    for (service, pool) in pools {
+        let rest = TcpListener::bind((loopback, 0)).await?;
+        let grpc = TcpListener::bind((loopback, 0)).await?;
+        bound.push((service, rest.local_addr()?, grpc.local_addr()?));
+
+        let app = start(service, pool, TcpIncoming::from(grpc), &mut tasks);
+        tasks.spawn(http(rest, app));
+    }
+
+    let listener = TcpListener::bind(&config.bind)
+        .await
+        .with_context(|| format!("binding {} (AUSTERIS_BIND)", config.bind))?;
+    tracing::info!(
+        services = Service::routed().iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "),
+        address = %listener.local_addr()?,
+        "listening"
+    );
+    tasks.spawn(http(listener, gateway::router(&Peers::local(bound))));
+    first_to_stop(tasks).await
+}
+
+/// Starts a service's gRPC listener as a task and hands back its REST router.
+fn start(service: Service, pool: sqlx::PgPool, grpc: TcpIncoming, tasks: &mut JoinSet<Result<()>>) -> Router {
+    // Each service's gRPC server is a different concrete type, so each branch
+    // spawns its own task rather than handing back a future.
+    match service {
+        Service::Identity => {
+            let server = Server::builder()
                 .add_service(austeris_identity::grpc::Service::new(pool.clone()))
-                .serve(address);
-
-            (
-                austeris_identity::routes::router(pool, secure_cookies()),
-                Some(tokio::spawn(async move { server.await.context("the gRPC listener stopped") })),
-            )
+                .serve_with_incoming(grpc);
+            tasks.spawn(async move { server.await.context("the identity gRPC listener stopped") });
+            austeris_identity::routes::router(pool, secure_cookies())
         }
         Service::Ledger => {
-            let pool = schema_ready(&config, service).await?;
-
-            let address = grpc_address()?;
-            let server = tonic::transport::Server::builder()
+            let server = Server::builder()
                 .add_service(austeris_ledger::grpc::Service::new(pool.clone()))
-                .serve(address);
-
-            (
-                austeris_ledger::routes::router(pool),
-                Some(tokio::spawn(async move { server.await.context("the gRPC listener stopped") })),
-            )
+                .serve_with_incoming(grpc);
+            tasks.spawn(async move { server.await.context("the ledger gRPC listener stopped") });
+            austeris_ledger::routes::router(pool)
         }
         Service::Market => {
-            let pool = schema_ready(&config, service).await?;
-
             let sources = austeris_market::routes::Sources::from_env();
             // Said once, at startup, rather than on every refresh: a source
             // without its key is switched off, not broken.
@@ -115,37 +201,46 @@ async fn serve(service: Service) -> Result<()> {
                 [] => tracing::warn!("no price source is configured; prices will not be refreshed"),
                 names => tracing::info!(sources = names.join(", "), "price sources available"),
             }
-
-            let address = grpc_address()?;
-            let server = tonic::transport::Server::builder()
+            let server = Server::builder()
                 .add_service(austeris_market::grpc::Service::new(pool.clone()))
-                .serve(address);
-
-            (
-                austeris_market::routes::router(pool, sources),
-                Some(tokio::spawn(async move { server.await.context("the gRPC listener stopped") })),
-            )
+                .serve_with_incoming(grpc);
+            tasks.spawn(async move { server.await.context("the market gRPC listener stopped") });
+            austeris_market::routes::router(pool, sources)
         }
-    };
+        Service::Gateway => unreachable!("the gateway owns no schema and serves no gRPC"),
+    }
+}
 
-    let listener = tokio::net::TcpListener::bind(&config.bind).await?;
-    tracing::info!(service = service.as_str(), address = %listener.local_addr()?, "listening");
-
+/// Serves a router on a listener until it stops.
+async fn http(listener: TcpListener, app: Router) -> Result<()> {
     // `into_make_service_with_connect_info` rather than the plain one: the
     // gateway's rate limiter needs the peer address, and without this the
     // extractor has nothing to read.
     let app = app.into_make_service_with_connect_info::<std::net::SocketAddr>();
+    axum::serve(listener, app).await.context("an HTTP listener stopped")
+}
 
-    match grpc {
-        // Either listener stopping means the service is no longer whole, so
-        // whichever finishes first ends the process rather than leaving half
-        // of it answering.
-        Some(grpc) => tokio::try_join!(async { axum::serve(listener, app).await.context("the HTTP listener stopped") }, async {
-            grpc.await.context("the gRPC task stopped")?
-        })
-        .map(|_| ()),
-        None => axum::serve(listener, app).await.context("the HTTP listener stopped"),
+/// Waits for the first listener to stop, and stops the process with it.
+///
+/// Any one stopping means the installation is no longer whole, so whichever
+/// finishes first ends the process rather than leaving the rest answering for
+/// a service that is gone - a restart policy can bring back a process, not
+/// half of one.
+async fn first_to_stop(mut tasks: JoinSet<Result<()>>) -> Result<()> {
+    match tasks.join_next().await {
+        Some(Ok(Ok(()))) => anyhow::bail!("a listener stopped without an error"),
+        Some(Ok(Err(error))) => Err(error),
+        Some(Err(error)) => Err(anyhow::Error::new(error).context("a listener panicked")),
+        None => anyhow::bail!("nothing was started"),
     }
+}
+
+/// Creates the first account on an installation that has none, and says so.
+async fn welcome_first_user(pool: &sqlx::PgPool) -> Result<()> {
+    if let Some(password) = austeris_identity::routes::ensure_first_user(pool, &first_user_email()).await? {
+        announce_first_user(&first_user_email(), &password);
+    }
+    Ok(())
 }
 
 /// Opens a service's pool and brings its schema up to this build's version.
@@ -163,11 +258,6 @@ async fn schema_ready(config: &Config, service: Service) -> Result<sqlx::PgPool>
         .await
         .with_context(|| format!("migrating the {schema} schema"))?;
     Ok(pool)
-}
-
-/// Where this process serves gRPC.
-fn grpc_address() -> Result<std::net::SocketAddr> {
-    crate::service::grpc_bind().parse().context("AUSTERIS_GRPC_BIND is not an address")
 }
 
 /// The address the first account is created under.

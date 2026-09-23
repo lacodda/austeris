@@ -4,12 +4,15 @@
 //! variant here, a crate, a schema and a compose entry - the checklist from
 //! ADR 0001, with this file as its first line.
 
+use std::collections::HashMap;
 use std::fmt;
+use std::net::SocketAddr;
+use std::sync::Arc;
 
 use sqlx::migrate::Migrator;
 
 /// A service this binary can run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, clap::ValueEnum)]
 #[value(rename_all = "kebab-case")]
 pub enum Service {
     /// The only public surface: routes to the others and serves the web UI.
@@ -84,23 +87,95 @@ impl Service {
             Self::Market => "market",
         }
     }
+}
 
-    /// The address the gateway forwards this service's traffic to.
+/// Where each routed service answers: REST for the gateway, gRPC for peers.
+///
+/// A table handed to the gateway rather than something each call looks up in
+/// the environment, because the answer depends on how the installation runs.
+/// One container per service reaches its peers by compose name; one process
+/// running every service reaches them on the loopback ports it bound itself,
+/// which exist only once the process is up and cannot be written down ahead of
+/// time.
+#[derive(Debug, Clone)]
+pub struct Peers {
+    endpoints: Arc<HashMap<Service, Endpoints>>,
+}
+
+#[derive(Debug)]
+struct Endpoints {
+    rest: String,
+    grpc: String,
+}
+
+impl Peers {
+    /// One container per service: the compose names, overridable per service.
     ///
-    /// Overridable per service (`AUSTERIS_IDENTITY_ADDR`) so a developer can
-    /// run one service outside compose while the rest stay in it; the default
-    /// is the compose service name, which is what a deployment uses.
+    /// `AUSTERIS_IDENTITY_ADDR` and `AUSTERIS_IDENTITY_GRPC_ADDR` let a
+    /// developer run one service outside compose while the rest stay in it.
     #[must_use]
-    pub fn address(self) -> String {
-        let variable = format!("AUSTERIS_{}_ADDR", self.as_str().to_uppercase());
-        std::env::var(&variable).unwrap_or_else(|_| format!("http://{}:8080", self.as_str()))
+    pub fn from_env() -> Self {
+        let endpoints = Service::routed()
+            .iter()
+            .map(|&service| {
+                let name = service.as_str();
+                let upper = name.to_uppercase();
+                let rest = std::env::var(format!("AUSTERIS_{upper}_ADDR")).unwrap_or_else(|_| format!("http://{name}:8080"));
+                let grpc = std::env::var(format!("AUSTERIS_{upper}_GRPC_ADDR")).unwrap_or_else(|_| format!("http://{name}:9090"));
+                (service, Endpoints { rest, grpc })
+            })
+            .collect();
+        Self {
+            endpoints: Arc::new(endpoints),
+        }
     }
 
-    /// Where the gateway reaches this service's gRPC surface.
+    /// Every service in this process, on the addresses its listeners bound.
     #[must_use]
-    pub fn grpc_address(self) -> String {
-        let variable = format!("AUSTERIS_{}_GRPC_ADDR", self.as_str().to_uppercase());
-        std::env::var(&variable).unwrap_or_else(|_| format!("http://{}:9090", self.as_str()))
+    pub fn local(bound: impl IntoIterator<Item = (Service, SocketAddr, SocketAddr)>) -> Self {
+        let endpoints = bound
+            .into_iter()
+            .map(|(service, rest, grpc)| {
+                (
+                    service,
+                    Endpoints {
+                        rest: format!("http://{rest}"),
+                        grpc: format!("http://{grpc}"),
+                    },
+                )
+            })
+            .collect();
+        Self {
+            endpoints: Arc::new(endpoints),
+        }
+    }
+
+    /// Where the gateway forwards this service's REST traffic.
+    ///
+    /// # Panics
+    ///
+    /// When the service is not in the table - a routed service missing from
+    /// it is a wiring mistake in this binary, not a condition a request can
+    /// cause.
+    #[must_use]
+    pub fn rest(&self, service: Service) -> &str {
+        &self.endpoint(service).rest
+    }
+
+    /// Where this service's gRPC surface is reached.
+    ///
+    /// # Panics
+    ///
+    /// As [`Peers::rest`].
+    #[must_use]
+    pub fn grpc(&self, service: Service) -> &str {
+        &self.endpoint(service).grpc
+    }
+
+    fn endpoint(&self, service: Service) -> &Endpoints {
+        self.endpoints
+            .get(&service)
+            .unwrap_or_else(|| panic!("{service} has no address; every routed service must be given one"))
     }
 }
 
@@ -108,7 +183,8 @@ impl Service {
 ///
 /// A second port, never published outside the compose network: this is the
 /// surface peers use, and nothing outside is a peer. One setting for every
-/// service, because each runs in its own container.
+/// service, because each runs in its own container. A process running every
+/// service ignores it and binds loopback ports of its own choosing.
 #[must_use]
 pub fn grpc_bind() -> String {
     std::env::var("AUSTERIS_GRPC_BIND").unwrap_or_else(|_| "0.0.0.0:9090".to_owned())
@@ -122,7 +198,7 @@ impl fmt::Display for Service {
 
 #[cfg(test)]
 mod tests {
-    use super::Service;
+    use super::{Peers, Service};
 
     #[test]
     fn every_service_is_listed_in_all() {
@@ -149,6 +225,18 @@ mod tests {
         assert!(Service::routed().iter().all(|s| !s.prefix().is_empty()));
         assert!(!Service::routed().contains(&Service::Gateway), "the gateway must not forward to itself");
         assert!(Service::Gateway.prefix().is_empty());
+    }
+
+    #[test]
+    fn every_routed_service_has_an_address_in_either_shape() {
+        let from_env = Peers::from_env();
+        let loopback = std::net::SocketAddr::from(([127, 0, 0, 1], 1));
+        let local = Peers::local(Service::routed().iter().map(|&s| (s, loopback, loopback)));
+        for &service in Service::routed() {
+            assert!(from_env.rest(service).starts_with("http://"));
+            assert!(from_env.grpc(service).starts_with("http://"));
+            assert_eq!(local.rest(service), "http://127.0.0.1:1");
+        }
     }
 
     #[test]

@@ -15,7 +15,7 @@ use axum::extract::{Request, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 
-use crate::service::Service;
+use crate::service::{Peers, Service};
 
 /// What forwarding needs: one client, reused across requests.
 ///
@@ -25,10 +25,11 @@ use crate::service::Service;
 struct Upstream {
     client: reqwest::Client,
     service: Service,
+    peers: Peers,
 }
 
-/// Builds the gateway's router.
-pub fn router() -> Router {
+/// Builds the gateway's router, forwarding to the services at `peers`.
+pub fn router(peers: &Peers) -> Router {
     let client = reqwest::Client::new();
 
     let mut api = Router::new();
@@ -36,6 +37,7 @@ pub fn router() -> Router {
         let upstream = Upstream {
             client: client.clone(),
             service: *service,
+            peers: peers.clone(),
         };
         // Wildcard routes rather than a nested fallback: a `fallback` inside a
         // `nest` is only reached when the outer router has no answer, and the
@@ -77,7 +79,7 @@ async fn forward(State(upstream): State<Upstream>, request: Request) -> AppResul
     // knows it. The service's own routes carry the prefix back (`/auth/login`),
     // which keeps a service's paths readable in its own crate.
     let path = parts.uri.path_and_query().map_or("/", |p| p.as_str());
-    let url = format!("{}/{}{path}", upstream.service.address(), upstream.service.prefix());
+    let url = format!("{}/{}{path}", upstream.peers.rest(upstream.service), upstream.service.prefix());
     let url: reqwest::Url = url
         .parse()
         .map_err(|error| AppError::internal(anyhow::anyhow!("{} has an unusable address: {error}", upstream.service)))?;
@@ -110,7 +112,7 @@ async fn forward(State(upstream): State<Upstream>, request: Request) -> AppResul
         // A session is required, not merely passed on when present. Everything
         // behind this gateway is one person's finances; an installation on a
         // home network must not serve them to whoever asks.
-        let Some(user_id) = caller(&parts).await else {
+        let Some(user_id) = caller(&upstream.peers, &parts).await else {
             return Err(AppError::new(StatusCode::UNAUTHORIZED, anyhow::anyhow!("not signed in")));
         };
         outgoing = outgoing.header(USER_HEADER, user_id);
@@ -141,10 +143,10 @@ async fn forward(State(upstream): State<Upstream>, request: Request) -> AppResul
 /// `None` covers every way of not knowing: no cookie, an invalid session, or an
 /// identity service that cannot be reached. The caller is refused in all three
 /// - an installation that cannot check who is asking must not answer.
-async fn caller(parts: &axum::http::request::Parts) -> Option<String> {
+async fn caller(peers: &Peers, parts: &axum::http::request::Parts) -> Option<String> {
     let token = session_cookie(parts)?;
 
-    let mut client = austeris_proto::identity::v1::identity_service_client::IdentityServiceClient::connect(Service::Identity.grpc_address())
+    let mut client = austeris_proto::identity::v1::identity_service_client::IdentityServiceClient::connect(peers.grpc(Service::Identity).to_owned())
         .await
         .inspect_err(|error| tracing::error!(%error, "could not reach identity to validate a session"))
         .ok()?;
@@ -224,6 +226,7 @@ mod tests {
     use tower::ServiceExt;
 
     use super::{is_hop_by_hop, is_routed, router};
+    use crate::service::Peers;
 
     async fn get(path: &str) -> (StatusCode, String) {
         // The rate limiter reads the peer address, which `oneshot` does not
@@ -232,7 +235,7 @@ mod tests {
         let mut request = Request::builder().uri(path).body(Body::empty()).unwrap();
         request.extensions_mut().insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 40000))));
 
-        let response = router().oneshot(request).await.unwrap();
+        let response = router(&Peers::from_env()).oneshot(request).await.unwrap();
         let status = response.status();
         let body = response.into_body().collect().await.unwrap().to_bytes();
         (status, String::from_utf8(body.to_vec()).unwrap())

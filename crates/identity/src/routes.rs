@@ -267,13 +267,46 @@ pub async fn ensure_first_user(pool: &PgPool, email: &str) -> Result<Option<Stri
     let mut rng = rand::rng();
     let password: String = (0..20).map(|_| char::from(ALPHABET[rng.random_range(0..ALPHABET.len())])).collect();
 
-    sqlx::query("INSERT INTO users (email, display_name, password_hash) VALUES ($1, $1, $2)")
-        .bind(email)
-        .bind(password::hash(&password)?)
-        .execute(pool)
-        .await?;
-
+    create_person(pool, email, &password).await?;
     Ok(Some(password))
+}
+
+/// The addresses of everyone who can sign in.
+///
+/// # Errors
+///
+/// Returns an error when the query fails.
+pub async fn people(pool: &PgPool) -> Result<Vec<String>> {
+    Ok(sqlx::query_scalar("SELECT email FROM users WHERE active ORDER BY created_at")
+        .fetch_all(pool)
+        .await?)
+}
+
+/// The person signing in as `email`, if there is one.
+///
+/// # Errors
+///
+/// Returns an error when the query fails.
+pub async fn person(pool: &PgPool, email: &str) -> Result<Option<Uuid>> {
+    Ok(sqlx::query_scalar("SELECT id FROM users WHERE lower(email) = lower($1) AND active")
+        .bind(email)
+        .fetch_optional(pool)
+        .await?)
+}
+
+/// Creates a person who signs in with `email` and `password`.
+///
+/// # Errors
+///
+/// Returns an error when the address is taken or the write fails.
+pub async fn create_person(pool: &PgPool, email: &str, password: &str) -> Result<Uuid> {
+    Ok(
+        sqlx::query_scalar("INSERT INTO users (email, display_name, password_hash) VALUES ($1, $1, $2) RETURNING id")
+            .bind(email)
+            .bind(password::hash(password)?)
+            .fetch_one(pool)
+            .await?,
+    )
 }
 
 #[cfg(test)]

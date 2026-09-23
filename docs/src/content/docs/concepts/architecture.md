@@ -9,8 +9,8 @@ behind a single gateway.
 ## Services
 
 A service owns a module of the product: `identity` owns people and sessions,
-`market` owns instruments and their prices, `ledger` will own accounts and
-entries.
+`market` owns instruments and their prices, `ledger` owns accounts, categories
+and entries.
 Each one:
 
 - owns **its own schema** in the shared database, and never reads another
@@ -22,18 +22,30 @@ Data crosses a service boundary only through that service's contract. A report
 spanning services is computed by a service that calls the others, never by SQL
 joining two schemas.
 
-## One binary
+## One binary, one process
 
-Every service is the same executable, picked by a subcommand:
+Every service is the same executable. With no argument it runs all of them in
+one process; with a name it runs that one:
 
 ```console
-$ austeris serve gateway
-$ austeris serve identity
+$ austeris serve               # every service, behind the gateway
+$ austeris serve identity      # one service, for a container of its own
 ```
 
-They are still separate processes with separate ports, schemas and contracts.
-What they share is a build, an image and a version - so a deployment cannot end
-up running two versions of the platform against one database.
+What the services share is a build, an image and a version - so a deployment
+cannot end up running two versions of the platform against one database. What
+they keep apart does not depend on the number of processes: in one process
+each service still has its own pool scoped to its own schema, its own REST
+listener and its own gRPC listener, on loopback ports the system picks. The
+gateway forwards to those ports the same way it forwards to containers over the
+compose network, so both shapes run the same code and pass the same tests.
+
+One process is the default because the home for austeris is a Raspberry Pi
+that runs other things too, and every process is a runtime and a heap of its
+own. The whole process stops if any listener in it stops - half an
+installation answering is worse than none - and the restart policy brings all
+of it back. Why this shape and not calls in memory:
+[ADR 0008](https://github.com/lacodda/austeris/blob/main/docs/adr/0008-one-process-by-default.md).
 
 ## The gateway
 
