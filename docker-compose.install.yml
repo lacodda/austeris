@@ -1,0 +1,128 @@
+# Install austeris: the published image plus its database.
+#
+# Nothing is built here - the image comes from the registry, so a machine needs
+# Docker and nothing else. Building from source is `docker-compose.yml`.
+#
+#   curl -o docker-compose.yml \
+#     https://raw.githubusercontent.com/lacodda/austeris/main/docker-compose.install.yml
+#   printf 'COMPOSE_PROFILES=single\nPOSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 24)" > .env
+#   chmod 600 .env
+#   docker compose up -d
+#
+# On the first run austeris creates an account and prints its password once -
+# `docker compose logs austeris` has it. Sign in and change it.
+#
+# Two shapes, one image. `single` (what the .env above selects) runs every
+# service in one process: one container, one pool of memory, the right choice
+# for a Raspberry Pi. `split` runs a container per service - for someone who
+# wants to restart, scale or watch one service on its own:
+#
+#   docker compose --profile split up -d
+#
+# The two share the database volume, so switching shapes keeps the books. Run
+# one shape at a time: both publish the same port.
+x-austeris: &austeris
+  # Pin a version in production. `latest` is convenient for a first look and a
+  # poor thing to have an unattended `docker compose pull` follow.
+  image: ghcr.io/lacodda/austeris:${AUSTERIS_VERSION:-latest}
+  restart: unless-stopped
+  depends_on:
+    db:
+      condition: service_healthy
+
+x-environment: &environment
+  AUSTERIS_DATABASE_URL: postgres://austeris:${POSTGRES_PASSWORD}@db:5432/austeris
+  AUSTERIS_BIND: 0.0.0.0:8080
+  RUST_LOG: ${RUST_LOG:-austeris=info,tower_http=info,warn}
+
+services:
+  db:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: austeris
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: austeris
+    volumes:
+      # postgres:18+ keeps data in a version-specific subdirectory; the mount
+      # sits one level up or the entrypoint refuses to start.
+      - db-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U austeris -d austeris"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    # No published port: only austeris reaches it, over the private network.
+
+  # --- single: every service in one process -------------------------------
+  austeris:
+    <<: *austeris
+    profiles: [single]
+    command: ["serve"]
+    environment:
+      <<: *environment
+      # The address the first account is created under on an empty
+      # installation; its password is printed once, into this container's log.
+      AUSTERIS_FIRST_USER: ${AUSTERIS_FIRST_USER:-owner@austeris.local}
+      # `true` once this is behind HTTPS. Over plain http a Secure cookie is
+      # dropped by the browser, and signing in appears to do nothing at all.
+      AUSTERIS_SECURE_COOKIES: ${AUSTERIS_SECURE_COOKIES:-false}
+      # Without a key the source is switched off: austeris starts, says so
+      # once, and serves whatever prices are already stored.
+      AUSTERIS_CMC_API_KEY: ${AUSTERIS_CMC_API_KEY:-}
+      # `true` fills an empty installation with a fictional household, to look
+      # around before typing anything real. It refuses to start on one where a
+      # real person has an account, so a flag forgotten here cannot mix made-up
+      # numbers into real books.
+      AUSTERIS_DEMO: ${AUSTERIS_DEMO:-false}
+    ports:
+      - "${AUSTERIS_PORT:-8084}:8080"
+
+  # --- split: a container per service -------------------------------------
+  # The demo is a one-off here rather than a flag, because no single container
+  # holds every schema: `docker compose --profile split run --rm identity demo`
+  # on an empty database, before the first `up`.
+  gateway:
+    <<: *austeris
+    profiles: [split]
+    command: ["serve", "gateway"]
+    environment:
+      AUSTERIS_BIND: 0.0.0.0:8080
+      RUST_LOG: ${RUST_LOG:-austeris=info,tower_http=info,warn}
+    ports:
+      # The only published port: everything else talks over this network.
+      - "${AUSTERIS_PORT:-8084}:8080"
+    depends_on:
+      identity:
+        condition: service_healthy
+      ledger:
+        condition: service_healthy
+      market:
+        condition: service_healthy
+
+  identity:
+    <<: *austeris
+    profiles: [split]
+    command: ["serve", "identity"]
+    environment:
+      <<: *environment
+      AUSTERIS_FIRST_USER: ${AUSTERIS_FIRST_USER:-owner@austeris.local}
+      AUSTERIS_SECURE_COOKIES: ${AUSTERIS_SECURE_COOKIES:-false}
+
+  ledger:
+    <<: *austeris
+    profiles: [split]
+    command: ["serve", "ledger"]
+    environment:
+      <<: *environment
+
+  market:
+    <<: *austeris
+    profiles: [split]
+    command: ["serve", "market"]
+    environment:
+      <<: *environment
+      AUSTERIS_CMC_API_KEY: ${AUSTERIS_CMC_API_KEY:-}
+
+volumes:
+  db-data:

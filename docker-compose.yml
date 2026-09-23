@@ -1,9 +1,15 @@
-# Development stack: PostgreSQL, and the gateway built from this tree.
+# Development: PostgreSQL, and austeris built from this tree.
 #
-# The gateway is here rather than left to `cargo run` because it is the only
-# public surface: what a developer opens is the same shape a deployment serves.
-# Services join this file as they are born, each one a second run of the same
-# image with a different `serve` argument (ADR 0005).
+#   docker compose up
+#
+# is the whole of it: one container runs every service in one process (ADR
+# 0008), and a fictional household is seeded on the first start - so a laptop
+# has something to look at, and the documentation's screenshots never carry a
+# real number. Sign in as demo@austeris.local / austeris-demo.
+#
+# `AUSTERIS_DEMO=false docker compose up` gives an empty installation instead;
+# on an empty database it creates the first account and prints its password.
+# Installing from the published image is `docker-compose.install.yml`.
 services:
   db:
     image: postgres:18-alpine
@@ -25,62 +31,23 @@ services:
       timeout: 3s
       retries: 10
 
-  gateway:
+  austeris:
     build: .
-    command: ["serve", "gateway"]
-    environment:
-      AUSTERIS_BIND: 0.0.0.0:8080
-      RUST_LOG: ${RUST_LOG:-austeris=info,tower_http=info,warn}
-    ports:
-      # The only published port: everything else talks over this network.
-      - "${AUSTERIS_PORT:-8084}:8080"
-    depends_on:
-      identity:
-        condition: service_healthy
-      ledger:
-        condition: service_healthy
-      market:
-        condition: service_healthy
-
-  identity:
-    build: .
-    command: ["serve", "identity"]
+    command: ["serve"]
     environment:
       AUSTERIS_DATABASE_URL: postgres://austeris:austeris@db:5432/austeris
       AUSTERIS_BIND: 0.0.0.0:8080
-      # The address the first account is created under on an empty
-      # installation; its password is printed once, into this container's log.
+      AUSTERIS_DEMO: ${AUSTERIS_DEMO:-true}
       AUSTERIS_FIRST_USER: ${AUSTERIS_FIRST_USER:-owner@austeris.local}
-      RUST_LOG: ${RUST_LOG:-austeris=info,tower_http=info,warn}
-    depends_on:
-      db:
-        # Not `service_started`: a service that owns a schema races the database
-        # otherwise, and starts by failing its first migration.
-        condition: service_healthy
-
-  ledger:
-    build: .
-    command: ["serve", "ledger"]
-    environment:
-      AUSTERIS_DATABASE_URL: postgres://austeris:austeris@db:5432/austeris
-      AUSTERIS_BIND: 0.0.0.0:8080
-      RUST_LOG: ${RUST_LOG:-austeris=info,tower_http=info,warn}
-    depends_on:
-      db:
-        condition: service_healthy
-
-  market:
-    build: .
-    command: ["serve", "market"]
-    environment:
-      AUSTERIS_DATABASE_URL: postgres://austeris:austeris@db:5432/austeris
-      AUSTERIS_BIND: 0.0.0.0:8080
-      # Without a key the source is switched off: the service starts, says so
-      # once, and serves whatever prices are already stored.
       AUSTERIS_CMC_API_KEY: ${AUSTERIS_CMC_API_KEY:-}
       RUST_LOG: ${RUST_LOG:-austeris=info,tower_http=info,warn}
+    ports:
+      # The only published port of austeris itself.
+      - "${AUSTERIS_PORT:-8084}:8080"
     depends_on:
       db:
+        # Not `service_started`: austeris owns schemas, and would race the
+        # database and start by failing its first migration.
         condition: service_healthy
 
 volumes:

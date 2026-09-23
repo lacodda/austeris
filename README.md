@@ -37,23 +37,23 @@ the money it could not convert instead of quietly leaving it out.
 
 ## Install
 
-Requires Docker.
+Requires Docker. The image is built for amd64 and arm64, so a Raspberry Pi is
+a fine home for it - every service runs in one container.
 
 ```console
-$ git clone https://github.com/lacodda/austeris && cd austeris
+$ curl -o docker-compose.yml \
+    https://raw.githubusercontent.com/lacodda/austeris/main/docker-compose.install.yml
+$ printf 'COMPOSE_PROFILES=single\nPOSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 24)" > .env
 $ docker compose up -d
  Container austeris-db-1  Healthy
- Container austeris-identity-1  Healthy
- Container austeris-ledger-1  Healthy
- Container austeris-market-1  Healthy
- Container austeris-gateway-1  Started
+ Container austeris-austeris-1  Started
 ```
 
 An installation with no accounts creates one and prints its password - once,
-into the log of the service that made it:
+into the log:
 
 ```console
-$ docker compose logs identity
+$ docker compose logs austeris
 
   An account was created, because this installation had none:
 
@@ -62,6 +62,11 @@ $ docker compose logs identity
 
   This is the only time it is shown. Sign in and change it.
 ```
+
+To look around before typing anything real, `AUSTERIS_DEMO=true` in `.env`
+fills an empty installation with a made-up household - sign in as
+`demo@austeris.local` / `austeris-demo`. A clone does that by default:
+`docker compose up` builds from source and starts with the demo.
 
 ## A day in the life
 
@@ -97,7 +102,8 @@ Every endpoint, with its shape: **[the ledger reference](https://lacodda.github.
 ## Status
 
 Early, and the books are open: entries, accounts, categories and balances work
-end to end, with the balance rule held by the database. A crypto-portfolio
+end to end, with the balance rule held by the database, and the whole thing
+installs as one container from a published image. A crypto-portfolio
 tracker lived in this repository through 2025 and is preserved at the tag
 [`legacy-2025`](https://github.com/lacodda/austeris/tree/legacy-2025) - it is
 the donor for `market`. What landed in each version:
