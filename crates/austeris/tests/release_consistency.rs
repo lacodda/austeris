@@ -127,25 +127,34 @@ fn readme_is_not_duplicated() {
 }
 
 #[test]
-fn the_readme_documents_every_environment_variable() {
+fn the_configuration_page_documents_every_environment_variable() {
     // The configuration table is the only place an operator learns these
     // exist. A variable read by the code and missing from the table is
     // invisible until someone reads the source, which is not what a
     // self-hosted product can ask of them.
     //
+    // The table lives on the documentation site. It used to live in the README,
+    // and when the README became a storefront the table moved while this check
+    // kept reading the old place - and went red on the first variable, which is
+    // the good way for a moved gate to fail.
+    //
     // The whole workspace is searched, not one file: the settings live wherever
     // they are used - the first-user address in the binary, the cookie flag in
     // identity, the pool size in common - and a gate that only reads `config.rs`
-    // is blind to every one added anywhere else.
-    let readme = read("README.md");
+    // is blind to every one added anywhere else. The compose files are searched
+    // too: `AUSTERIS_VERSION` is read by nothing but compose, and is exactly
+    // the setting an operator has to know about.
+    let page = read(CONFIGURATION_PAGE);
     let mut checked = 0;
 
-    for source in rust_sources(&repo_root().join("crates")) {
+    let mut sources = rust_sources(&repo_root().join("crates"));
+    sources.extend(compose_files());
+    for source in sources {
         let text = fs::read_to_string(&source).expect("reading a source file");
         for name in variables_in(&text) {
             assert!(
-                readme.contains(&name),
-                "{name} is read by {} but missing from the README's configuration table",
+                page.contains(&format!("`{name}`")),
+                "{name} is read by {} but missing from {CONFIGURATION_PAGE}",
                 source.display()
             );
             checked += 1;
@@ -156,6 +165,27 @@ fn the_readme_documents_every_environment_variable() {
         checked > 0,
         "no AUSTERIS_ variable was found anywhere; the search is looking in the wrong place"
     );
+}
+
+/// Where an operator reads what can be set.
+const CONFIGURATION_PAGE: &str = "docs/src/content/docs/reference/configuration.md";
+
+/// Every compose file at the root: the development one and the install one.
+fn compose_files() -> Vec<PathBuf> {
+    let found: Vec<PathBuf> = fs::read_dir(repo_root())
+        .expect("reading the repository root")
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension().is_some_and(|extension| extension == "yml")
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("docker-compose"))
+        })
+        .collect();
+    assert!(!found.is_empty(), "no compose file was found at the repository root");
+    found
 }
 
 /// Every `AUSTERIS_*` name a source file names, whole or as a suffix format.
