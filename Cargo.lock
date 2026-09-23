@@ -163,11 +163,13 @@ dependencies = [
  "austeris-market",
  "austeris-proto",
  "axum",
+ "chrono",
  "clap",
  "flate2",
  "http-body-util",
  "reqwest",
  "rpassword",
+ "rust_decimal",
  "serde",
  "serde_json",
  "sqlx",
@@ -178,6 +180,7 @@ dependencies = [
  "tracing",
  "utoipa",
  "utoipa-swagger-ui",
+ "uuid",
 ]
 
 [[package]]
