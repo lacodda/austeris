@@ -1,52 +1,40 @@
 # Build and run austeris in a container.
 #
-# One image holds every service; which one a container is comes from its
-# command (ADR 0005). Built on the target machine - the stand is a Raspberry
-# Pi, so aarch64 - which also makes this the one place a build for that
-# architecture is proven on every deploy rather than only at release time.
+# One image holds every service. With no argument it runs all of them in one
+# process (ADR 0008); `serve <service>` runs one, for an installation with a
+# container per service (ADR 0005). The published image is built for amd64 and
+# arm64 - the stand is a Raspberry Pi.
 
-FROM rust:1-slim-trixie AS build
+FROM rust:1-slim-trixie AS chef
 WORKDIR /src
-
 # protoc compiles the service contracts (ADR 0003). The generated Rust is built
 # here rather than committed, so a stale checked-in copy cannot disagree with
 # the .proto files it came from.
 RUN apt-get update \
     && apt-get install --no-install-recommends -y protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
+RUN cargo install cargo-chef --locked
 
-# Dependencies first, so editing source does not re-download and rebuild the
-# whole tree. Stub entry points give cargo something to compile them against.
-COPY Cargo.toml Cargo.lock ./
-COPY crates/austeris/Cargo.toml crates/austeris/
-COPY crates/common/Cargo.toml crates/common/
-COPY crates/identity/Cargo.toml crates/identity/
-COPY crates/ledger/Cargo.toml crates/ledger/
-COPY crates/market/Cargo.toml crates/market/
-COPY crates/proto/Cargo.toml crates/proto/
-# The proto crate's build script runs even for a dependency-only build, so its
-# inputs come across with the manifests.
-COPY crates/proto/build.rs crates/proto/
+# The dependency graph, read from the whole workspace rather than listed here:
+# a hand-written list of crates is one a new crate silently falls out of, and
+# only `docker build` notices - never the gate.
+FROM chef AS plan
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS build
+# Dependencies first, from the recipe alone, so editing source does not rebuild
+# the whole tree. The proto crate's build script runs even here, so the
+# contracts come across with it.
+COPY --from=plan /src/recipe.json recipe.json
 COPY proto ./proto
-RUN mkdir -p crates/austeris/src crates/common/src crates/identity/src crates/ledger/src crates/market/src crates/proto/src \
-    && echo 'fn main() {}' > crates/austeris/src/main.rs \
-    && echo '' > crates/common/src/lib.rs \
-    && echo '' > crates/identity/src/lib.rs \
-    && echo '' > crates/ledger/src/lib.rs \
-    && echo '' > crates/market/src/lib.rs \
-    && echo '' > crates/proto/src/lib.rs \
-    && cargo build --release \
-    && rm -rf crates/austeris/src crates/common/src crates/identity/src crates/ledger/src crates/market/src crates/proto/src
-
-COPY crates ./crates
-# Touch the entry points: cargo skips a rebuild when timestamps look older than
-# the artifacts left by the dependency layer.
-RUN touch crates/austeris/src/main.rs crates/common/src/lib.rs crates/identity/src/lib.rs crates/ledger/src/lib.rs crates/market/src/lib.rs crates/proto/src/lib.rs \
-    && cargo build --release
+RUN cargo chef cook --release --recipe-path recipe.json
+COPY . .
+RUN cargo build --release --bin austeris
 
 FROM debian:trixie-slim
-# ca-certificates for TLS to PostgreSQL; curl so the healthcheck below needs no
-# layer of its own.
+# ca-certificates for TLS to PostgreSQL and to price sources; curl so the
+# healthcheck below needs no layer of its own.
 RUN apt-get update \
     && apt-get install --no-install-recommends -y ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
@@ -58,10 +46,12 @@ USER austeris
 COPY --from=build /src/target/release/austeris /usr/local/bin/austeris
 
 EXPOSE 8080
-# Readiness, not liveness: /readyz round-trips to the database and checks the
-# schema is at the version this build expects, so a container reporting healthy
-# can actually serve. Compose waits on this before starting what depends on it.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+# Readiness, not liveness: a process running every service binds this port only
+# after each schema is migrated to the version this build expects, and a
+# service on its own answers /readyz by checking its schema. Either way a
+# container reporting healthy can actually serve.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD curl -fsS http://127.0.0.1:8080/readyz || exit 1
 
 ENTRYPOINT ["austeris"]
+CMD ["serve"]
