@@ -2,6 +2,27 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.7.0] - 2026-09-23
+
+### Build
+- Derive the dependency layer with cargo-chef
+
+### CI
+- Publish amd64 and arm64 images and smoke-test each
+
+### Documentation
+- Make the readme a shopfront
+
+### Features
+- Run every service in one process
+- Seed a made-up household with austeris demo
+- Install from the published image as one container
+- Update, back up and restore a stand over ssh
+
+### Testing
+- Read the configuration table where it now lives
+
+
 ## [0.6.0] - 2026-09-17
 
 ### Bug Fixes
