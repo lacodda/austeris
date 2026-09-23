@@ -19,3 +19,7 @@ logs/
 .DS_Store
 *.swp
 *~
+
+# The stand scripts: copies of the books, and what turnout uploads.
+/backups/
+/deploy/
