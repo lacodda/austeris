@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <meta charset="UTF-8" />
+        <title>Cotizaci&oacute;n Referencial de Monedas - Diaria</title>
+    </head>
+    <body>
+        <!-- A response of the Banco Central del Paraguay's daily reference rates page,
+             asked for Sunday 20/09/2026 and answered with Friday's table, trimmed to
+             five currencies and the markup the parser reads. -->
+        <form novalidate class="form-horizontal" id="form-fecha" method="POST" action="/webapps/web/cotizacion/monedas">
+            <input class="input-small" id="dp_cotizacion" placeholder="Fecha" type="text" readonly="readonly" value="18/09/2026">
+            <input type="hidden" name="fecha" id="fecha" value="18/09/2026"/>
+        </form>
+<table id="cotizacion-interbancaria" class="table table-bordered table-striped table-condensed">
+                    <thead>
+                    <tr>
+                        <th style="font-size: 14px; text-align:center;" colspan="5">PLANILLA DE COTIZACIONES AL VIERNES 18 DE SEPTIEMBRE DEL 2026 </th>
+                    </tr>
+                    <tr>
+                        <th style="font-size: 14px; text-align:center;" colspan="2">MONEDA</th>
+                        <th style="font-size: 14px; text-align:center;">ME/USD</th>
+                        <th style="font-size: 14px; text-align:center;">&#8370; / ME</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <tr>
+                            <td style="font-size: 12px;">
+                                                                    <img src="/webapps/web/bundles/publicdata/img/flags/us.png" alt="DÓLAR ESTADOUNIDENSE" width="16px" heigth="11px"/> DÓLAR ESTADOUNIDENSE
+                                
+                                                            </td>
+                            <td style="font-size: 12px; text-align:center;">USD</td>
+                            <td style="text-align:right">1,0000</td>
+                            <td style="text-align:right">5.956,04</td>
+                            <!-- <td style="text-align:right"></td>-->
+                        </tr>
+                    <tr>
+                            <td style="font-size: 12px;">
+                                                                    <img src="/webapps/web/bundles/publicdata/img/flags/jp.png" alt="YEN JAPONÉS" width="16px" heigth="11px"/> YEN JAPONÉS
+                                
+                                                            </td>
+                            <td style="font-size: 12px; text-align:center;">JPY</td>
+                            <td style="text-align:right">157,4500</td>
+                            <td style="text-align:right">37,83</td>
+                            <!-- <td style="text-align:right"></td>-->
+                        </tr>
+                    <tr>
+                            <td style="font-size: 12px;">
+                                                                    <img src="/webapps/web/bundles/publicdata/img/flags/gb.png" alt="LIBRA ESTERLINA" width="16px" heigth="11px"/> LIBRA ESTERLINA
+                                
+                                                                    *
+                                                            </td>
+                            <td style="font-size: 12px; text-align:center;">GBP</td>
+                            <td style="text-align:right">1,3359</td>
+                            <td style="text-align:right">7.956,67</td>
+                            <!-- <td style="text-align:right"></td>-->
+                        </tr>
+                    <tr>
+                            <td style="font-size: 12px;">
+                                                                    <img src="/webapps/web/bundles/publicdata/img/flags/br.png" alt="REAL BRASILEÑO" width="16px" heigth="11px"/> REAL BRASILEÑO
+                                
+                                                            </td>
+                            <td style="font-size: 12px; text-align:center;">BRL</td>
+                            <td style="text-align:right">5,1612</td>
+                            <td style="text-align:right">1.154,00</td>
+                            <!-- <td style="text-align:right"></td>-->
+                        </tr>
+                    <tr>
+                            <td style="font-size: 12px;">
+                                                                    <img src="/webapps/web/bundles/publicdata/img/flags/eu.png" alt="EURO" width="16px" heigth="11px"/> EURO
+                                
+                                                                    *
+                                                            </td>
+                            <td style="font-size: 12px; text-align:center;">EUR</td>
+                            <td style="text-align:right">1,1461</td>
+                            <td style="text-align:right">6.826,22</td>
+                            <!-- <td style="text-align:right"></td>-->
+                        </tr>
+                    </tbody>
+                    <tfoot>
+                    <tr>
+                        <td colspan="5" style="font-size: 10px; text-align:left">(*) USD x GBP, DEG, EUR, XAU, AUD</td>
+                    </tr>
+                    <tr>
+                        <td colspan="5" style="font-size: 10px; text-align:left">(**) Moneda Extranjera (ME) | D&oacute;lar Americano (USD) | Guaran&iacute; (&#8370;) </td>
+                    </tr>
+                    </tfoot>
+                </table>
+    </body>
+</html>

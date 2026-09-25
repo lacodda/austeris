@@ -102,8 +102,9 @@ async fn serve_one(config: &Config, service: Service) -> Result<()> {
     }
 
     let mut tasks = JoinSet::new();
+    let peers = Peers::from_env();
     let app = match service {
-        Service::Gateway => gateway::router(&Peers::from_env()),
+        Service::Gateway => gateway::router(&peers),
         data => {
             let pool = schema_ready(config, data).await?;
             if data == Service::Identity {
@@ -117,7 +118,7 @@ async fn serve_one(config: &Config, service: Service) -> Result<()> {
             let grpc = service::grpc_bind();
             let grpc = TcpIncoming::bind(grpc.parse().context("AUSTERIS_GRPC_BIND is not an address")?)
                 .map_err(|error| anyhow::anyhow!("binding gRPC on {grpc}: {error}"))?;
-            start(data, pool, grpc, &mut tasks)
+            start(data, pool, grpc, &peers, &mut tasks)?
         }
     };
 
@@ -154,15 +155,23 @@ async fn serve_all(config: &Config) -> Result<()> {
         welcome_first_user(&identity).await?;
     }
 
+    // Every listener is bound before any service starts: a service that talks
+    // to a peer - the market handing rates to the ledger - needs the peer's
+    // address, and in one process that exists only once the port is bound.
     let loopback = std::net::Ipv4Addr::LOCALHOST;
-    let mut tasks = JoinSet::new();
+    let mut listeners = Vec::new();
     let mut bound = Vec::new();
     for (service, pool) in pools {
         let rest = TcpListener::bind((loopback, 0)).await?;
         let grpc = TcpListener::bind((loopback, 0)).await?;
         bound.push((service, rest.local_addr()?, grpc.local_addr()?));
+        listeners.push((service, pool, rest, grpc));
+    }
+    let peers = Peers::local(bound);
 
-        let app = start(service, pool, TcpIncoming::from(grpc), &mut tasks);
+    let mut tasks = JoinSet::new();
+    for (service, pool, rest, grpc) in listeners {
+        let app = start(service, pool, TcpIncoming::from(grpc), &peers, &mut tasks)?;
         tasks.spawn(http(rest, app));
     }
 
@@ -174,12 +183,12 @@ async fn serve_all(config: &Config) -> Result<()> {
         address = %listener.local_addr()?,
         "listening"
     );
-    tasks.spawn(http(listener, gateway::router(&Peers::local(bound))));
+    tasks.spawn(http(listener, gateway::router(&peers)));
     first_to_stop(tasks).await
 }
 
 /// Starts a service's gRPC listener as a task and hands back its REST router.
-fn start(service: Service, pool: sqlx::PgPool, grpc: TcpIncoming, tasks: &mut JoinSet<Result<()>>) -> Router {
+fn start(service: Service, pool: sqlx::PgPool, grpc: TcpIncoming, peers: &Peers, tasks: &mut JoinSet<Result<()>>) -> Result<Router> {
     // Each service's gRPC server is a different concrete type, so each branch
     // spawns its own task rather than handing back a future.
     match service {
@@ -188,28 +197,34 @@ fn start(service: Service, pool: sqlx::PgPool, grpc: TcpIncoming, tasks: &mut Jo
                 .add_service(austeris_identity::grpc::Service::new(pool.clone()))
                 .serve_with_incoming(grpc);
             tasks.spawn(async move { server.await.context("the identity gRPC listener stopped") });
-            austeris_identity::routes::router(pool, secure_cookies())
+            Ok(austeris_identity::routes::router(pool, secure_cookies()))
         }
         Service::Ledger => {
             let server = Server::builder()
                 .add_service(austeris_ledger::grpc::Service::new(pool.clone()))
                 .serve_with_incoming(grpc);
             tasks.spawn(async move { server.await.context("the ledger gRPC listener stopped") });
-            austeris_ledger::routes::router(pool)
+            Ok(austeris_ledger::routes::router(pool))
         }
         Service::Market => {
-            let sources = austeris_market::routes::Sources::from_env();
+            let sources = std::sync::Arc::new(austeris_market::refresh::Sources::from_env());
             // Said once, at startup, rather than on every refresh: a source
             // without its key is switched off, not broken.
-            match sources.available().as_slice() {
-                [] => tracing::warn!("no price source is configured; prices will not be refreshed"),
-                names => tracing::info!(sources = names.join(", "), "price sources available"),
-            }
+            tracing::info!(sources = sources.available().join(", "), "price sources available");
+            let ledger = austeris_market::refresh::Ledger::connect_lazy(peers.grpc(Service::Ledger))?;
+
             let server = Server::builder()
                 .add_service(austeris_market::grpc::Service::new(pool.clone()))
                 .serve_with_incoming(grpc);
             tasks.spawn(async move { server.await.context("the market gRPC listener stopped") });
-            austeris_market::routes::router(pool, sources)
+            // The hourly refresh never returns; wrapped so the task set, which
+            // stops the process when any task ends, has a result type to hold.
+            let refresher = austeris_market::refresh::every_hour(pool.clone(), sources.clone(), Some(ledger.clone()));
+            tasks.spawn(async move {
+                refresher.await;
+                anyhow::bail!("the price refresher stopped")
+            });
+            Ok(austeris_market::routes::router(pool, sources, Some(ledger)))
         }
         Service::Gateway => unreachable!("the gateway owns no schema and serves no gRPC"),
     }

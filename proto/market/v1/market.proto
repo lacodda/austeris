@@ -49,4 +49,9 @@ message Price {
   int64 observed_at_unix_seconds = 4;
   // Which source said so.
   string source = 5;
+  // Whether the price was older, at the instant asked about, than its kind
+  // stays current for: two hours for crypto, a long weekend for anything priced
+  // on business days. The price is still the last one known; a caller showing
+  // or summing it carries this forward.
+  bool stale = 6;
 }

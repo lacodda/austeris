@@ -1,14 +1,14 @@
 //! What this service stores.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// What kind of thing an instrument is.
 ///
-/// Only `Crypto` has a source behind it today; the rest exist because the
-/// column does, and adding a variant later would be a schema change in the
+/// `Crypto` and `Fx` have sources behind them today; the rest exist because
+/// the column does, and adding a variant later would be a schema change in the
 /// middle of a release that is about something else.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type, utoipa::ToSchema)]
 #[sqlx(type_name = "instrument_kind", rename_all = "lowercase")]
@@ -26,6 +26,25 @@ pub enum Kind {
     Fx,
     /// Something priced by hand: a flat, a car, a painting.
     Manual,
+}
+
+impl Kind {
+    /// Whether a price observed at `observed_at` is no longer current at `at`.
+    ///
+    /// Crypto trades every hour of every day, so a price two refreshes old has
+    /// missed movement that matters. Currencies, shares and funds are priced on
+    /// business days, so they go stale on the same calendar as the ledger's
+    /// rates. Something priced by hand is as current as its owner says.
+    #[must_use]
+    pub fn is_stale(self, observed_at: DateTime<Utc>, at: DateTime<Utc>) -> bool {
+        match self {
+            Self::Crypto => at - observed_at > Duration::hours(2),
+            Self::Manual => false,
+            Self::Stock | Self::Bond | Self::Fund | Self::Fx => {
+                (at.date_naive() - observed_at.date_naive()).num_days() > austeris_common::freshness::DAILY_RATE_DAYS
+            }
+        }
+    }
 }
 
 /// Something that can be priced.
@@ -62,6 +81,38 @@ pub struct Price {
     pub source: String,
 }
 
+/// The latest price of an instrument, and whether it is still current.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct LatestPrice {
+    /// The price as it was recorded.
+    #[serde(flatten)]
+    pub price: Price,
+    /// Older than its kind stays current for: two hours for crypto, a long
+    /// weekend for anything priced on business days. The number is still the
+    /// last one known; this is what stops it being read as now.
+    pub stale: bool,
+}
+
+/// Whether a source is answering, and how fresh what it last said is.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SourceStatus {
+    /// The name its prices are recorded under.
+    pub name: String,
+    /// What it prices.
+    pub prices: Kind,
+    /// Whether it is switched on.
+    pub available: bool,
+    /// Why it is switched off, when it is: the setting it is missing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub off_because: Option<String>,
+    /// The newest observation it has recorded, whether or not it is on now.
+    pub last_observed_at: Option<DateTime<Utc>>,
+    /// Nothing recorded yet, or the newest is older than its kind stays current
+    /// for. A switched-off source is stale by its second hour: its prices are
+    /// still shown, and this is what says they are old.
+    pub stale: bool,
+}
+
 /// A source's own name for an instrument, and where it sits in the order.
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct SourceBinding {
@@ -87,4 +138,26 @@ pub struct Quote {
     pub price: Decimal,
     /// When the source says it observed it.
     pub observed_at: DateTime<Utc>,
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{Duration, TimeZone, Utc};
+
+    use super::Kind;
+
+    #[test]
+    fn crypto_goes_stale_within_hours_and_currencies_after_a_long_weekend() {
+        let friday = Utc.with_ymd_and_hms(2026, 9, 25, 0, 0, 0).single().expect("an instant");
+
+        assert!(!Kind::Crypto.is_stale(friday, friday + Duration::hours(2)));
+        assert!(Kind::Crypto.is_stale(friday, friday + Duration::hours(3)));
+
+        // Friday's table is current through Tuesday after a Monday holiday...
+        assert!(!Kind::Fx.is_stale(friday, friday + Duration::days(4) + Duration::hours(23)));
+        // ...and not on Wednesday.
+        assert!(Kind::Fx.is_stale(friday, friday + Duration::days(5)));
+
+        assert!(!Kind::Manual.is_stale(friday, friday + Duration::days(400)));
+    }
 }

@@ -1,6 +1,6 @@
 ---
-title: Instruments and prices
-description: What can be priced, where prices come from, and how to ask for one.
+title: Prices and rates
+description: What can be priced, where prices and official exchange rates come from, and how old they are.
 ---
 
 Served by the gateway under `/api/v1/market`, and, like everything but signing
@@ -13,6 +13,29 @@ Every price is a **string** in JSON, never a number: a client parsing a JSON
 number gets an IEEE double and has lost the value before it renders it. The
 trailing zeros are the column's scale, `NUMERIC(38, 18)`, reported rather than
 trimmed.
+
+## Where prices come from
+
+| Source | Prices | Needs |
+| --- | --- | --- |
+| `coinmarketcap` | crypto, in USD | `AUSTERIS_CMC_API_KEY`; switched off without it |
+| `bcp` | currencies in guaranies — Banco Central del Paraguay's daily reference rate | nothing |
+| `cbr` | currencies in roubles — the Bank of Russia's official daily rate | nothing |
+
+The service refreshes every source that is on **once an hour**, starting a few
+seconds after it comes up; nobody has to remember to fetch this morning's rates.
+Each currency a central bank publishes becomes an `fx` instrument named by its
+code the first time it is seen, priced in the bank's own currency and observed
+at the start of the day the bank set it for.
+
+Official rates are also handed to the ledger, which keeps the rates it values
+money at ([Rates](/austeris/reference/ledger/#rates)). The ledger never asks for
+them — the core knows no module — so the market pushes each table it records,
+and the ledger keeps any rate it already had for that day.
+
+Both banks are asked over HTTPS, at `www.bcp.gov.py` and `www.cbr.ru`; an
+installation behind a firewall that blocks them keeps working, with rates that
+say how old they are.
 
 ## Instruments
 
@@ -55,8 +78,22 @@ simply stopping — what happened in 2025, with nothing saying so.
 The latest price of each instrument. Takes `?instruments=` (comma-separated
 ids; all of them when omitted) and `?currency=` (`USD` by default).
 
+```json
+[{ "instrument_id": "…", "quote_currency": "PYG", "observed_at": "2026-09-24T00:00:00Z",
+   "price": "5900.280000000000000000", "source": "bcp", "stale": false }]
+```
+
 An instrument with no price is **absent from the answer**, not an error: one
 unpriced instrument must not cost a whole batch.
+
+A price older than its kind stays current for is still the answer — it is the
+last one known — and says `"stale": true`:
+
+| Kind | Stale after |
+| --- | --- |
+| `crypto` | two hours: it trades every hour of every day |
+| `fx`, `stock`, `bond`, `fund` | four days: priced on business days, so a weekend with a holiday on either side is still current |
+| `manual` | never: it is as current as whoever priced it says |
 
 ### `GET /api/v1/market/prices/{id}/history`
 
@@ -67,14 +104,41 @@ reads as "no prices" rather than "bad question".
 
 ### `POST /api/v1/market/prices/refresh`
 
-Asks every available source for the instruments bound to it.
+What the hourly refresh does, now: asks every available source, records what it
+said, and hands official rates on to the ledger.
 
 ```json
-{ "recorded": 42, "sources": ["coinmarketcap"], "failed": [] }
+{ "recorded": 57, "sources": ["bcp", "cbr"], "rates_handed_on": 55,
+  "failed": [{ "source": "coinmarketcap", "error": "CoinMarketCap answered 429 Too Many Requests" }] }
 ```
 
-Sources are independent: one failing costs its own instruments' prices and
-nothing else, and says so in `failed` rather than reporting a clean run.
+Sources are independent: one failing costs its own prices and nothing else, and
+is named in `failed` with what went wrong rather than reported as a clean run. A
+refresh that recorded the rates but could not hand them to the ledger names
+`ledger` there.
+
+`?on=YYYY-MM-DD` asks for a past day instead — the central banks answer for any
+date, so an exchange recorded for last month can be measured against that day's
+rate. Sources without history (`coinmarketcap`) are named in `skipped`. A day
+that has not happened yet is refused.
+
+### `GET /api/v1/market/sources`
+
+Every source, whether it is on, and how old what it last said is:
+
+```json
+[
+  { "name": "coinmarketcap", "prices": "crypto", "available": false,
+    "off_because": "AUSTERIS_CMC_API_KEY is not set",
+    "last_observed_at": null, "stale": true },
+  { "name": "bcp", "prices": "fx", "available": true,
+    "last_observed_at": "2026-09-24T00:00:00Z", "stale": false }
+]
+```
+
+The answer to *why is this price from last Tuesday*: a source switched off for
+want of a key, or one that has stopped answering, shows here with the time of
+its last observation.
 
 ## Which price answers
 
@@ -103,7 +167,9 @@ service MarketService {
 
 `GetPrices` takes several instrument ids at once, because the caller that wants
 one price usually wants forty. `GetPriceAt` takes Unix seconds and applies the
-same "as of" rule as the REST surface.
+same "as of" rule as the REST surface. Each price carries `stale`, measured
+against the instant asked about: last week's price is current for a question
+about last week.
 
 Prices cross this wire as strings too: protobuf has no decimal type, and a
 price that travels as a double is not the price that was recorded.

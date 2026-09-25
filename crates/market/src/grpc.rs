@@ -6,7 +6,7 @@
 
 use austeris_proto::market::v1::market_service_server::{MarketService, MarketServiceServer};
 use austeris_proto::market::v1::{GetPriceAtRequest, GetPriceAtResponse, GetPricesRequest, GetPricesResponse, Price};
-use chrono::DateTime;
+use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
@@ -52,8 +52,12 @@ impl MarketService for Service {
             .await
             .map_err(internal("reading the latest prices"))?;
 
+        let now = Utc::now();
         Ok(Response::new(GetPricesResponse {
-            prices: prices.iter().map(into_proto).collect(),
+            prices: prices
+                .iter()
+                .map(|(price, kind)| into_proto(price, kind.is_stale(price.observed_at, now)))
+                .collect(),
         }))
     }
 
@@ -69,15 +73,26 @@ impl MarketService for Service {
         let price = repository::price_at(&self.pool, id, &request.quote_currency, at)
             .await
             .map_err(internal("reading a price"))?;
+        // Stale relative to the instant asked about: last week's price is
+        // current for a question about last week.
+        let kind = match &price {
+            Some(_) => repository::instrument(&self.pool, id)
+                .await
+                .map_err(internal("reading an instrument"))?
+                .map(|i| i.kind),
+            None => None,
+        };
 
         Ok(Response::new(GetPriceAtResponse {
-            price: price.as_ref().map(into_proto),
+            price: price
+                .as_ref()
+                .map(|price| into_proto(price, kind.is_some_and(|kind| kind.is_stale(price.observed_at, at)))),
         }))
     }
 }
 
 /// Turns a stored price into its wire form.
-fn into_proto(price: &crate::model::Price) -> Price {
+fn into_proto(price: &crate::model::Price, stale: bool) -> Price {
     Price {
         instrument_id: price.instrument_id.to_string(),
         quote_currency: price.quote_currency.clone(),
@@ -85,6 +100,7 @@ fn into_proto(price: &crate::model::Price) -> Price {
         price: price.price.to_string(),
         observed_at_unix_seconds: price.observed_at.timestamp(),
         source: price.source.clone(),
+        stale,
     }
 }
 

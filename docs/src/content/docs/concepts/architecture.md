@@ -22,6 +22,11 @@ Data crosses a service boundary only through that service's contract. A report
 spanning services is computed by a service that calls the others, never by SQL
 joining two schemas.
 
+The ledger is the core and calls no module; modules call it. That is why the
+official exchange rates `market` reads from the central banks are **pushed** to
+the ledger after each hourly refresh, through `ledger.v1.RecordRates`, rather
+than fetched by the ledger when it needs one (ADR 0009).
+
 ## One binary, one process
 
 Every service is the same executable. With no argument it runs all of them in

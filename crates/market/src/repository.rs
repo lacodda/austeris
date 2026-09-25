@@ -151,19 +151,21 @@ pub async fn price_at(pool: &PgPool, instrument_id: Uuid, quote_currency: &str, 
     .context("reading a price")
 }
 
-/// The latest price of each of several instruments, in one query.
+/// The latest price of each of several instruments, in one query, with the
+/// kind of each - which is what decides whether that price is still current.
 ///
 /// # Errors
 ///
 /// Returns an error when the query fails.
-pub async fn latest_prices(pool: &PgPool, instrument_ids: &[Uuid], quote_currency: &str) -> Result<Vec<Price>> {
+pub async fn latest_prices(pool: &PgPool, instrument_ids: &[Uuid], quote_currency: &str) -> Result<Vec<(Price, Kind)>> {
     // `DISTINCT ON` keeps the first row per instrument in the given order,
     // which is the newest observation from the best-ranked source - the same
     // rule `price_at` applies, expressed once for a batch.
-    sqlx::query_as(
+    let rows: Vec<(Uuid, String, DateTime<Utc>, rust_decimal::Decimal, String, Kind)> = sqlx::query_as(
         "SELECT DISTINCT ON (p.instrument_id)
-                p.instrument_id, p.quote_currency, p.observed_at, p.price, p.source
+                p.instrument_id, p.quote_currency, p.observed_at, p.price, p.source, i.kind
          FROM prices p
+         JOIN instruments i ON i.id = p.instrument_id
          LEFT JOIN instrument_sources s ON s.instrument_id = p.instrument_id AND s.source = p.source
          WHERE p.instrument_id = ANY($1) AND p.quote_currency = $2
          ORDER BY p.instrument_id, p.observed_at DESC, COALESCE(s.priority, 2147483647) ASC, p.source ASC",
@@ -172,7 +174,36 @@ pub async fn latest_prices(pool: &PgPool, instrument_ids: &[Uuid], quote_currenc
     .bind(quote_currency)
     .fetch_all(pool)
     .await
-    .context("reading the latest prices")
+    .context("reading the latest prices")?;
+
+    Ok(rows
+        .into_iter()
+        .map(|(instrument_id, quote_currency, observed_at, price, source, kind)| {
+            (
+                Price {
+                    instrument_id,
+                    quote_currency,
+                    observed_at,
+                    price,
+                    source,
+                },
+                kind,
+            )
+        })
+        .collect())
+}
+
+/// The newest observation a source has recorded, of anything.
+///
+/// # Errors
+///
+/// Returns an error when the query fails.
+pub async fn last_observed(pool: &PgPool, source: &str) -> Result<Option<DateTime<Utc>>> {
+    sqlx::query_scalar("SELECT max(observed_at) FROM prices WHERE source = $1")
+        .bind(source)
+        .fetch_one(pool)
+        .await
+        .context("reading when a source last answered")
 }
 
 /// Every observation for an instrument in a window, oldest first.

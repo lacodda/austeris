@@ -102,8 +102,10 @@ Every endpoint, with its shape: **[the ledger reference](https://lacodda.github.
 ## Status
 
 Early, and the books are open: entries, accounts, categories and balances work
-end to end, with the balance rule held by the database, and the whole thing
-installs as one container from a published image. A crypto-portfolio
+end to end, with the balance rule held by the database; money changes currency
+as an exchange with its fee on a line of its own, and the day's rates arrive
+from the central banks of Paraguay and Russia, each saying how old it is. The
+whole thing installs as one container from a published image. A crypto-portfolio
 tracker lived in this repository through 2025 and is preserved at the tag
 [`legacy-2025`](https://github.com/lacodda/austeris/tree/legacy-2025) - it is
 the donor for `market`. What landed in each version:

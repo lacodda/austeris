@@ -7,6 +7,7 @@
 //! that owns them fails when they do.
 
 use std::str::FromStr;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use austeris_common::{Config, db};
@@ -14,9 +15,13 @@ use austeris_common::{Config, db};
 // what is worth testing is the contract's answers, not tonic's transport.
 use austeris_proto::market::v1::market_service_server::MarketService as _;
 
+use austeris_market::fx::{Bcp, Cbr};
 use austeris_market::model::Kind;
-use austeris_market::routes::Sources;
+use austeris_market::refresh::{self, Ledger, Sources};
+use austeris_market::source::CoinMarketCap;
 use austeris_market::{MIGRATOR, repository, routes};
+use austeris_proto::ledger::v1::ledger_service_server::{LedgerService, LedgerServiceServer};
+use austeris_proto::ledger::v1::{GetBalancesRequest, GetBalancesResponse, PostEntryRequest, PostEntryResponse, RecordRatesRequest, RecordRatesResponse};
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use chrono::{TimeZone, Utc};
@@ -69,7 +74,7 @@ async fn call(pool: &PgPool, method: &str, uri: &str, body: Option<&str>) -> (St
     }
     .unwrap();
 
-    let response = routes::router(pool.clone(), Sources::from_env()).oneshot(request).await.unwrap();
+    let response = routes::router(pool.clone(), offline(), None).oneshot(request).await.unwrap();
     let status = response.status();
     let body = response.into_body().collect().await.unwrap().to_bytes();
     (status, String::from_utf8(body.to_vec()).unwrap())
@@ -196,8 +201,8 @@ async fn a_batch_answers_for_each_instrument_and_omits_the_unpriced() {
 
     let prices = repository::latest_prices(&pool, &[btc.id, eth.id, unpriced.id], "USD").await.unwrap();
     assert_eq!(prices.len(), 2, "the unpriced instrument is absent, not an error");
-    assert!(prices.iter().any(|p| p.instrument_id == btc.id));
-    assert!(prices.iter().any(|p| p.instrument_id == eth.id));
+    assert!(prices.iter().any(|(p, _)| p.instrument_id == btc.id));
+    assert!(prices.iter().any(|(p, _)| p.instrument_id == eth.id));
 }
 
 #[tokio::test]
@@ -404,4 +409,195 @@ async fn an_unparseable_id_is_the_callers_mistake_not_an_empty_answer() {
 
     assert_eq!(status.code(), tonic::Code::InvalidArgument);
     assert!(status.message().contains("not-a-uuid"), "{}", status.message());
+}
+
+/// Sources that can never reach the internet: the banks point at a port
+/// nothing listens on, and `CoinMarketCap` has only the key the environment
+/// gives it - none, as the suite runs.
+fn offline() -> Arc<Sources> {
+    Arc::new(Sources::new(
+        CoinMarketCap::from_env(),
+        Bcp::new().with_base_url("http://127.0.0.1:9"),
+        Cbr::new().with_base_url("http://127.0.0.1:9"),
+    ))
+}
+
+/// Serves each bank's recorded answer on a local port, or an error for a bank
+/// that is down.
+async fn banks(bcp_up: bool) -> String {
+    let bcp = include_str!("../fixtures/bcp-2026-09-18.html");
+    let cbr = include_bytes!("../fixtures/cbr-2026-09-19.xml").to_vec();
+    let app = axum::Router::new()
+        .route(
+            "/webapps/web/cotizacion/monedas",
+            axum::routing::post(move || async move { if bcp_up { Ok(bcp) } else { Err(StatusCode::SERVICE_UNAVAILABLE) } }),
+        )
+        .route("/scripts/XML_daily_eng.asp", axum::routing::get(move || async move { cbr }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await });
+    format!("http://{address}")
+}
+
+/// A ledger that keeps what it is handed, in place of the real one: this test
+/// is about what the market sends, and the ledger's own tests are about what
+/// it does with it.
+#[derive(Default, Clone)]
+struct Heard(Arc<Mutex<Vec<RecordRatesRequest>>>);
+
+#[tonic::async_trait]
+impl LedgerService for Heard {
+    async fn post_entry(&self, _: tonic::Request<PostEntryRequest>) -> Result<tonic::Response<PostEntryResponse>, tonic::Status> {
+        Err(tonic::Status::unimplemented("not part of this test"))
+    }
+
+    async fn get_balances(&self, _: tonic::Request<GetBalancesRequest>) -> Result<tonic::Response<GetBalancesResponse>, tonic::Status> {
+        Err(tonic::Status::unimplemented("not part of this test"))
+    }
+
+    async fn record_rates(&self, request: tonic::Request<RecordRatesRequest>) -> Result<tonic::Response<RecordRatesResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let recorded = u32::try_from(request.rates.len()).unwrap();
+        self.0.lock().unwrap().push(request);
+        Ok(tonic::Response::new(RecordRatesResponse { recorded }))
+    }
+}
+
+/// Starts [`Heard`] on a local port and connects to it the way the market does.
+async fn listening_ledger() -> (Ledger, Heard) {
+    let heard = Heard::default();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tonic::transport::Server::builder()
+        .add_service(LedgerServiceServer::new(heard.clone()))
+        .serve_with_incoming(tonic::transport::server::TcpIncoming::from(listener));
+    tokio::spawn(server);
+    (Ledger::connect_lazy(&format!("http://{address}")).unwrap(), heard)
+}
+
+#[tokio::test]
+async fn a_refresh_records_each_central_banks_table_and_hands_it_to_the_ledger() {
+    let Some(pool) = pool("test_market_fx_refresh").await else { return };
+    let url = banks(true).await;
+    let sources = Sources::new(CoinMarketCap::from_env(), Bcp::new().with_base_url(&url), Cbr::new().with_base_url(&url));
+    let (ledger, heard) = listening_ledger().await;
+
+    let refreshed = refresh::run(&pool, &sources, Some(&ledger), None).await.expect("refreshing");
+    assert!(refreshed.failed.is_empty(), "{:?}", refreshed.failed);
+    assert_eq!(refreshed.sources, ["bcp", "cbr"]);
+    assert_eq!(refreshed.recorded, 10);
+    assert_eq!(refreshed.rates_handed_on, 10);
+
+    // One dollar instrument, priced by both banks in their own currencies.
+    let instruments = repository::instruments(&pool).await.unwrap();
+    let usd = instruments.iter().find(|i| i.kind == Kind::Fx && i.symbol == "USD").expect("the dollar");
+    let in_pyg = repository::latest_prices(&pool, &[usd.id], "PYG").await.unwrap();
+    assert_eq!(in_pyg[0].0.price, decimal("5956.04"));
+    assert_eq!(in_pyg[0].0.observed_at, Utc.with_ymd_and_hms(2026, 9, 18, 0, 0, 0).unwrap());
+    let in_rub = repository::latest_prices(&pool, &[usd.id], "RUB").await.unwrap();
+    assert_eq!(in_rub[0].0.price, decimal("84.1975"));
+
+    // Handed on as the day's rates, in the bank's currency, for the day the
+    // bank named rather than the day asked.
+    let heard = heard.0.lock().unwrap().clone();
+    let bcp = heard.iter().find(|request| request.source == "bcp").expect("the Paraguayan table");
+    let dollar = bcp.rates.iter().find(|rate| rate.base == "USD").expect("the dollar");
+    assert_eq!(
+        (dollar.quote.as_str(), dollar.on_date.as_str(), dollar.rate.as_str()),
+        ("PYG", "2026-09-18", "5956.04")
+    );
+    assert!(
+        heard
+            .iter()
+            .any(|request| request.source == "cbr" && request.rates.iter().any(|r| r.quote == "RUB"))
+    );
+
+    // A second refresh finds the instruments the first one made.
+    refresh::run(&pool, &sources, Some(&ledger), None).await.expect("refreshing again");
+    assert_eq!(repository::instruments(&pool).await.unwrap().len(), instruments.len());
+}
+
+#[tokio::test]
+async fn a_bank_that_is_down_costs_its_own_rates_and_is_named() {
+    let Some(pool) = pool("test_market_fx_down").await else { return };
+    let url = banks(false).await;
+    let sources = Sources::new(CoinMarketCap::from_env(), Bcp::new().with_base_url(&url), Cbr::new().with_base_url(&url));
+
+    let refreshed = refresh::run(&pool, &sources, None, None).await.expect("refreshing");
+    assert_eq!(refreshed.sources, ["cbr"]);
+    assert_eq!(refreshed.failed.len(), 1);
+    assert_eq!(refreshed.failed[0].source, "bcp");
+    assert!(refreshed.failed[0].error.contains("503"), "{}", refreshed.failed[0].error);
+}
+
+#[tokio::test]
+async fn a_ledger_that_cannot_be_reached_is_a_failure_of_the_hand_over_not_of_the_refresh() {
+    let Some(pool) = pool("test_market_fx_no_ledger").await else { return };
+    let url = banks(true).await;
+    let sources = Sources::new(CoinMarketCap::from_env(), Bcp::new().with_base_url(&url), Cbr::new().with_base_url(&url));
+    let nowhere = Ledger::connect_lazy("http://127.0.0.1:9").unwrap();
+
+    let refreshed = refresh::run(&pool, &sources, Some(&nowhere), None).await.expect("refreshing");
+    // Recorded here all the same, and the failure says where it happened.
+    assert_eq!(refreshed.recorded, 10);
+    assert!(refreshed.failed.iter().all(|failure| failure.source == "ledger"), "{:?}", refreshed.failed);
+    assert_eq!(refreshed.failed.len(), 2);
+}
+
+#[tokio::test]
+async fn an_old_price_is_answered_and_marked_stale() {
+    let Some(pool) = pool("test_market_stale").await else { return };
+    let btc = repository::upsert_instrument(&pool, Kind::Crypto, "BTC", "Bitcoin", Some(8)).await.unwrap();
+    let usd = repository::upsert_instrument(&pool, Kind::Fx, "USD", "USD", None).await.unwrap();
+    let now = Utc::now();
+    repository::record_price(&pool, btc.id, "USD", now - chrono::Duration::minutes(30), decimal("61000"), "test")
+        .await
+        .unwrap();
+    repository::record_price(&pool, usd.id, "PYG", now - chrono::Duration::days(9), decimal("5900"), "bcp")
+        .await
+        .unwrap();
+
+    let (_, body) = call(&pool, "GET", &format!("/market/prices?instruments={}&currency=USD", btc.id), None).await;
+    let fresh: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(fresh[0]["stale"], false, "{body}");
+
+    let (_, body) = call(&pool, "GET", &format!("/market/prices?instruments={}&currency=PYG", usd.id), None).await;
+    let old: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(old[0]["stale"], true, "{body}");
+    // Still the number, flattened beside the flag rather than nested under it.
+    assert_eq!(decimal(old[0]["price"].as_str().unwrap()), decimal("5900"));
+}
+
+#[tokio::test]
+async fn each_source_says_whether_it_is_on_and_how_old_its_last_word_is() {
+    let Some(pool) = pool("test_market_sources").await else { return };
+    let usd = repository::upsert_instrument(&pool, Kind::Fx, "USD", "USD", None).await.unwrap();
+    let friday = Utc.with_ymd_and_hms(2026, 9, 18, 0, 0, 0).unwrap();
+    repository::record_price(&pool, usd.id, "PYG", friday, decimal("5956.04"), "bcp").await.unwrap();
+
+    let (status, body) = call(&pool, "GET", "/market/sources", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let sources: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let named = |name: &str| sources.as_array().unwrap().iter().find(|s| s["name"] == name).cloned().unwrap();
+
+    // Without the key the crypto source is off, and says what it is missing.
+    if std::env::var("AUSTERIS_CMC_API_KEY").is_err() {
+        let cmc = named("coinmarketcap");
+        assert_eq!(cmc["available"], false);
+        assert_eq!(cmc["off_because"], "AUSTERIS_CMC_API_KEY is not set");
+        assert_eq!(cmc["stale"], true, "a source that never answered is not current");
+    }
+
+    let bcp = named("bcp");
+    assert_eq!(bcp["available"], true);
+    assert_eq!(bcp["last_observed_at"], "2026-09-18T00:00:00Z");
+    assert_eq!(bcp["stale"], true, "a table from 2026-09-18 is not today's");
+}
+
+#[tokio::test]
+async fn a_refresh_for_a_day_that_has_not_happened_is_refused() {
+    let Some(pool) = pool("test_market_future").await else { return };
+    let tomorrow = Utc::now().date_naive() + chrono::Days::new(1);
+    let (status, body) = call(&pool, "POST", &format!("/market/prices/refresh?on={tomorrow}"), None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
 }

@@ -5,8 +5,10 @@
 //! service answers one kind of question: the price of an instrument, now or at
 //! a past instant.
 
+pub mod fx;
 pub mod grpc;
 pub mod model;
+pub mod refresh;
 pub mod repository;
 pub mod routes;
 pub mod source;

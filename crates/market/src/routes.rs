@@ -10,13 +10,14 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::model::{Instrument, Kind, Price};
-use crate::source::{CoinMarketCap, PriceSource};
+use crate::model::{Instrument, Kind, LatestPrice, Price, SourceStatus};
+use crate::refresh::{self, Failure, Ledger, Refreshed, Sources};
+use crate::source::PriceSource;
 use crate::{MIGRATOR, repository};
 
 /// What every handler here needs.
@@ -24,38 +25,18 @@ use crate::{MIGRATOR, repository};
 pub struct ServiceState {
     pool: PgPool,
     sources: Arc<Sources>,
-}
-
-/// The sources this service can ask, in the order it asks them.
-pub struct Sources {
-    coinmarketcap: CoinMarketCap,
-}
-
-impl Sources {
-    /// Builds the set from the environment.
-    #[must_use]
-    pub fn from_env() -> Self {
-        Self {
-            coinmarketcap: CoinMarketCap::from_env(),
-        }
-    }
-
-    /// Names the sources that are switched on.
-    #[must_use]
-    pub fn available(&self) -> Vec<&'static str> {
-        let mut names = Vec::new();
-        if self.coinmarketcap.is_available() {
-            names.push(self.coinmarketcap.name());
-        }
-        names
-    }
+    ledger: Option<Ledger>,
 }
 
 /// Builds the service's router.
-pub fn router(pool: PgPool, sources: Sources) -> Router {
+///
+/// `ledger` is where official rates are handed on after a refresh; `None`
+/// records them here only, which is what a test of this service alone wants.
+pub fn router(pool: PgPool, sources: Arc<Sources>, ledger: Option<Ledger>) -> Router {
     let state = ServiceState {
         pool: pool.clone(),
-        sources: Arc::new(sources),
+        sources,
+        ledger,
     };
 
     Router::new()
@@ -67,6 +48,7 @@ pub fn router(pool: PgPool, sources: Sources) -> Router {
         .route("/market/prices", get(latest_prices))
         .route("/market/prices/{id}/history", get(price_history))
         .route("/market/prices/refresh", post(refresh_prices))
+        .route("/market/sources", get(list_sources))
         .with_state(state)
 }
 
@@ -185,15 +167,17 @@ fn default_currency() -> String {
 }
 
 /// An instrument with no price is absent from the answer rather than an error:
-/// one unpriced instrument must not cost a whole batch.
+/// one unpriced instrument must not cost a whole batch. A price older than its
+/// kind stays current for is still answered - it is the last one known - and
+/// marked `stale`, so it is not read as now.
 #[utoipa::path(
     get,
     path = "/api/v1/market/prices",
     tag = "market",
     params(PriceQuery),
-    responses((status = 200, description = "The latest price of each instrument", body = Vec<Price>)),
+    responses((status = 200, description = "The latest price of each instrument, and whether it is still current", body = Vec<LatestPrice>)),
 )]
-async fn latest_prices(State(state): State<ServiceState>, Query(query): Query<PriceQuery>) -> AppResult<Json<Vec<Price>>> {
+async fn latest_prices(State(state): State<ServiceState>, Query(query): Query<PriceQuery>) -> AppResult<Json<Vec<LatestPrice>>> {
     let ids = match &query.instruments {
         Some(list) => list
             .split(',')
@@ -206,7 +190,17 @@ async fn latest_prices(State(state): State<ServiceState>, Query(query): Query<Pr
         None => repository::instruments(&state.pool).await?.into_iter().map(|i| i.id).collect(),
     };
 
-    Ok(Json(repository::latest_prices(&state.pool, &ids, &query.currency).await?))
+    let now = Utc::now();
+    Ok(Json(
+        repository::latest_prices(&state.pool, &ids, &query.currency)
+            .await?
+            .into_iter()
+            .map(|(price, kind)| LatestPrice {
+                stale: kind.is_stale(price.observed_at, now),
+                price,
+            })
+            .collect(),
+    ))
 }
 
 /// The window a history is asked for.
@@ -281,7 +275,7 @@ pub struct Synced {
     ),
 )]
 async fn sync_instruments(State(state): State<ServiceState>, Query(query): Query<SyncQuery>) -> AppResult<Json<Synced>> {
-    let source = &state.sources.coinmarketcap;
+    let source = state.sources.coinmarketcap();
     if !source.is_available() {
         return Err(AppError::new(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -306,76 +300,51 @@ async fn sync_instruments(State(state): State<ServiceState>, Query(query): Query
     }))
 }
 
-/// What a refresh did.
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-pub struct Refreshed {
-    /// How many prices were recorded.
-    pub recorded: usize,
-    /// Which sources answered.
-    pub sources: Vec<String>,
-    /// Sources that were asked and failed - a partial refresh reports rather
-    /// than pretends.
-    pub failed: Vec<String>,
+/// Which day a refresh is for.
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+pub struct RefreshQuery {
+    /// A past day, to fill in the official rates of a day this installation
+    /// missed. The latest of everything when omitted.
+    pub on: Option<NaiveDate>,
 }
 
-/// Asks every available source for the instruments bound to it.
+/// Asks every available source, records what it said, and hands official rates
+/// on to the ledger.
 ///
-/// Sources are independent: one failing costs its own instruments' prices and
-/// nothing else. In 2025 there was one source, it went down, and prices simply
-/// stopped accruing with nothing saying so.
+/// The service does this by itself every hour; this is for not waiting, and
+/// for a past day - a central bank answers for any date, so an exchange
+/// recorded for last month can be measured against that day's rate. Sources are
+/// independent: one failing costs its own prices and nothing else, and is named
+/// in `failed`.
 #[utoipa::path(
     post,
     path = "/api/v1/market/prices/refresh",
     tag = "market",
+    params(RefreshQuery),
     responses((status = 200, description = "What was recorded, and which sources failed", body = Refreshed)),
 )]
-async fn refresh_prices(State(state): State<ServiceState>) -> AppResult<Json<Refreshed>> {
-    let mut recorded = 0;
-    let mut answered = Vec::new();
-    let mut failed = Vec::new();
-
-    for source in state.sources.available() {
-        let bindings = repository::bindings_for(&state.pool, source).await?;
-        if bindings.is_empty() {
-            continue;
-        }
-
-        let external_ids: Vec<String> = bindings.iter().map(|b| b.external_id.clone()).collect();
-        let quotes = match state.sources.coinmarketcap.quotes(&external_ids).await {
-            Ok(quotes) => quotes,
-            Err(error) => {
-                tracing::error!(source, %error, "a price source failed");
-                failed.push(source.to_owned());
-                continue;
-            }
-        };
-
-        for quote in quotes {
-            let Some(binding) = bindings.iter().find(|b| b.external_id == quote.external_id) else {
-                // The source answered about something nobody asked for. Not an
-                // error, but not ours to store either.
-                continue;
-            };
-            repository::record_price(
-                &state.pool,
-                binding.instrument_id,
-                &quote.quote_currency,
-                quote.observed_at,
-                quote.price,
-                source,
-            )
-            .await?;
-            recorded += 1;
-        }
-
-        answered.push(source.to_owned());
+async fn refresh_prices(State(state): State<ServiceState>, Query(query): Query<RefreshQuery>) -> AppResult<Json<Refreshed>> {
+    if query.on.is_some_and(|day| day > Utc::now().date_naive()) {
+        return Err(AppError::bad_request(anyhow::anyhow!(
+            "no source publishes a rate for a day that has not happened"
+        )));
     }
+    Ok(Json(refresh::run(&state.pool, &state.sources, state.ledger.as_ref(), query.on).await?))
+}
 
-    Ok(Json(Refreshed {
-        recorded,
-        sources: answered,
-        failed,
-    }))
+/// Every source, whether it is on, and how old what it last said is.
+///
+/// The answer to "why is this price from last Tuesday": a source switched off
+/// for want of a key, or one that has stopped answering, shows here with the
+/// time of its last observation.
+#[utoipa::path(
+    get,
+    path = "/api/v1/market/sources",
+    tag = "market",
+    responses((status = 200, description = "Each source's state", body = Vec<SourceStatus>)),
+)]
+async fn list_sources(State(state): State<ServiceState>) -> AppResult<Json<Vec<SourceStatus>>> {
+    Ok(Json(state.sources.status(&state.pool).await?))
 }
 
 /// This service's share of the platform's `OpenAPI` document.
@@ -383,8 +352,29 @@ async fn refresh_prices(State(state): State<ServiceState>) -> AppResult<Json<Ref
 /// The paths are the public ones - what a client calls through the gateway.
 #[derive(utoipa::OpenApi)]
 #[openapi(
-    paths(list_instruments, read_instrument, create_instrument, bind_source, sync_instruments, latest_prices, price_history, refresh_prices),
-    components(schemas(Instrument, Price, Kind, NewInstrument, NewBinding, Synced, Refreshed)),
+    paths(
+        list_instruments,
+        read_instrument,
+        create_instrument,
+        bind_source,
+        sync_instruments,
+        latest_prices,
+        price_history,
+        refresh_prices,
+        list_sources
+    ),
+    components(schemas(
+        Instrument,
+        Price,
+        LatestPrice,
+        Kind,
+        NewInstrument,
+        NewBinding,
+        Synced,
+        Refreshed,
+        Failure,
+        SourceStatus
+    )),
     tags((name = "market", description = "Instruments and their prices")),
 )]
 pub struct ApiDoc;
