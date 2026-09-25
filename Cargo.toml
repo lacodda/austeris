@@ -35,10 +35,13 @@ rand = "0.10.2"
 # platform - the one case where twenty lines of our own would be twenty lines
 # of termios and console-mode bugs.
 rpassword = "7.4.0"
-# The gateway forwards to services over the private compose network, which is
-# plain HTTP by construction - so no TLS stack is pulled in at all. Anything
-# reaching austeris from outside is terminated in front of the gateway.
-reqwest = { version = "0.13.4", default-features = false, features = ["stream", "query"] }
+# TLS for what leaves the machine: a price source is an HTTPS endpoint on the
+# internet, and `austeris add` may talk to an installation behind a TLS
+# terminator. `rustls-no-provider` rather than `rustls`, which would bring
+# aws-lc-rs and a C toolchain into the arm64 image build; the provider is ring,
+# already here for sqlx, and austeris_common::http installs it.
+reqwest = { version = "0.13.4", default-features = false, features = ["stream", "query", "rustls-no-provider"] }
+rustls = { version = "0.23.43", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1.0.229", features = ["derive"] }
 # `arbitrary_precision` is what actually keeps a price whole. Without it
 # serde_json parses every JSON number into an f64 first, and 61234.567890123456

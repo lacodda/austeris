@@ -76,7 +76,7 @@ impl CoinMarketCap {
     #[must_use]
     pub fn from_env() -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: austeris_common::http::client(),
             // Read once, never logged: a key in a log line is a key in whatever
             // that log is shipped to.
             api_key: std::env::var("AUSTERIS_CMC_API_KEY").ok().filter(|key| !key.is_empty()),
@@ -314,7 +314,7 @@ mod tests {
     fn a_source_without_a_key_is_off_rather_than_broken() {
         // The service must start and say so, not fail every refresh.
         let source = CoinMarketCap {
-            client: reqwest::Client::new(),
+            client: austeris_common::http::client(),
             api_key: None,
             base_url: String::new(),
         };
@@ -325,7 +325,7 @@ mod tests {
     #[tokio::test]
     async fn asking_a_switched_off_source_says_why() {
         let source = CoinMarketCap {
-            client: reqwest::Client::new(),
+            client: austeris_common::http::client(),
             api_key: None,
             base_url: String::new(),
         };

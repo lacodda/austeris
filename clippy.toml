@@ -1,0 +1,8 @@
+# Every HTTP client comes from austeris_common::http::client(). reqwest is built
+# with TLS but without a cryptography provider of its own, and panics when a
+# client is made before one is installed - which that function does first.
+disallowed-methods = [
+    { path = "reqwest::Client::new", reason = "use austeris_common::http::client(), which installs the TLS provider first" },
+    { path = "reqwest::Client::builder", reason = "use austeris_common::http::client(), which installs the TLS provider first" },
+    { path = "reqwest::get", reason = "use austeris_common::http::client(), which installs the TLS provider first" },
+]

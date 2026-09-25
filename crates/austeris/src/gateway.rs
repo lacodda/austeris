@@ -30,7 +30,7 @@ struct Upstream {
 
 /// Builds the gateway's router, forwarding to the services at `peers`.
 pub fn router(peers: &Peers) -> Router {
-    let client = reqwest::Client::new();
+    let client = austeris_common::http::client();
 
     let mut api = Router::new();
     for service in Service::routed() {

@@ -58,7 +58,7 @@ pub async fn login(args: &LoginArgs) -> Result<()> {
         None => rpassword::prompt_password("password: ").context("reading the password")?,
     };
 
-    let client = reqwest::Client::new();
+    let client = austeris_common::http::client();
     let response = client
         .post(format!("{}/api/v1/auth/login", base_url()))
         .json(&serde_json::json!({ "email": args.email, "password": password }))
@@ -101,7 +101,7 @@ pub async fn add(args: &AddArgs) -> Result<()> {
         body["occurred_on"] = serde_json::Value::String(on.clone());
     }
 
-    let response = reqwest::Client::new()
+    let response = austeris_common::http::client()
         .post(format!("{}/api/v1/ledger/entries/quick", base_url()))
         .header(reqwest::header::COOKIE, session)
         .json(&body)
