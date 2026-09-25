@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.8.0] - 2026-09-25
+
+### Bug Fixes
+- Speak TLS to price sources and remote installations
+- Migrate an installation that already has entries
+
+### Dependencies
+- Update the toolchain and dependencies
+
+### Features
+- Exchange money between currencies, with the fee on a line of its own
+- Read the day's rates from the central banks of Paraguay and Russia
+
+
 ## [0.7.0] - 2026-09-23
 
 ### Build
