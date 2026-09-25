@@ -13,12 +13,12 @@
     "astro": "astro"
   },
   "dependencies": {
-    "@astrojs/starlight": "^0.41.9",
-    "astro": "^7.2.9",
+    "@astrojs/starlight": "^0.42.4",
+    "astro": "^7.3.5",
     "sharp": "^0.35.4",
-    "starlight-openapi": "^0.26.1"
+    "starlight-openapi": "^0.26.2"
   },
   "devDependencies": {
-    "@astrojs/markdown-satteri": "^0.4.0"
+    "@astrojs/markdown-satteri": "^0.4.2"
   }
 }
