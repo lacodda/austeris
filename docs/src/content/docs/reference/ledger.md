@@ -83,9 +83,16 @@ name means both, the one-line form asks which rather than guessing.
 }
 ```
 
-At least two lines, each naming an account **or** a category and never both.
-Amounts are signed: negative leaves, positive arrives. `occurred_on` is the day
-the money moved — not the instant it was recorded — and defaults to today.
+At least two lines, each naming exactly one of an account, a category, or
+`"conversion": true`. Amounts are signed: negative leaves, positive arrives.
+`occurred_on` is the day the money moved — not the instant it was recorded — and
+defaults to today.
+
+A line on an account is in the account's currency; money in another currency
+reaches it through a **conversion**. An entry's conversion lines take one
+currency in and give another out — how is in
+[Money that changes currency](/austeris/concepts/double-entry/#money-that-changes-currency).
+Every line comes back with its `side`: `account`, `category` or `conversion`.
 
 The lines must sum to zero in every currency they touch. They are checked here
 and again at the database's commit; an entry that does not balance is refused
@@ -104,7 +111,7 @@ One typed line, which is the fastest way there is to record an expense:
 { "text": "45000 food lunch at the corner" }
 ```
 
-The shape is `[+]<amount> [<currency>] <category> [from|to <account>] [note…]`:
+The shape is `[+]<amount> [<currency>] <category> [from|to <account>] [@<rate>] [note…]`:
 
 | Typed | Means |
 | --- | --- |
@@ -114,6 +121,8 @@ The shape is `[+]<amount> [<currency>] <category> [from|to <account>] [note…]`
 | `+2500000 salary september` | money coming **in**: `+` is the only mark that turns a line around |
 | `25000 travel/taxi` | a path, when a bare name means more than one category |
 | `1,500.50 food` / `1.500,50 food` | the same amount; thousands separators and either decimal mark |
+| `10 usd subscriptions from card` | 10 USD charged to a guarani card, converted at the day's rate |
+| `10 usd subscriptions @5965 from card` | …at the rate the bank actually charged |
 
 `-45000` is **not** accepted as the opposite of `+`. An expense is what a bare
 line already means, and a second spelling of the common case is how a `-` typed
@@ -130,6 +139,32 @@ rather than guessed:
 The same parser serves `austeris add` and, later, the phone screen: a sentence
 means the same thing wherever it is typed.
 
+An amount in a currency other than the account's is **converted**. The category
+keeps the amount as it was charged — a 10 USD subscription is 10 USD in any
+report kept in dollars — and the account moves by what that was in its own
+currency, rounded to the places that currency has (whole guaranies, cents). The
+rate is the one written after `@`, or the day's rate when there is none; with no
+rate known for the day at all, the line is refused and asks for one. A rate that
+differs from the day's is measured against it, and the difference is filed as an
+exchange fee, exactly as for an [exchange](#exchanges).
+
+The answer is the entry and, when money changed currency, what converting it
+did:
+
+```json
+{
+  "entry": { "id": "…", "occurred_on": "2026-09-25", "description": "streaming", "lines": ["…"] },
+  "conversion": {
+    "given": { "amount": "59650", "currency": "PYG" },
+    "got": { "amount": "10", "currency": "USD" },
+    "deal": { "base": "USD", "quote": "PYG", "rate": "5965" },
+    "reference": { "base_currency": "USD", "quote_currency": "PYG", "rate": "5900.28",
+                   "on_date": "2026-09-24", "source": "bcp", "age_days": 1, "stale": false },
+    "fee": { "amount": "647", "currency": "PYG" }
+  }
+}
+```
+
 ### `GET /api/v1/ledger/entries`
 
 Newest first. Takes `?from=`, `?to=`, `?account=`, `?category=`, `?limit=`
@@ -139,6 +174,41 @@ Newest first. Takes `?from=`, `?to=`, `?account=`, `?category=`, `?limit=`
 
 A whole entry with its lines, never one line: half an entry is money from
 nowhere.
+
+## Exchanges
+
+### `POST /api/v1/ledger/exchanges`
+
+Money changed from one account's currency into another's:
+
+```json
+{ "from_account": "…", "given": "600000", "to_account": "…", "got": "100",
+  "occurred_on": "2026-09-25", "description": "cambios on the corner" }
+```
+
+Each amount is in its own account's currency. The two amounts are what changed
+hands, and the rate of the deal is what they imply — `deal` in the answer, never
+stored beside them, because a copy of the rate would disagree with the amounts
+the first time either is corrected.
+
+The **day's rate** is the reference instead: the newest rate on or before the
+day, from a central bank or one you recorded. What you gave beyond what the
+received amount was worth at it is what the bank or the exchange office kept,
+and it is recorded as a line of its own under a category the ledger keeps for
+the purpose — created as *Exchange fees* the first time, and found by purpose
+afterwards, however you rename or move it. A deal better than the reference is a
+negative fee, in the same category. The fee is always in the currency you gave.
+
+The answer has the same shape as a converted one-line entry, with
+`conversion.fee` absent when the deal matched the reference, and
+`conversion.no_fee` saying why when a fee could not be measured:
+
+| `no_fee` | Means |
+| --- | --- |
+| `no_reference` | no rate for the pair is known on or before the day |
+| `stale_reference` | the rate known is older than a long weekend, and would call the currency's own movement a fee |
+
+Both accounts in one currency is a transfer, and is refused.
 
 ## Balances
 
@@ -164,6 +234,11 @@ includes the day itself — an entry on that date has happened by the end of it.
 A balance in a currency with no rate for the day carries **no** `converted`
 field, and its currency is named in `total.unconverted`.
 
+A converted balance carries `rate_used` — the rate, the day it was set for, its
+source and its age. A currency converted at a rate older than a long weekend is
+named in `total.stale`: its money is in the total, at a rate that may no longer
+be true.
+
 ## Rates
 
 ### `POST /api/v1/ledger/rates`
@@ -176,9 +251,35 @@ How many of `quote` one `base` buys. `on_date` defaults to today. A rate recorde
 one way answers the other way round, inverted, so there is no second row to keep
 in agreement.
 
+A rate you record replaces what was recorded for that pair and day. Rates the
+central banks publish arrive on their own ([Prices and rates](/austeris/reference/market/))
+and never replace anything: a rate that valued a past entry does not change when
+a bank revises its history, and one you typed outranks theirs.
+
 ### `GET /api/v1/ledger/rates`
 
 Takes `?base=`, `?quote=` and `?limit=` (30 by default). Newest first.
+
+### `GET /api/v1/ledger/rates/at`
+
+The rate in force on a day — what a screen suggests before an amount in another
+currency is recorded:
+
+```json
+{ "base_currency": "USD", "quote_currency": "PYG", "rate": "5900.28",
+  "on_date": "2026-09-24", "source": "bcp", "age_days": 1, "stale": false }
+```
+
+Takes `?base=`, `?quote=` and `?on=` (today by default). The answer is the newest
+rate not after the day, for the pair as recorded, inverted, or through a third
+currency both have a rate with — guaranies in roubles come from the dollar rates
+of two central banks, and say so as `"source": "bcp+cbr via USD"`. The freshest
+answer wins; on the same day a recorded pair beats a derived one.
+
+`stale` is `true` once the rate is more than four days older than the day asked
+about — a weekend with a holiday on either side. It is still answered, because it
+is the last thing known; the flag is what keeps it from being read as today's.
+`404` when nothing is known on or before the day.
 
 ## From a terminal
 
@@ -194,6 +295,22 @@ Recorded -45000 PYG on 2026-09-17 - lunch at the corner
 `austeris add` takes its words unquoted or quoted, and `--on YYYY-MM-DD` for a
 day other than today. It calls this API like any other client: the gateway is
 the only way in, and the line is parsed by the service, not by the CLI.
+
+A converted line says what the conversion did:
+
+```console
+$ austeris add 10 usd subscriptions @5965 streaming from card
+Recorded -59650 PYG on 2026-09-25 - streaming
+  at 5965 PYG per USD; the day's rate was 5900.28 PYG per USD (bcp, 2026-09-24, a day old); the exchange kept 647 PYG
+```
+
+An exchange names the two accounts, each amount in its own account's currency:
+
+```console
+$ austeris exchange 600000 cash 100 dollars --note "cambios on the corner"
+Exchanged 600000 PYG from Cash for 100 USD into Dollars on 2026-09-25
+  at 6000 PYG per USD; the day's rate was 5900.28 PYG per USD (bcp, 2026-09-24, a day old); the exchange kept 9972 PYG
+```
 
 `AUSTERIS_URL` points it at an installation other than
 `http://127.0.0.1:8084`.

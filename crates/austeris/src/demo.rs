@@ -18,8 +18,9 @@
 
 use anyhow::{Context, Result, bail};
 use austeris_common::{Config, db};
-use austeris_ledger::model::{AccountKind, Flow};
-use austeris_ledger::repository::{self as ledger, NewEntry, NewLine};
+use austeris_ledger::exchange::{self, Money};
+use austeris_ledger::model::{AccountKind, Flow, Purpose};
+use austeris_ledger::repository::{self as ledger, NewEntry, NewLine, Side};
 use austeris_market::model::Kind;
 use austeris_market::repository as market;
 use chrono::{Datelike, Days, NaiveDate, NaiveTime, Utc};
@@ -145,13 +146,19 @@ pub async fn seed(books: &Books) -> Result<Seeded> {
     let household = Household::open(&books.ledger, owner).await?;
     let mut entries = 0;
     for day in first.iter_days().take_while(|day| *day <= today) {
-        for entry in household.day(day) {
+        // What a dollar cost in euros, for the one account kept in dollars -
+        // recorded before the day's entries, because the exchange before a trip
+        // is measured against it.
+        ledger::record_rate(&books.ledger, "USD", "EUR", day, usd_in_eur(day), SOURCE).await?;
+        let mut day_entries = household.day(day);
+        if let Some(exchange) = household.exchange(&books.ledger, owner, day).await? {
+            day_entries.push(exchange);
+        }
+        for entry in day_entries {
             if ledger::post_entry(&books.ledger, owner, &entry).await?.created {
                 entries += 1;
             }
         }
-        // What a dollar cost in euros, for the one account kept in dollars.
-        ledger::record_rate(&books.ledger, "USD", "EUR", day, wave(day, 0.92, 0.03, 45.0), SOURCE).await?;
     }
 
     prices(&books.market, first, today).await?;
@@ -284,6 +291,51 @@ impl Household {
     }
 }
 
+impl Household {
+    /// Euros changed into dollars two days before each trip, at an exchange
+    /// office that keeps a percent and a half - so the fee category has
+    /// something in it, and the balances page a conversion to show.
+    async fn exchange(&self, pool: &PgPool, owner: Uuid, day: NaiveDate) -> Result<Option<NewEntry>> {
+        if !(day.month().is_multiple_of(2) && day.day() == 10) {
+            return Ok(None);
+        }
+
+        let given = Decimal::from(400);
+        let rate = usd_in_eur(day) * Decimal::new(1015, 3);
+        let got = (given / rate).round_dp(2);
+        let reference = ledger::rate_in_force(pool, "USD", "EUR", day).await?;
+        let plan = exchange::plan(
+            Money {
+                amount: given,
+                currency: "EUR".to_owned(),
+            },
+            Money {
+                amount: got,
+                currency: "USD".to_owned(),
+            },
+            reference,
+        )?;
+        let fees = if plan.has_fee() {
+            Some(ledger::purpose_category(pool, owner, Purpose::ExchangeFees).await?.id)
+        } else {
+            None
+        };
+
+        Ok(Some(NewEntry {
+            occurred_on: day,
+            description: "Dollars for the trip".to_owned(),
+            idempotency_key: Some(format!("{SOURCE}:{day}:exchange")),
+            source: Some(SOURCE.to_owned()),
+            lines: plan.lines(Side::Account(self.everyday), Side::Account(self.travel), fees)?,
+        }))
+    }
+}
+
+/// What a dollar cost in euros on a day, in the demo's invented market.
+fn usd_in_eur(day: NaiveDate) -> Decimal {
+    wave(day, 0.92, 0.03, 45.0)
+}
+
 /// A category under `parent`, found by name or created.
 async fn category(pool: &PgPool, owner: Uuid, parent: Option<Uuid>, flow: Flow, name: &str) -> Result<Uuid> {
     let existing = ledger::categories(pool, owner)
@@ -296,19 +348,8 @@ async fn category(pool: &PgPool, owner: Uuid, parent: Option<Uuid>, flow: Flow, 
     }
 }
 
-/// The other side of a movement.
-#[derive(Clone, Copy)]
-enum Side {
-    Category(Uuid),
-    Account(Uuid),
-}
-
 /// A two-line entry: `amount` on the account, its opposite on the other side.
 fn movement(day: NaiveDate, key: &str, (account, currency): (Uuid, &str), other: Side, amount: Decimal, what: &str) -> NewEntry {
-    let (account_id, category_id) = match other {
-        Side::Category(id) => (None, Some(id)),
-        Side::Account(id) => (Some(id), None),
-    };
     NewEntry {
         occurred_on: day,
         description: what.to_owned(),
@@ -316,15 +357,13 @@ fn movement(day: NaiveDate, key: &str, (account, currency): (Uuid, &str), other:
         source: Some(SOURCE.to_owned()),
         lines: vec![
             NewLine {
-                account_id: Some(account),
-                category_id: None,
+                side: Side::Account(account),
                 amount,
                 currency: currency.to_owned(),
                 note: String::new(),
             },
             NewLine {
-                account_id,
-                category_id,
+                side: other,
                 amount: -amount,
                 currency: currency.to_owned(),
                 note: String::new(),

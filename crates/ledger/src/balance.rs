@@ -10,7 +10,7 @@ use chrono::NaiveDate;
 use rust_decimal::Decimal;
 use sqlx::PgPool;
 
-use crate::model::Balance;
+use crate::model::{Balance, RateInForce};
 use crate::repository;
 
 /// How many decimal places a converted amount carries.
@@ -36,6 +36,9 @@ pub struct Total {
     /// third of someone's money is worse than no total, because it looks like
     /// an answer.
     pub unconverted: Vec<String>,
+    /// Currencies converted at a rate older than a long weekend, so `amount`
+    /// is built on a number that may no longer be true.
+    pub stale: Vec<String>,
 }
 
 /// Converts balances into one currency and adds them up.
@@ -51,6 +54,7 @@ pub struct Total {
 pub async fn convert(pool: &PgPool, balances: &mut [Balance], into: &str, as_of: NaiveDate) -> Result<Total> {
     let mut total = Decimal::ZERO;
     let mut unconverted: Vec<String> = Vec::new();
+    let mut stale: Vec<String> = Vec::new();
 
     // One lookup per distinct currency, not per account: a person with six
     // guarani accounts asks for the guarani rate once.
@@ -58,20 +62,30 @@ pub async fn convert(pool: &PgPool, balances: &mut [Balance], into: &str, as_of:
     currencies.sort_unstable();
     currencies.dedup();
 
-    let mut rates: Vec<(String, Option<Decimal>)> = Vec::with_capacity(currencies.len());
+    let mut rates: Vec<(String, Option<RateInForce>)> = Vec::with_capacity(currencies.len());
     for currency in currencies {
-        let rate = repository::rate_at(pool, &currency, into, as_of).await?.map(|found| found.rate);
+        let rate = repository::rate_in_force(pool, &currency, into, as_of).await?;
+        if rate.as_ref().is_some_and(|rate| rate.stale) {
+            stale.push(currency.clone());
+        }
         rates.push((currency, rate));
     }
 
     for balance in balances.iter_mut() {
-        let rate = rates.iter().find(|(currency, _)| *currency == balance.currency).and_then(|(_, rate)| *rate);
+        let rate = rates
+            .iter()
+            .find(|(currency, _)| *currency == balance.currency)
+            .and_then(|(_, rate)| rate.clone());
         if let Some(rate) = rate {
-            let converted = (balance.amount * rate).round_dp(SCALE);
+            let converted = (balance.amount * rate.rate).round_dp(SCALE);
             balance.converted = Some(converted);
+            // A currency in itself needs no rate shown; one that was converted
+            // says at what, and how old that was.
+            balance.rate_used = (balance.currency != into).then_some(rate);
             total += converted;
         } else {
             balance.converted = None;
+            balance.rate_used = None;
             if !unconverted.contains(&balance.currency) {
                 unconverted.push(balance.currency.clone());
             }
@@ -84,6 +98,7 @@ pub async fn convert(pool: &PgPool, balances: &mut [Balance], into: &str, as_of:
         // scale than any of them, and the total is what a person reads.
         amount: total.round_dp(SCALE),
         unconverted,
+        stale,
     })
 }
 

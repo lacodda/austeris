@@ -15,6 +15,10 @@ service LedgerService {
   rpc PostEntry(PostEntryRequest) returns (PostEntryResponse);
   // What an account holds, as its lines add up.
   rpc GetBalances(GetBalancesRequest) returns (GetBalancesResponse);
+  // Records rates a source published. The ledger keeps the rate that valued an
+  // entry, so a rate already recorded for a pair and a day is never replaced -
+  // not by a source revising its history, and not over one a person typed.
+  rpc RecordRates(RecordRatesRequest) returns (RecordRatesResponse);
 }
 
 message PostEntryRequest {
@@ -48,11 +52,12 @@ message PostEntryResponse {
 }
 
 message Line {
-  // Exactly one of these two. A line is either a movement of an account's
-  // balance or an attribution to a category.
+  // Exactly one of these. A line is a movement of an account's balance, an
+  // attribution to a category, or money changing currency inside the entry.
   oneof side {
     string account_id = 1;
     string category_id = 2;
+    Conversion conversion = 6;
   }
   // The signed amount, as a decimal string - never a double: protobuf has no
   // decimal type, and money that travels as a float is not the money anyone
@@ -63,6 +68,13 @@ message Line {
   // What this side was for, when the entry's description is not enough.
   string note = 5;
 }
+
+// Money changing currency. An entry's conversion lines take one currency in and
+// give another out, so each currency still sums to zero on its own: a trade of
+// 100 USD for 0.0016 BTC is -100 USD on the dollar account, +100 USD and
+// -0.0016 BTC on the conversion, and +0.0016 BTC on the wallet. It carries
+// nothing - which side a line is on is the whole of what it says.
+message Conversion {}
 
 message GetBalancesRequest {
   string owner_id = 1;
@@ -88,4 +100,33 @@ message Balance {
   // no rate for that day was available - empty rather than a zero or a copy of
   // `amount`, either of which a caller could add up into a wrong total.
   string converted = 5;
+  // The day the rate behind `converted` was set for, `YYYY-MM-DD`. Empty when
+  // nothing was converted, or the account is already in the currency asked for.
+  string rate_on = 6;
+  // Whether that rate was older than a long weekend by `as_of`. A caller adding
+  // `converted` into a total carries this forward rather than presenting the
+  // sum as current.
+  bool rate_stale = 7;
+}
+
+message RecordRatesRequest {
+  // Which source published them - `bcp`, `cbr` - kept on every rate recorded.
+  string source = 1;
+  repeated Rate rates = 2;
+}
+
+message Rate {
+  // The currency being priced.
+  string base = 1;
+  // The currency it is priced in.
+  string quote = 2;
+  // The day the source set it for, `YYYY-MM-DD`.
+  string on_date = 3;
+  // How many of `quote` one `base` buys, as a decimal string (ADR 0004).
+  string rate = 4;
+}
+
+message RecordRatesResponse {
+  // How many were new. The rest were already recorded and were kept.
+  uint32 recorded = 1;
 }

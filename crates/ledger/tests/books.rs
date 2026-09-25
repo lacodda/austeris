@@ -17,10 +17,10 @@ use austeris_common::{Config, USER_HEADER, db};
 // socket: what is worth testing is the contract's answers, not tonic's
 // transport.
 use austeris_proto::ledger::v1::ledger_service_server::LedgerService as _;
-use austeris_proto::ledger::v1::{GetBalancesRequest, Line as ProtoLine, PostEntryRequest, line::Side};
+use austeris_proto::ledger::v1::{GetBalancesRequest, Line as ProtoLine, PostEntryRequest, Rate as ProtoRate, RecordRatesRequest, line::Side as ProtoSide};
 
-use austeris_ledger::model::{AccountKind, Flow};
-use austeris_ledger::repository::{NewEntry, NewLine};
+use austeris_ledger::model::{AccountKind, Flow, Purpose};
+use austeris_ledger::repository::{NewEntry, NewLine, Side};
 use austeris_ledger::{MIGRATOR, grpc, repository, routes};
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
@@ -121,15 +121,13 @@ fn spend(books: &Books, amount: &str, on: NaiveDate) -> NewEntry {
         source: None,
         lines: vec![
             NewLine {
-                account_id: Some(books.account),
-                category_id: None,
+                side: Side::Account(books.account),
                 amount: -decimal(amount),
                 currency: "PYG".to_owned(),
                 note: String::new(),
             },
             NewLine {
-                account_id: None,
-                category_id: Some(books.food),
+                side: Side::Category(books.food),
                 amount: decimal(amount),
                 currency: "PYG".to_owned(),
                 note: String::new(),
@@ -242,22 +240,19 @@ async fn a_split_receipt_is_one_entry_with_one_payment() {
             source: None,
             lines: vec![
                 NewLine {
-                    account_id: Some(books.account),
-                    category_id: None,
+                    side: Side::Account(books.account),
                     amount: decimal("-50000"),
                     currency: "PYG".to_owned(),
                     note: String::new(),
                 },
                 NewLine {
-                    account_id: None,
-                    category_id: Some(books.food),
+                    side: Side::Category(books.food),
                     amount: decimal("30000"),
                     currency: "PYG".to_owned(),
                     note: "groceries".to_owned(),
                 },
                 NewLine {
-                    account_id: None,
-                    category_id: Some(transport.id),
+                    side: Side::Category(transport.id),
                     amount: decimal("20000"),
                     currency: "PYG".to_owned(),
                     note: "bus fare".to_owned(),
@@ -294,15 +289,13 @@ async fn a_transfer_between_accounts_touches_no_category() {
             source: None,
             lines: vec![
                 NewLine {
-                    account_id: Some(books.account),
-                    category_id: None,
+                    side: Side::Account(books.account),
                     amount: decimal("-60000"),
                     currency: "PYG".to_owned(),
                     note: String::new(),
                 },
                 NewLine {
-                    account_id: Some(bank.id),
-                    category_id: None,
+                    side: Side::Account(bank.id),
                     amount: decimal("60000"),
                     currency: "PYG".to_owned(),
                     note: String::new(),
@@ -328,16 +321,83 @@ async fn a_transfer_between_accounts_touches_no_category() {
 }
 
 #[tokio::test]
-async fn an_exchange_balances_in_each_currency_separately() {
+async fn an_exchange_moves_each_account_in_its_own_currency_and_files_what_was_kept() {
     let Some(pool) = pool("test_ledger_exchange").await else { return };
     let books = books(&pool).await;
     let dollars = repository::create_account(&pool, books.owner, AccountKind::Cash, "Dollars", "USD", Decimal::ZERO)
         .await
         .expect("creating an account");
+    // Thursday's central bank rate; the exchange happens on Friday.
+    repository::record_rate(&pool, "USD", "PYG", day(2026, 9, 24), decimal("5900.28"), "bcp")
+        .await
+        .expect("recording a rate");
 
-    // 75000 PYG bought 10 USD. Neither side is the other converted: the entry
-    // states both, which is what makes the rate a fact of the entry.
-    repository::post_entry(
+    let (status, body) = call(
+        &pool,
+        books.owner,
+        "POST",
+        "/ledger/exchanges",
+        Some(&format!(
+            r#"{{"from_account":"{}","given":"60000","to_account":"{}","got":"10","occurred_on":"2026-09-25"}}"#,
+            books.account, dollars.id
+        )),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let recorded: serde_json::Value = serde_json::from_str(&body).expect("json");
+
+    // Each account moved in its own currency - the guarani wallet by guaranies
+    // only, which is what the old four-line shape got wrong.
+    let balances = repository::balances(&pool, books.owner, day(2026, 9, 30)).await.expect("reading");
+    let wallet = balances.iter().find(|b| b.account_id == books.account).expect("the wallet");
+    let usd = balances.iter().find(|b| b.account_id == dollars.id).expect("the dollars");
+    assert_eq!(wallet.amount, decimal("40000"));
+    assert_eq!(usd.amount, decimal("10"));
+
+    // Ten dollars were worth 59003 guaranies that day; the other 997 are what
+    // the exchange office kept, on a line of their own.
+    let conversion = &recorded["conversion"];
+    assert_eq!(conversion["fee"]["currency"], "PYG");
+    assert_eq!(decimal(conversion["fee"]["amount"].as_str().expect("a fee")), decimal("997"));
+    assert_eq!(conversion["deal"]["base"], "USD");
+    assert_eq!(decimal(conversion["deal"]["rate"].as_str().expect("a rate")), decimal("6000"));
+    assert_eq!(conversion["reference"]["source"], "bcp");
+    assert_eq!(conversion["reference"]["stale"], false);
+
+    let lines = recorded["entry"]["lines"].as_array().expect("lines");
+    assert_eq!(lines.len(), 5, "{lines:?}");
+    assert_eq!(lines.iter().filter(|line| line["side"] == "conversion").count(), 2);
+
+    // The fee went to the ledger's own category, created on first use.
+    let fees = repository::purpose_category(&pool, books.owner, Purpose::ExchangeFees)
+        .await
+        .expect("the category");
+    assert_eq!(fees.name, "Exchange fees");
+    let kept: Decimal = sqlx::query_scalar("SELECT SUM(amount) FROM entry_lines WHERE category_id = $1")
+        .bind(fees.id)
+        .fetch_one(&pool)
+        .await
+        .expect("summing fees");
+    assert_eq!(kept, decimal("997"));
+}
+
+#[tokio::test]
+async fn a_line_in_a_currency_other_than_its_accounts_is_refused() {
+    // The shape v0.7 wrote an exchange in: a dollar line on the guarani wallet.
+    // The wallet's balance would then add dollars to guaranies.
+    let Some(pool) = pool("test_ledger_line_currency").await else { return };
+    let books = books(&pool).await;
+    let dollars = repository::create_account(&pool, books.owner, AccountKind::Cash, "Dollars", "USD", Decimal::ZERO)
+        .await
+        .expect("creating an account");
+
+    let line = |side, amount: &str, currency: &str| NewLine {
+        side,
+        amount: decimal(amount),
+        currency: currency.to_owned(),
+        note: String::new(),
+    };
+    let error = repository::post_entry(
         &pool,
         books.owner,
         &NewEntry {
@@ -346,63 +406,57 @@ async fn an_exchange_balances_in_each_currency_separately() {
             idempotency_key: None,
             source: None,
             lines: vec![
-                NewLine {
-                    account_id: Some(books.account),
-                    category_id: None,
-                    amount: decimal("-75000"),
-                    currency: "PYG".to_owned(),
-                    note: String::new(),
-                },
-                NewLine {
-                    account_id: Some(dollars.id),
-                    category_id: None,
-                    amount: decimal("75000"),
-                    currency: "PYG".to_owned(),
-                    note: "given".to_owned(),
-                },
-                NewLine {
-                    account_id: Some(books.account),
-                    category_id: None,
-                    amount: decimal("-10"),
-                    currency: "USD".to_owned(),
-                    note: "taken".to_owned(),
-                },
-                NewLine {
-                    account_id: Some(dollars.id),
-                    category_id: None,
-                    amount: decimal("10"),
-                    currency: "USD".to_owned(),
-                    note: String::new(),
-                },
+                line(Side::Account(books.account), "-75000", "PYG"),
+                line(Side::Account(dollars.id), "75000", "PYG"),
+                line(Side::Account(books.account), "-10", "USD"),
+                line(Side::Account(dollars.id), "10", "USD"),
             ],
         },
     )
     .await
-    .expect("posting an exchange");
+    .expect_err("a dollar line on a guarani account was stored");
+    assert!(format!("{error:#}").contains("the account is in"), "{error:#}");
 
-    // An entry balanced only *across* currencies is refused: 10 USD leaving and
-    // 10 PYG arriving sums to zero if the currency is ignored, and that is the
-    // arithmetic this rule exists to stop.
+    // And through the API it is the caller's mistake, not a fault.
+    let (status, body) = call(
+        &pool,
+        books.owner,
+        "POST",
+        "/ledger/entries",
+        Some(&format!(
+            r#"{{"lines":[{{"account_id":"{}","amount":"-10","currency":"USD"}},{{"account_id":"{}","amount":"10","currency":"USD"}}]}}"#,
+            books.account, dollars.id
+        )),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body.contains("reaches it through a conversion"), "{body}");
+}
+
+#[tokio::test]
+async fn a_conversion_that_does_not_convert_is_refused() {
+    // Balanced in PYG, and the money went nowhere anyone reports on.
+    let Some(pool) = pool("test_ledger_idle_conversion").await else { return };
+    let books = books(&pool).await;
+
     let error = repository::post_entry(
         &pool,
         books.owner,
         &NewEntry {
-            occurred_on: day(2026, 9, 18),
-            description: "not an exchange".to_owned(),
+            occurred_on: day(2026, 9, 17),
+            description: "vanished".to_owned(),
             idempotency_key: None,
             source: None,
             lines: vec![
                 NewLine {
-                    account_id: Some(books.account),
-                    category_id: None,
-                    amount: decimal("-10"),
-                    currency: "USD".to_owned(),
+                    side: Side::Account(books.account),
+                    amount: decimal("-100"),
+                    currency: "PYG".to_owned(),
                     note: String::new(),
                 },
                 NewLine {
-                    account_id: Some(dollars.id),
-                    category_id: None,
-                    amount: decimal("10"),
+                    side: Side::Conversion,
+                    amount: decimal("100"),
                     currency: "PYG".to_owned(),
                     note: String::new(),
                 },
@@ -410,8 +464,275 @@ async fn an_exchange_balances_in_each_currency_separately() {
         },
     )
     .await
-    .expect_err("an entry balanced across currencies was stored");
-    assert!(format!("{error:#}").contains("does not balance"), "{error:#}");
+    .expect_err("a conversion into nothing was stored");
+    assert!(format!("{error:#}").contains("does not convert"), "{error:#}");
+}
+
+#[tokio::test]
+async fn an_accounts_currency_does_not_change_under_its_lines() {
+    let Some(pool) = pool("test_ledger_currency_fixed").await else { return };
+    let books = books(&pool).await;
+    repository::post_entry(&pool, books.owner, &spend(&books, "1000", day(2026, 9, 17)))
+        .await
+        .expect("posting");
+
+    let error = sqlx::query("UPDATE accounts SET currency = 'USD' WHERE id = $1")
+        .bind(books.account)
+        .execute(&pool)
+        .await
+        .expect_err("the currency changed under the account's lines");
+    assert!(error.to_string().contains("cannot change"), "{error}");
+}
+
+#[tokio::test]
+async fn an_amount_in_another_currency_is_converted_at_the_days_rate() {
+    let Some(pool) = pool("test_ledger_foreign").await else { return };
+    let books = books(&pool).await;
+    repository::record_rate(&pool, "USD", "PYG", day(2026, 9, 24), decimal("5900.28"), "bcp")
+        .await
+        .expect("recording a rate");
+
+    let (status, body) = call(
+        &pool,
+        books.owner,
+        "POST",
+        "/ledger/entries/quick",
+        Some(r#"{"text":"10 usd food streaming","occurred_on":"2026-09-25"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let recorded: serde_json::Value = serde_json::from_str(&body).expect("json");
+
+    // The category keeps what was charged; the wallet moved by what that was
+    // in guaranies, rounded to whole guaranies.
+    let lines = recorded["entry"]["lines"].as_array().expect("lines");
+    let on = |side: &str, currency: &str| {
+        lines
+            .iter()
+            .find(|line| line["side"] == side && line["currency"] == currency)
+            .map(|line| decimal(line["amount"].as_str().expect("an amount")))
+    };
+    assert_eq!(on("category", "USD"), Some(decimal("10")));
+    assert_eq!(on("account", "PYG"), Some(decimal("-59003")));
+    assert_eq!(lines.len(), 4, "a conversion at the day's rate has no fee: {lines:?}");
+    assert_eq!(recorded["conversion"]["reference"]["on_date"], "2026-09-24");
+    assert!(recorded["conversion"].get("fee").is_none());
+}
+
+#[tokio::test]
+async fn a_rate_stated_with_the_amount_is_the_one_charged_and_the_difference_a_fee() {
+    let Some(pool) = pool("test_ledger_foreign_stated").await else { return };
+    let books = books(&pool).await;
+    repository::record_rate(&pool, "USD", "PYG", day(2026, 9, 24), decimal("5900.28"), "bcp")
+        .await
+        .expect("recording a rate");
+
+    let (status, body) = call(
+        &pool,
+        books.owner,
+        "POST",
+        "/ledger/entries/quick",
+        Some(r#"{"text":"10 usd food @5965 streaming","occurred_on":"2026-09-25"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let recorded: serde_json::Value = serde_json::from_str(&body).expect("json");
+
+    let balances = repository::balances(&pool, books.owner, day(2026, 9, 30)).await.expect("reading");
+    assert_eq!(balances[0].amount, decimal("100000") - decimal("59650"));
+    assert_eq!(decimal(recorded["conversion"]["fee"]["amount"].as_str().expect("a fee")), decimal("647"));
+    assert_eq!(recorded["entry"]["description"], "streaming");
+}
+
+#[tokio::test]
+async fn an_amount_in_a_currency_with_no_known_rate_asks_for_one() {
+    let Some(pool) = pool("test_ledger_foreign_unknown").await else { return };
+    let books = books(&pool).await;
+
+    let (status, body) = call(&pool, books.owner, "POST", "/ledger/entries/quick", Some(r#"{"text":"10 usd food"}"#)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body.contains("@5965"), "the refusal does not say how to state a rate: {body}");
+
+    // A rate on an amount already in the account's currency would be ignored
+    // while the person believed it applied.
+    let (status, body) = call(&pool, books.owner, "POST", "/ledger/entries/quick", Some(r#"{"text":"45000 food @7"}"#)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+}
+
+#[tokio::test]
+async fn the_rate_in_force_says_how_old_it_is() {
+    let Some(pool) = pool("test_ledger_rate_age").await else { return };
+    let books = books(&pool).await;
+    repository::record_rate(&pool, "USD", "PYG", day(2026, 9, 24), decimal("5900.28"), "bcp")
+        .await
+        .expect("recording a rate");
+
+    let (status, body) = call(&pool, books.owner, "GET", "/ledger/rates/at?base=usd&quote=PYG&on=2026-09-28", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let rate: serde_json::Value = serde_json::from_str(&body).expect("json");
+    assert_eq!((rate["age_days"].as_i64(), rate["stale"].as_bool()), (Some(4), Some(false)));
+
+    let (_, body) = call(&pool, books.owner, "GET", "/ledger/rates/at?base=USD&quote=PYG&on=2026-10-05", None).await;
+    let rate: serde_json::Value = serde_json::from_str(&body).expect("json");
+    assert_eq!((rate["age_days"].as_i64(), rate["stale"].as_bool()), (Some(11), Some(true)));
+    // Still answered: it is the last thing known, and the flag is what keeps
+    // it from being read as today's.
+    assert_eq!(decimal(rate["rate"].as_str().expect("a rate")), decimal("5900.28"));
+
+    let (status, _) = call(&pool, books.owner, "GET", "/ledger/rates/at?base=USD&quote=PYG&on=2026-09-01", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "a rate from after the day was used for it");
+}
+
+#[tokio::test]
+async fn a_total_names_the_currencies_it_converted_at_a_stale_rate() {
+    let Some(pool) = pool("test_ledger_total_stale").await else { return };
+    let books = books(&pool).await;
+    repository::record_rate(&pool, "PYG", "USD", day(2026, 9, 1), decimal("0.00017"), "bcp")
+        .await
+        .expect("recording a rate");
+
+    let (_, body) = call(&pool, books.owner, "GET", "/ledger/balances?as_of=2026-09-25&currency=USD", None).await;
+    let answer: serde_json::Value = serde_json::from_str(&body).expect("json");
+    assert_eq!(answer["total"]["stale"], serde_json::json!(["PYG"]));
+    assert_eq!(answer["accounts"][0]["rate_used"]["on_date"], "2026-09-01");
+    assert_eq!(answer["accounts"][0]["rate_used"]["stale"], true);
+}
+
+#[tokio::test]
+async fn guaranies_are_priced_in_roubles_through_the_dollar() {
+    // The two central banks each publish their own currency per dollar; the
+    // pair between them comes from neither.
+    let Some(pool) = pool("test_ledger_cross").await else { return };
+    let books = books(&pool).await;
+    let service = grpc::Service::for_tests(pool.clone());
+    for (source, quote, rate) in [("bcp", "PYG", "5000"), ("cbr", "RUB", "85")] {
+        service
+            .record_rates(tonic::Request::new(RecordRatesRequest {
+                source: source.to_owned(),
+                rates: vec![ProtoRate {
+                    base: "USD".to_owned(),
+                    quote: quote.to_owned(),
+                    on_date: "2026-09-24".to_owned(),
+                    rate: rate.to_owned(),
+                }],
+            }))
+            .await
+            .expect("recording rates");
+    }
+
+    let (_, body) = call(&pool, books.owner, "GET", "/ledger/balances?as_of=2026-09-25&currency=RUB", None).await;
+    let answer: serde_json::Value = serde_json::from_str(&body).expect("json");
+    // 100000 PYG = 20 USD = 1700 RUB.
+    assert_eq!(decimal(answer["total"]["amount"].as_str().expect("a total")), decimal("1700"));
+    assert_eq!(answer["accounts"][0]["rate_used"]["source"], "bcp+cbr via USD");
+}
+
+#[tokio::test]
+async fn rates_from_a_source_never_replace_what_is_already_recorded() {
+    let Some(pool) = pool("test_ledger_record_rates").await else { return };
+    repository::record_rate(&pool, "USD", "PYG", day(2026, 9, 24), decimal("6000"), "manual")
+        .await
+        .expect("recording a rate");
+
+    let service = grpc::Service::for_tests(pool.clone());
+    let push = |on_date: &str, rate: &str| RecordRatesRequest {
+        source: "bcp".to_owned(),
+        rates: vec![ProtoRate {
+            base: "USD".to_owned(),
+            quote: "PYG".to_owned(),
+            on_date: on_date.to_owned(),
+            rate: rate.to_owned(),
+        }],
+    };
+
+    // The day a person typed a rate for keeps theirs.
+    let answer = service
+        .record_rates(tonic::Request::new(push("2026-09-24", "5900.28")))
+        .await
+        .expect("recording");
+    assert_eq!(answer.into_inner().recorded, 0);
+    let kept = repository::rate_at(&pool, "USD", "PYG", day(2026, 9, 24))
+        .await
+        .expect("reading")
+        .expect("a rate");
+    assert_eq!((kept.rate, kept.source.as_str()), (decimal("6000"), "manual"));
+
+    // A new day is recorded once; pushed again - revised - it is kept as it was.
+    let answer = service.record_rates(tonic::Request::new(push("2026-09-25", "5910"))).await.expect("recording");
+    assert_eq!(answer.into_inner().recorded, 1);
+    let answer = service.record_rates(tonic::Request::new(push("2026-09-25", "5999"))).await.expect("recording");
+    assert_eq!(answer.into_inner().recorded, 0);
+    let kept = repository::rate_at(&pool, "USD", "PYG", day(2026, 9, 25))
+        .await
+        .expect("reading")
+        .expect("a rate");
+    assert_eq!(kept.rate, decimal("5910"));
+
+    // A module cannot pass its rates off as a person's.
+    let mut manual = push("2026-09-26", "5920");
+    manual.source = "manual".to_owned();
+    let status = service
+        .record_rates(tonic::Request::new(manual))
+        .await
+        .expect_err("a module wrote a manual rate");
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+}
+
+#[tokio::test]
+async fn a_category_the_person_already_made_is_adopted_rather_than_doubled() {
+    let Some(pool) = pool("test_ledger_purpose").await else { return };
+    let books = books(&pool).await;
+    let theirs = repository::create_category(&pool, books.owner, None, Flow::Expense, "exchange FEES")
+        .await
+        .expect("creating");
+
+    let found = repository::purpose_category(&pool, books.owner, Purpose::ExchangeFees)
+        .await
+        .expect("the category");
+    assert_eq!(found.id, theirs.id);
+    // Found by purpose from now on, whatever it is called.
+    sqlx::query("UPDATE categories SET name = 'Bank cuts' WHERE id = $1")
+        .bind(theirs.id)
+        .execute(&pool)
+        .await
+        .expect("renaming");
+    let again = repository::purpose_category(&pool, books.owner, Purpose::ExchangeFees)
+        .await
+        .expect("the category");
+    assert_eq!(again.id, theirs.id);
+    assert_eq!(
+        repository::categories(&pool, books.owner).await.expect("listing").len(),
+        3,
+        "a second fee category was made"
+    );
+}
+
+#[tokio::test]
+async fn a_schema_holding_conversions_refuses_to_roll_back_past_them() {
+    let Some(pool) = pool("test_ledger_rollback").await else { return };
+    let books = books(&pool).await;
+    let dollars = repository::create_account(&pool, books.owner, AccountKind::Cash, "Dollars", "USD", Decimal::ZERO)
+        .await
+        .expect("creating an account");
+    let (status, body) = call(
+        &pool,
+        books.owner,
+        "POST",
+        "/ledger/exchanges",
+        Some(&format!(
+            r#"{{"from_account":"{}","given":"59000","to_account":"{}","got":"10"}}"#,
+            books.account, dollars.id
+        )),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    // v0.7's schema cannot say what a conversion is; rolling back would drop
+    // the exchange or fail halfway, and it is refused before either.
+    let error = austeris_common::migrate::undo(&pool, &MIGRATOR, 20_260_917_100_001)
+        .await
+        .expect_err("a schema with conversions rolled back");
+    assert!(format!("{error:#}").contains("delete them before rolling back"), "{error:#}");
 }
 
 #[tokio::test]
@@ -468,7 +789,7 @@ async fn an_entry_cannot_name_somebody_elses_account() {
     let theirs = books(&pool).await;
 
     let mut trespass = spend(&mine, "1000", day(2026, 9, 17));
-    trespass.lines[0].account_id = Some(theirs.account);
+    trespass.lines[0].side = Side::Account(theirs.account);
 
     let error = repository::post_entry(&pool, mine.owner, &trespass)
         .await
@@ -528,8 +849,12 @@ async fn a_typed_line_becomes_an_entry_against_the_persons_own_account() {
     .await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
 
-    let entry: serde_json::Value = serde_json::from_str(&body).expect("json");
+    let recorded: serde_json::Value = serde_json::from_str(&body).expect("json");
+    let entry = &recorded["entry"];
     assert_eq!(entry["description"], "lunch at the corner");
+    // A line in the account's own currency converts nothing, and says so by
+    // saying nothing.
+    assert!(recorded.get("conversion").is_none(), "{recorded}");
     assert_eq!(entry["lines"].as_array().expect("lines").len(), 2);
 
     // The account went down, the category went up.
@@ -825,13 +1150,13 @@ async fn a_module_posts_through_the_contract_and_a_retry_books_once() {
             source: "recurring".to_owned(),
             lines: vec![
                 ProtoLine {
-                    side: Some(Side::AccountId(books.account.to_string())),
+                    side: Some(ProtoSide::AccountId(books.account.to_string())),
                     amount: "2500000".to_owned(),
                     currency: "PYG".to_owned(),
                     note: String::new(),
                 },
                 ProtoLine {
-                    side: Some(Side::CategoryId(books.salary.to_string())),
+                    side: Some(ProtoSide::CategoryId(books.salary.to_string())),
                     amount: "-2500000".to_owned(),
                     currency: "PYG".to_owned(),
                     note: String::new(),
@@ -869,13 +1194,13 @@ async fn a_module_posting_without_a_key_is_refused() {
             source: "recurring".to_owned(),
             lines: vec![
                 ProtoLine {
-                    side: Some(Side::AccountId(books.account.to_string())),
+                    side: Some(ProtoSide::AccountId(books.account.to_string())),
                     amount: "1000".to_owned(),
                     currency: "PYG".to_owned(),
                     note: String::new(),
                 },
                 ProtoLine {
-                    side: Some(Side::CategoryId(books.salary.to_string())),
+                    side: Some(ProtoSide::CategoryId(books.salary.to_string())),
                     amount: "-1000".to_owned(),
                     currency: "PYG".to_owned(),
                     note: String::new(),
@@ -904,13 +1229,13 @@ async fn a_module_told_its_own_arithmetic_is_wrong_rather_than_to_retry() {
             source: "recurring".to_owned(),
             lines: vec![
                 ProtoLine {
-                    side: Some(Side::AccountId(books.account.to_string())),
+                    side: Some(ProtoSide::AccountId(books.account.to_string())),
                     amount: "1000".to_owned(),
                     currency: "PYG".to_owned(),
                     note: String::new(),
                 },
                 ProtoLine {
-                    side: Some(Side::CategoryId(books.salary.to_string())),
+                    side: Some(ProtoSide::CategoryId(books.salary.to_string())),
                     amount: "-999".to_owned(),
                     currency: "PYG".to_owned(),
                     note: String::new(),
@@ -972,15 +1297,13 @@ async fn an_amount_survives_storage_with_every_digit() {
             source: None,
             lines: vec![
                 NewLine {
-                    account_id: Some(wallet.id),
-                    category_id: None,
+                    side: Side::Account(wallet.id),
                     amount: -decimal(exact),
                     currency: "BTC".to_owned(),
                     note: String::new(),
                 },
                 NewLine {
-                    account_id: None,
-                    category_id: Some(fees.id),
+                    side: Side::Category(fees.id),
                     amount: decimal(exact),
                     currency: "BTC".to_owned(),
                     note: String::new(),
@@ -994,4 +1317,28 @@ async fn an_amount_survives_storage_with_every_digit() {
     let balances = repository::balances(&pool, books.owner, day(2026, 9, 17)).await.expect("reading");
     let btc = balances.iter().find(|balance| balance.account_id == wallet.id).expect("the wallet");
     assert_eq!(btc.amount.to_string(), format!("-{exact}"), "the smallest unit did not survive");
+}
+
+#[tokio::test]
+async fn a_currency_code_that_is_also_one_of_the_persons_categories_is_the_category() {
+    // `PEN` is the Peruvian sol, and `pen` is what this person files office
+    // pens under. Read as a currency, the line would convert 45 000 soles.
+    let Some(pool) = pool("test_ledger_currency_or_category").await else { return };
+    let books = books(&pool).await;
+
+    let (status, body) = call(&pool, books.owner, "POST", "/ledger/entries/quick", Some(r#"{"text":"45000 pen office"}"#)).await;
+    // Without a category `pen`, it is a currency, and `office` is the category.
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert!(body.contains("`office`"), "{body}");
+
+    repository::create_category(&pool, books.owner, None, Flow::Expense, "pen")
+        .await
+        .expect("creating");
+    let (status, body) = call(&pool, books.owner, "POST", "/ledger/entries/quick", Some(r#"{"text":"45000 pen office"}"#)).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let recorded: serde_json::Value = serde_json::from_str(&body).expect("json");
+    assert!(recorded.get("conversion").is_none(), "{recorded}");
+    assert_eq!(recorded["entry"]["description"], "office");
+    let balances = repository::balances(&pool, books.owner, day(2030, 1, 1)).await.expect("reading");
+    assert_eq!(balances[0].amount, decimal("55000"));
 }

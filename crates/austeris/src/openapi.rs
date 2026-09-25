@@ -79,8 +79,35 @@ mod tests {
         let document = document();
         assert!(document.info.contact.is_none(), "the spec carries a contact");
 
+        // An address rather than any `@`: the docs themselves write `@5965`
+        // for a rate stated in a typed line.
         let json = serde_json::to_string(&document).expect("serializing");
-        assert!(!json.contains('@'), "an address survived somewhere in the spec");
+        let address = json.match_indices('@').find(|(at, _)| {
+            let is_part = |c: char| c.is_ascii_alphanumeric() || "._%+-".contains(c);
+            let local = json[..*at].chars().next_back().is_some_and(is_part);
+            let domain: String = json[at + 1..].chars().take_while(|c| is_part(*c)).collect();
+            local && domain.contains('.') && !domain.ends_with('.')
+        });
+        assert!(
+            address.is_none(),
+            "an address survived in the spec: {}",
+            &json[address.map_or(0, |(at, _)| at.saturating_sub(40))..][..80]
+        );
+    }
+
+    #[test]
+    fn an_address_is_told_apart_from_a_rate() {
+        // The check above, on the two things it has to tell apart.
+        let has_address = |text: &str| {
+            text.match_indices('@').any(|(at, _)| {
+                let is_part = |c: char| c.is_ascii_alphanumeric() || "._%+-".contains(c);
+                let local = text[..at].chars().next_back().is_some_and(is_part);
+                let domain: String = text[at + 1..].chars().take_while(|c| is_part(*c)).collect();
+                local && domain.contains('.') && !domain.ends_with('.')
+            })
+        };
+        assert!(has_address(r#""email":"owner@example.com""#));
+        assert!(!has_address("state it, as in `@5965`."));
     }
 
     #[test]
@@ -105,16 +132,56 @@ mod tests {
         // other way.
         let document = document();
         let schemas = &document.components.as_ref().expect("components").schemas;
-        let json = serde_json::to_string(schemas).expect("serializing the schemas");
+        let json = serde_json::to_value(schemas).expect("serializing the schemas");
 
-        // One field today; written for the list it will become, because the
-        // second monetary field is the one nobody thinks to re-check.
-        let decimal_fields: &[&str] = &["price", "amount", "opening_balance", "rate"];
-        for field in decimal_fields {
-            let at = json.find(&format!(r#""{field}":"#)).unwrap_or_else(|| panic!("no `{field}` field in the spec"));
-            let described = &json[at..(at + 200).min(json.len())];
-            assert!(described.contains(r#""type":"string""#), "`{field}` is not described as a string: {described}");
+        // Every property by these names, in every schema - not the first one
+        // found, which is how a second `rate` described as a number would slip
+        // past. A property that refers to another schema is an object whose
+        // own fields are checked where that schema is.
+        let money: &[&str] = &["price", "amount", "opening_balance", "rate", "converted", "given", "got"];
+        let mut seen: Vec<&str> = Vec::new();
+        let mut stack: Vec<&serde_json::Value> = vec![&json];
+        while let Some(value) = stack.pop() {
+            match value {
+                serde_json::Value::Object(map) => {
+                    if let Some(serde_json::Value::Object(properties)) = map.get("properties") {
+                        for (name, schema) in properties {
+                            if let Some(field) = money.iter().find(|field| **field == name) {
+                                assert!(is_string(schema) || is_reference(schema), "`{name}` is not described as a string: {schema}");
+                                seen.push(field);
+                            }
+                        }
+                    }
+                    stack.extend(map.values());
+                }
+                serde_json::Value::Array(items) => stack.extend(items),
+                _ => {}
+            }
         }
+        for field in money {
+            assert!(seen.contains(field), "no `{field}` field in the spec; the list above is out of date");
+        }
+    }
+
+    /// Whether a schema describes a string, possibly an optional one.
+    fn is_string(schema: &serde_json::Value) -> bool {
+        match schema.get("type") {
+            Some(serde_json::Value::String(kind)) => kind == "string",
+            Some(serde_json::Value::Array(kinds)) => kinds.iter().any(|kind| kind == "string") && kinds.iter().all(|kind| kind == "string" || kind == "null"),
+            _ => schema
+                .get("oneOf")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|options| options.iter().any(is_string) && options.iter().all(|option| is_string(option) || option["type"] == "null")),
+        }
+    }
+
+    /// Whether a schema is another schema by reference, possibly an optional one.
+    fn is_reference(schema: &serde_json::Value) -> bool {
+        schema.get("$ref").is_some()
+            || schema.get("oneOf").and_then(serde_json::Value::as_array).is_some_and(|options| {
+                options.iter().any(|option| option.get("$ref").is_some())
+                    && options.iter().all(|option| option.get("$ref").is_some() || option["type"] == "null")
+            })
     }
 
     #[test]

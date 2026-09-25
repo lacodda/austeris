@@ -50,6 +50,9 @@ enum Command {
     Migrate(migrate::Args),
     /// Records an entry from one typed line: `austeris add 45000 food lunch`.
     Add(add::AddArgs),
+    /// Records money changed between two accounts in different currencies:
+    /// `austeris exchange 600000 cash 100 dollars`.
+    Exchange(add::ExchangeArgs),
     /// Signs in, so `add` has a session to record with.
     Login(add::LoginArgs),
     /// Prints the `OpenAPI` document to stdout.
@@ -70,6 +73,7 @@ async fn main() -> Result<()> {
         Command::Demo => demo::run().await,
         Command::Migrate(args) => migrate::run(&args).await,
         Command::Add(args) => add::add(&args).await,
+        Command::Exchange(args) => add::exchange(&args).await,
         Command::Login(args) => add::login(&args).await,
         Command::Openapi => {
             println!("{}", serde_json::to_string_pretty(&openapi::document())?);

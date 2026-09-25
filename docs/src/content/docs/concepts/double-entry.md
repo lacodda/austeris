@@ -22,11 +22,44 @@ With sides, those are not four features. They are four shapes of the same thing:
 | Bought lunch for 45 000 | `-45000` on the wallet, `+45000` on `food` |
 | Moved 60 000 to the bank | `-60000` on the wallet, `+60000` on the bank |
 | One receipt, two categories | `-50000` on the wallet, `+30000` on `food`, `+20000` on `transport` |
-| Changed 75 000 for 10 dollars | `-75000`/`+75000` in PYG, `-10`/`+10` in USD |
+| Changed 60 000 for 10 dollars | `-60000` on the wallet, `+59003` and `-10` on the conversion, `+10` on the dollar account, `+997` on *Exchange fees* |
 
 A transfer touches no category, which is why moving your own money between your
 own accounts never appears in a report of what you spent. A ledger that needs a
 category for a transfer reports spending that did not happen.
+
+## Money that changes currency
+
+An account holds one currency, and a line on it is in that currency — the
+database refuses anything else, because a balance is the sum of an account's
+lines and a dollar line on a guarani wallet would add dollars to guaranies.
+
+So when money changes currency, each currency's half needs somewhere to land.
+That is the third kind of side a line can have, besides an account and a
+category: a **conversion**. Changing 60 000 guaranies for 10 dollars on a day the
+central bank said 5 900.28:
+
+| Line | PYG | USD |
+| --- | --- | --- |
+| the wallet | −60 000 | |
+| *Exchange fees* | +997 | |
+| conversion | +59 003 | −10 |
+| the dollar account | | +10 |
+
+Each currency still sums to zero on its own. The conversion lines are the two
+amounts that were worth the same that day — ten dollars at the day's rate,
+rounded to whole guaranies — and what the wallet gave beyond that is what the
+exchange office kept, on a line of its own. The rate of the deal, 6 000, is what
+the wallet and the dollar account imply, and is never stored beside them.
+
+The same shape covers a 10 USD subscription paid from a guarani card: the card
+gives guaranies, the category receives the 10 USD it was charged, and the
+conversion joins them. A report kept in dollars sees 10, and the card's balance
+moves by what the bank took.
+
+The database holds one more rule here: an entry's conversion lines must take one
+currency in and give another out. A conversion that nets to zero in a currency,
+or only receives, is money disappearing into a side no report looks at.
 
 ## Where the rule lives
 
@@ -80,7 +113,14 @@ ledger is where the one that was used is kept.
 
 A rate recorded one way answers the other way round, inverted — `PYG→USD` and
 `USD→PYG` are the same fact said twice, and two rows that must agree are two rows
-that can disagree.
+that can disagree. A pair nobody publishes is answered through a third currency
+both have a rate with: guaranies in roubles, from two central banks' dollar
+rates.
+
+A rate is also as old as the day it was set for, and the ledger says so. Past a
+long weekend it is **stale** — still used, because it is the last thing known,
+but named as stale wherever it is, so a number from last week is not read as
+today's.
 
 ## When money cannot be converted
 

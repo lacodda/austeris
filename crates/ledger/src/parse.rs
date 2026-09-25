@@ -30,8 +30,17 @@ pub struct Spoken {
     pub account: Option<String>,
     /// The currency, when the line named one. `None` means the account's own.
     pub currency: Option<String>,
+    /// The rate the amount was converted at, when the line stated one with
+    /// `@`: how many of the account's currency one of `currency` cost. `None`
+    /// means the day's rate.
+    pub rate: Option<Decimal>,
     /// Whatever was left: the shop, the occasion, the note on the receipt.
     pub note: String,
+    /// The same line with the currency word read as the category instead, when
+    /// that word is a currency code that is also a word - `45000 pen office`.
+    /// Which reading is meant depends on the person's categories, which this
+    /// function does not know; the caller does.
+    pub if_not_a_currency: Option<Box<Spoken>>,
 }
 
 /// Which way the money went.
@@ -61,6 +70,9 @@ pub enum ParseError {
     /// A preposition with nothing after it.
     #[error("`{0}` names no account")]
     DanglingAccount(String),
+    /// An `@` that is not followed by a rate.
+    #[error("`{0}` is not a rate; write it as `@5965`, how many of the account's currency one unit cost")]
+    BadRate(String),
 }
 
 /// The words that introduce an account rather than a note.
@@ -73,9 +85,9 @@ const ACCOUNT_WORDS: [&str; 2] = ["from", "to"];
 
 /// Reads a line.
 ///
-/// The shape is `[+]<amount> [<currency>] <category> [from|to <account>] [note...]`.
-/// Everything after the category that is not an account is the note, which is
-/// why the note needs no quoting and can say anything.
+/// The shape is `[+]<amount> [<currency>] <category> [from|to <account>] [@<rate>] [note...]`.
+/// Everything after the category that is not an account or a rate is the note,
+/// which is why the note needs no quoting and can say anything.
 ///
 /// # Errors
 ///
@@ -100,27 +112,51 @@ pub fn line(input: &str) -> Result<Spoken, ParseError> {
         return Err(ParseError::ZeroAmount);
     }
 
-    // A currency may follow the amount: `10 usd food`. Recognised by shape -
-    // three letters - rather than by a list, because an installation's
-    // currencies are its own and a list here would be one more place to add
-    // one. A three-letter category (`gas`, `tax`) would be ambiguous, so the
-    // currency only counts when something follows it to be the category.
+    // A currency may follow the amount: `10 usd food`. Only an ISO 4217 code
+    // counts, and only when something follows it to be the category. Since an
+    // amount in another currency is converted rather than refused, reading
+    // `fun` or `gas` as a currency would move money at some rate nobody meant;
+    // the list keeps that to the few codes that are also words (`pen`, `cup`),
+    // and for those the reading as a category is kept alongside, for the
+    // caller to prefer when the person has a category by that name.
     let rest: Vec<&str> = words.collect();
-    let (currency, rest) = match rest.split_first() {
-        Some((first, tail)) if is_currency_code(first) && !tail.is_empty() => (Some(first.to_uppercase()), tail),
-        _ => (None, rest.as_slice()),
-    };
+    match rest.split_first() {
+        Some((word, tail)) if is_currency_code(word) && !tail.is_empty() => {
+            let mut spoken = read(amount, flow, Some(word.to_uppercase()), tail, first)?;
+            spoken.if_not_a_currency = read(amount, flow, None, &rest, first).ok().map(Box::new);
+            Ok(spoken)
+        }
+        _ => read(amount, flow, None, &rest, first),
+    }
+}
 
+/// Reads what follows the amount and its currency: the category, the account,
+/// a rate and the note.
+fn read(amount: Decimal, flow: Flow, currency: Option<String>, rest: &[&str], first: &str) -> Result<Spoken, ParseError> {
     let (category, rest) = rest.split_first().ok_or_else(|| ParseError::NoCategory(first.to_owned()))?;
 
     // The account may be named anywhere in the tail: `45000 food from cash for
     // lunch` and `45000 food lunch from cash` say the same thing, and a person
     // typing quickly does not think about which.
     let mut account = None;
+    let mut rate = None;
     let mut note_words: Vec<&str> = Vec::new();
     let mut index = 0;
     while index < rest.len() {
         let word = rest[index];
+        // `@5965`: the rate a foreign amount was charged at. One token, so a
+        // note can still contain an `@` inside a word - an email address is not
+        // a rate.
+        if rate.is_none()
+            && let Some(digits) = word.strip_prefix('@')
+        {
+            let parsed = parse_amount(digits)
+                .filter(|value| !value.is_zero())
+                .ok_or_else(|| ParseError::BadRate(word.to_owned()))?;
+            rate = Some(parsed);
+            index += 1;
+            continue;
+        }
         if account.is_none() && ACCOUNT_WORDS.iter().any(|w| w.eq_ignore_ascii_case(word)) {
             let Some(named) = rest.get(index + 1) else {
                 return Err(ParseError::DanglingAccount(word.to_owned()));
@@ -139,8 +175,19 @@ pub fn line(input: &str) -> Result<Spoken, ParseError> {
         category: (*category).to_owned(),
         account,
         currency,
+        rate,
         note: note_words.join(" "),
+        if_not_a_currency: None,
     })
+}
+
+/// An amount as a person writes it, read the way a typed line reads one.
+///
+/// For the surfaces that take an amount on its own - `austeris exchange 600.000
+/// cash 100 dollars` - so `600.000` means there what it means in a line.
+#[must_use]
+pub fn amount(text: &str) -> Option<Decimal> {
+    parse_amount(text.trim()).filter(|value| !value.is_zero())
 }
 
 /// An amount as a person writes one.
@@ -179,9 +226,9 @@ fn parse_amount(text: &str) -> Option<Decimal> {
     (!cleaned.is_empty() && cleaned != ".").then(|| cleaned.parse().ok()).flatten()
 }
 
-/// Whether a word looks like a currency code.
+/// Whether a word is a currency code.
 fn is_currency_code(word: &str) -> bool {
-    word.len() == 3 && word.chars().all(|c| c.is_ascii_alphabetic())
+    crate::currency::minor_units(word).is_some()
 }
 
 #[cfg(test)]
@@ -265,6 +312,55 @@ mod tests {
         assert_eq!(spoken.currency.as_deref(), Some("USD"));
         assert_eq!(spoken.category, "coffee");
         assert_eq!(spoken.note, "airport");
+    }
+
+    #[test]
+    fn a_rate_is_said_with_an_at_sign_anywhere_after_the_category() {
+        let spoken = line("10 usd subscriptions @5965 streaming from card").expect("parsing");
+        assert_eq!(spoken.rate, Some(decimal("5965")));
+        assert_eq!(spoken.account.as_deref(), Some("card"));
+        assert_eq!(spoken.note, "streaming");
+
+        // Punctuated the way the amount may be.
+        assert_eq!(line("10 usd food @5.965,50").expect("parsing").rate, Some(decimal("5965.50")));
+        // Without one, the day's rate is meant.
+        assert_eq!(line("10 usd food").expect("parsing").rate, None);
+    }
+
+    #[test]
+    fn an_at_sign_inside_a_word_is_part_of_the_note() {
+        let spoken = line("45000 food paid for bob@example.com").expect("parsing");
+        assert_eq!(spoken.rate, None);
+        assert_eq!(spoken.note, "paid for bob@example.com");
+    }
+
+    #[test]
+    fn an_at_sign_with_no_rate_after_it_is_refused_rather_than_kept_as_a_note() {
+        // Kept as a note, `@59oo` would convert at the day's rate while the
+        // person believes they stated one.
+        assert!(matches!(line("10 usd food @59oo"), Err(ParseError::BadRate(_))));
+        assert!(matches!(line("10 usd food @"), Err(ParseError::BadRate(_))));
+        assert!(matches!(line("10 usd food @0"), Err(ParseError::BadRate(_))));
+    }
+
+    #[test]
+    fn a_three_letter_word_that_is_no_currency_is_the_category() {
+        // `fun` is not a currency; read as one, the line would have converted
+        // money at a rate for a currency that does not exist.
+        let spoken = line("45000 fun cinema").expect("parsing");
+        assert_eq!(spoken.currency, None);
+        assert_eq!(spoken.category, "fun");
+        assert_eq!(spoken.note, "cinema");
+        assert_eq!(spoken.if_not_a_currency, None);
+    }
+
+    #[test]
+    fn a_currency_code_that_is_also_a_word_keeps_both_readings() {
+        let spoken = line("45000 pen office supplies").expect("parsing");
+        assert_eq!(spoken.currency.as_deref(), Some("PEN"));
+        assert_eq!(spoken.category, "office");
+        let other = spoken.if_not_a_currency.expect("the other reading");
+        assert_eq!((other.currency, other.category.as_str(), other.note.as_str()), (None, "pen", "office supplies"));
     }
 
     #[test]

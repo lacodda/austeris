@@ -15,9 +15,10 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::model::{Account, AccountKind, Balance, Category, Entry, ExchangeRate, Flow, Line};
-use crate::repository::{CategoryMatch, EntryFilter, NewEntry, NewLine};
-use crate::{MIGRATOR, balance, parse, repository};
+use crate::exchange::{self, Money, Summary};
+use crate::model::{Account, AccountKind, Balance, Category, Entry, ExchangeRate, Flow, Line, LineSide, Purpose, RateInForce};
+use crate::repository::{CategoryMatch, EntryFilter, NewEntry, NewLine, Side};
+use crate::{MIGRATOR, balance, currency, parse, repository};
 
 /// Builds the service's router.
 pub fn router(pool: PgPool) -> Router {
@@ -30,8 +31,10 @@ pub fn router(pool: PgPool) -> Router {
         .route("/ledger/entries", get(list_entries).post(create_entry))
         .route("/ledger/entries/quick", post(quick_entry))
         .route("/ledger/entries/{id}", get(read_entry).delete(delete_entry))
+        .route("/ledger/exchanges", post(exchange))
         .route("/ledger/balances", get(balances))
         .route("/ledger/rates", get(list_rates).post(record_rate))
+        .route("/ledger/rates/at", get(rate_at))
         .with_state(pool)
 }
 
@@ -194,10 +197,15 @@ async fn create_category(State(pool): State<PgPool>, caller: Caller, Json(new): 
 /// One side of an entry, as a client states it.
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct NewEntryLine {
-    /// The account this side moves. Exactly one of this and `category_id`.
+    /// The account this side moves. Exactly one of this, `category_id` and
+    /// `conversion`.
     pub account_id: Option<Uuid>,
     /// The category this side is attributed to.
     pub category_id: Option<Uuid>,
+    /// This line is money changing currency inside the entry. An entry's
+    /// conversion lines take one currency in and give another out.
+    #[serde(default)]
+    pub conversion: bool,
     /// The signed amount, as a decimal string: negative leaves, positive
     /// arrives (ADR 0004).
     #[serde(with = "rust_decimal::serde::str")]
@@ -251,7 +259,7 @@ async fn create_entry(State(pool): State<PgPool>, caller: Caller, Json(new): Jso
         },
     )
     .await
-    .map_err(unbalanced_or_missing)?;
+    .map_err(refused_or_missing)?;
 
     Ok((StatusCode::CREATED, Json(posted.entry)))
 }
@@ -270,18 +278,22 @@ fn validate_lines(lines: Vec<NewEntryLine>) -> AppResult<Vec<NewLine>> {
 
     let mut out = Vec::with_capacity(lines.len());
     for line in lines {
-        if line.account_id.is_some() == line.category_id.is_some() {
-            return Err(AppError::bad_request(anyhow::anyhow!(
-                "a line names an account or a category, never both and never neither"
-            )));
-        }
+        let side = match (line.account_id, line.category_id, line.conversion) {
+            (Some(account), None, false) => Side::Account(account),
+            (None, Some(category), false) => Side::Category(category),
+            (None, None, true) => Side::Conversion,
+            _ => {
+                return Err(AppError::bad_request(anyhow::anyhow!(
+                    "a line names an account, a category or a conversion - exactly one of them"
+                )));
+            }
+        };
         if line.amount.is_zero() {
             return Err(AppError::bad_request(anyhow::anyhow!("a line of zero records nothing")));
         }
 
         out.push(NewLine {
-            account_id: line.account_id,
-            category_id: line.category_id,
+            side,
             amount: line.amount,
             currency: currency_code(&line.currency)?,
             note: line.note.trim().to_owned(),
@@ -314,37 +326,72 @@ pub struct QuickEntry {
     pub occurred_on: Option<NaiveDate>,
 }
 
+/// An entry as it was recorded, and what converting it did.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct Recorded {
+    /// The entry, with its lines.
+    pub entry: Entry,
+    /// When money changed currency on the way: both amounts, the rate they
+    /// imply, the day's rate and its age, and what the difference cost.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conversion: Option<Summary>,
+}
+
 /// Records an entry from one typed line.
 ///
 /// The same parser the CLI uses (`austeris add`), so a sentence means the same
 /// thing wherever it is typed. What the parser cannot know - which account,
 /// which category - is resolved here against this person's own.
+///
+/// An amount in a currency other than the account's is converted: at the rate
+/// the line states with `@`, or at the day's rate when it states none. The
+/// category keeps the amount as it was charged, the account gets it in its own
+/// currency, and `conversion` says which rate was used and how old it was.
 #[utoipa::path(
     post,
     path = "/api/v1/ledger/entries/quick",
     tag = "ledger",
     request_body = QuickEntry,
     responses(
-        (status = 201, description = "The entry, with its lines", body = Entry),
-        (status = 400, description = "The line could not be read", body = austeris_common::error::ErrorBody),
+        (status = 201, description = "The entry, with its lines, and the conversion when there was one", body = Recorded),
+        (status = 400, description = "The line could not be read, or it is in a currency no rate is known for", body = austeris_common::error::ErrorBody),
         (status = 404, description = "It names a category or account you do not have", body = austeris_common::error::ErrorBody),
         (status = 409, description = "The name means more than one category", body = austeris_common::error::ErrorBody),
     ),
 )]
-async fn quick_entry(State(pool): State<PgPool>, caller: Caller, Json(quick): Json<QuickEntry>) -> AppResult<(StatusCode, Json<Entry>)> {
+async fn quick_entry(State(pool): State<PgPool>, caller: Caller, Json(quick): Json<QuickEntry>) -> AppResult<(StatusCode, Json<Recorded>)> {
     let spoken = parse::line(&quick.text).map_err(AppError::bad_request)?;
-    let new = resolve(&pool, caller.id(), &spoken, quick.occurred_on.unwrap_or_else(today)).await?;
-    let posted = repository::post_entry(&pool, caller.id(), &new).await.map_err(unbalanced_or_missing)?;
-    Ok((StatusCode::CREATED, Json(posted.entry)))
+    let (new, conversion) = resolve(&pool, caller.id(), &spoken, quick.occurred_on.unwrap_or_else(today)).await?;
+    let posted = repository::post_entry(&pool, caller.id(), &new).await.map_err(refused_or_missing)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(Recorded {
+            entry: posted.entry,
+            conversion,
+        }),
+    ))
 }
 
 /// Turns what a person said into an entry against their own accounts.
 ///
 /// Its own function rather than part of the handler: the CLI resolves the same
 /// sentence through the API, and the phone screen will, so the rules for what
-/// `food` and `cash` mean live in one place. Two lines, always - the account
-/// and the category - because that is what a plain expense is.
-async fn resolve(pool: &PgPool, owner_id: Uuid, spoken: &parse::Spoken, occurred_on: NaiveDate) -> AppResult<NewEntry> {
+/// `food` and `cash` mean live in one place. Two lines for a plain expense -
+/// the account and the category - and a conversion between them when the
+/// amount was in another currency.
+async fn resolve(pool: &PgPool, owner_id: Uuid, spoken: &parse::Spoken, occurred_on: NaiveDate) -> AppResult<(NewEntry, Option<Summary>)> {
+    // `45000 pen office`: Peruvian soles on `office`, or 45 000 on `pen`? The
+    // person's own categories decide - a word they chose outranks a list of
+    // the world's currencies they may never use.
+    let is_their_category = match (&spoken.currency, &spoken.if_not_a_currency) {
+        (Some(code), Some(_)) => !matches!(repository::category_by_name(pool, owner_id, code).await?, CategoryMatch::None),
+        _ => false,
+    };
+    let spoken = match &spoken.if_not_a_currency {
+        Some(other) if is_their_category => other.as_ref(),
+        _ => spoken,
+    };
+
     let category = match repository::category_by_name(pool, owner_id, &spoken.category).await? {
         CategoryMatch::One(category) => *category,
         CategoryMatch::None => {
@@ -376,26 +423,6 @@ async fn resolve(pool: &PgPool, owner_id: Uuid, spoken: &parse::Spoken, occurred
         None => default_account(pool, owner_id).await?,
     };
 
-    // The currency is the account's unless the line said otherwise. A line
-    // naming a currency the account is not in would be an exchange, which is
-    // more than one sentence can say without being ambiguous.
-    if let Some(named) = &spoken.currency
-        && !named.eq_ignore_ascii_case(&account.currency)
-    {
-        return Err(AppError::bad_request(anyhow::anyhow!(
-            "`{}` is in {}, not {named}; an exchange needs an entry with both sides stated",
-            account.name,
-            account.currency
-        )));
-    }
-
-    // The signs: money spent leaves the account and lands on the expense
-    // category, money earned arrives in the account from the income category.
-    let (on_account, on_category) = match spoken.flow {
-        parse::Flow::Expense => (-spoken.amount, spoken.amount),
-        parse::Flow::Income => (spoken.amount, -spoken.amount),
-    };
-
     // A line saying "spent" filed under an income category (or the reverse) is
     // a person having typed the wrong word, and it would quietly make every
     // income report wrong.
@@ -415,28 +442,254 @@ async fn resolve(pool: &PgPool, owner_id: Uuid, spoken: &parse::Spoken, occurred
         )));
     }
 
-    Ok(NewEntry {
-        occurred_on,
-        description: spoken.note.clone(),
-        idempotency_key: None,
-        source: None,
-        lines: vec![
-            NewLine {
-                account_id: Some(account.id),
-                category_id: None,
-                amount: on_account,
+    // A rate only means something for an amount in another currency; stated
+    // on a plain line it would be silently ignored, and the person would think
+    // it had been applied.
+    let foreign = spoken.currency.as_deref().filter(|named| !named.eq_ignore_ascii_case(&account.currency));
+    if foreign.is_none() && spoken.rate.is_some() {
+        return Err(AppError::bad_request(anyhow::anyhow!(
+            "a rate converts an amount in another currency; this one is already in {}",
+            account.currency
+        )));
+    }
+
+    let (lines, conversion) = match foreign {
+        None => {
+            // The signs: money spent leaves the account and lands on the
+            // expense category, money earned arrives in the account from the
+            // income category.
+            let (on_account, on_category) = match spoken.flow {
+                parse::Flow::Expense => (-spoken.amount, spoken.amount),
+                parse::Flow::Income => (spoken.amount, -spoken.amount),
+            };
+            let lines = vec![
+                NewLine {
+                    side: Side::Account(account.id),
+                    amount: on_account,
+                    currency: account.currency.clone(),
+                    note: String::new(),
+                },
+                NewLine {
+                    side: Side::Category(category.id),
+                    amount: on_category,
+                    currency: account.currency.clone(),
+                    note: spoken.note.clone(),
+                },
+            ];
+            (lines, None)
+        }
+        Some(foreign) => {
+            let (lines, summary) = foreign_amount(pool, owner_id, spoken, &account, &category, foreign, occurred_on).await?;
+            (lines, Some(summary))
+        }
+    };
+
+    Ok((
+        NewEntry {
+            occurred_on,
+            description: spoken.note.clone(),
+            idempotency_key: None,
+            source: None,
+            lines,
+        },
+        conversion,
+    ))
+}
+
+/// The lines of an amount charged or paid in a currency the account is not in.
+///
+/// The category keeps the amount as it was charged - a 10 USD subscription is
+/// 10 USD in every report kept in dollars - and the account gets what it
+/// actually moved by, in its own currency, rounded to the places that currency
+/// has. The conversion between them is where each currency balances.
+async fn foreign_amount(
+    pool: &PgPool,
+    owner_id: Uuid,
+    spoken: &parse::Spoken,
+    account: &Account,
+    category: &Category,
+    foreign: &str,
+    occurred_on: NaiveDate,
+) -> AppResult<(Vec<NewLine>, Summary)> {
+    // How many of the account's currency one unit of the foreign one cost: as
+    // the line said, or the day's rate.
+    let rate = match spoken.rate {
+        Some(stated) => stated,
+        None => {
+            repository::rate_in_force(pool, foreign, &account.currency, occurred_on)
+                .await?
+                .ok_or_else(|| {
+                    AppError::bad_request(anyhow::anyhow!(
+                        "no {foreign}->{} rate is known on or before {occurred_on}; state the one you were charged, as in `@5965`",
+                        account.currency
+                    ))
+                })?
+                .rate
+        }
+    };
+    let in_account = currency::round(spoken.amount * rate, &account.currency);
+    if in_account.is_zero() {
+        return Err(AppError::bad_request(anyhow::anyhow!(
+            "{} {foreign} is worth nothing in {}",
+            spoken.amount,
+            account.currency
+        )));
+    }
+
+    // Spending gives the account's currency for the foreign one; earning gives
+    // the foreign one for the account's.
+    let (given, got, from, to) = match spoken.flow {
+        parse::Flow::Expense => (
+            Money {
+                amount: in_account,
                 currency: account.currency.clone(),
-                note: String::new(),
             },
-            NewLine {
-                account_id: None,
-                category_id: Some(category.id),
-                amount: on_category,
-                currency: account.currency,
-                note: spoken.note.clone(),
+            Money {
+                amount: spoken.amount,
+                currency: foreign.to_owned(),
             },
-        ],
-    })
+            Side::Account(account.id),
+            Side::Category(category.id),
+        ),
+        parse::Flow::Income => (
+            Money {
+                amount: spoken.amount,
+                currency: foreign.to_owned(),
+            },
+            Money {
+                amount: in_account,
+                currency: account.currency.clone(),
+            },
+            Side::Category(category.id),
+            Side::Account(account.id),
+        ),
+    };
+
+    let (mut lines, summary) = convert(pool, owner_id, given, got, from, to, occurred_on).await?;
+    for line in &mut lines {
+        if line.side == Side::Category(category.id) {
+            line.note.clone_from(&spoken.note);
+        }
+    }
+    Ok((lines, summary))
+}
+
+/// Plans a conversion against the day's rate and builds its lines, creating
+/// the fee category the first time a fee needs one.
+async fn convert(pool: &PgPool, owner_id: Uuid, given: Money, got: Money, from: Side, to: Side, occurred_on: NaiveDate) -> AppResult<(Vec<NewLine>, Summary)> {
+    // The reference prices what was got in what was given: how many of the
+    // given currency the received amount was worth that day.
+    let reference = repository::rate_in_force(pool, &got.currency, &given.currency, occurred_on).await?;
+    let plan = exchange::plan(given, got, reference).map_err(AppError::bad_request)?;
+
+    let fee_category = if plan.has_fee() {
+        Some(
+            repository::purpose_category(pool, owner_id, Purpose::ExchangeFees)
+                .await
+                .map_err(AppError::bad_request)?
+                .id,
+        )
+    } else {
+        None
+    };
+
+    let lines = plan.lines(from, to, fee_category).map_err(AppError::internal)?;
+    Ok((lines, plan.summary))
+}
+
+/// What exchanging money between two accounts carries.
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct ExchangeBody {
+    /// The day the money changed hands. Today when omitted.
+    pub occurred_on: Option<NaiveDate>,
+    /// What a person would call it: the exchange office, the bank.
+    #[serde(default)]
+    pub description: String,
+    /// The account the money left.
+    pub from_account: Uuid,
+    /// How much left it, in its own currency.
+    #[serde(with = "rust_decimal::serde::str")]
+    #[schema(value_type = String, example = "600000")]
+    pub given: Decimal,
+    /// The account the money arrived in.
+    pub to_account: Uuid,
+    /// How much arrived, in its own currency.
+    #[serde(with = "rust_decimal::serde::str")]
+    #[schema(value_type = String, example = "100")]
+    pub got: Decimal,
+}
+
+/// Records money changed from one currency into another.
+///
+/// The two amounts are what changed hands, and the rate of the deal is what they
+/// imply - never the day's rate. The day's rate is the reference instead: what
+/// was given beyond what the received amount was worth at it is what the bank or
+/// the exchange office kept, and it is recorded as a line of its own under the
+/// category the ledger keeps for exchange fees. When no fresh rate is known the
+/// fee cannot be measured, and `conversion.no_fee` says so.
+#[utoipa::path(
+    post,
+    path = "/api/v1/ledger/exchanges",
+    tag = "ledger",
+    request_body = ExchangeBody,
+    responses(
+        (status = 201, description = "The entry, and what the exchange cost beyond the day's rate", body = Recorded),
+        (status = 400, description = "The amounts are not positive, or both accounts are in one currency", body = austeris_common::error::ErrorBody),
+        (status = 404, description = "An account is not yours", body = austeris_common::error::ErrorBody),
+    ),
+)]
+async fn exchange(State(pool): State<PgPool>, caller: Caller, Json(body): Json<ExchangeBody>) -> AppResult<(StatusCode, Json<Recorded>)> {
+    let owner_id = caller.id();
+    let from = repository::account(&pool, owner_id, body.from_account)
+        .await?
+        .ok_or_else(|| AppError::not_found(anyhow::anyhow!("no such account to exchange from")))?;
+    let to = repository::account(&pool, owner_id, body.to_account)
+        .await?
+        .ok_or_else(|| AppError::not_found(anyhow::anyhow!("no such account to exchange into")))?;
+
+    let occurred_on = body.occurred_on.unwrap_or_else(today);
+    let (lines, summary) = convert(
+        &pool,
+        owner_id,
+        Money {
+            amount: body.given,
+            currency: from.currency.clone(),
+        },
+        Money {
+            amount: body.got,
+            currency: to.currency.clone(),
+        },
+        Side::Account(from.id),
+        Side::Account(to.id),
+        occurred_on,
+    )
+    .await?;
+
+    let description = match body.description.trim() {
+        "" => format!("{} -> {}", from.name, to.name),
+        said => said.to_owned(),
+    };
+    let posted = repository::post_entry(
+        &pool,
+        owner_id,
+        &NewEntry {
+            occurred_on,
+            description,
+            idempotency_key: None,
+            source: None,
+            lines,
+        },
+    )
+    .await
+    .map_err(refused_or_missing)?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(Recorded {
+            entry: posted.entry,
+            conversion: Some(summary),
+        }),
+    ))
 }
 
 /// The account a line that names none is against.
@@ -587,6 +840,11 @@ pub struct Total {
     /// someone's money looks like an answer.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub unconverted: Vec<String>,
+    /// Currencies converted at a rate older than a long weekend. Their
+    /// balances are in `amount`, at a rate that may no longer be true; each
+    /// balance's `rate_used` says how old.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub stale: Vec<String>,
 }
 
 /// Balances are computed from the entries every time, never stored: a stored
@@ -611,6 +869,7 @@ async fn balances(State(pool): State<PgPool>, caller: Caller, Query(query): Quer
                 currency: summed.currency,
                 amount: summed.amount,
                 unconverted: summed.unconverted,
+                stale: summed.stale,
             })
         }
         None => None,
@@ -684,6 +943,44 @@ async fn list_rates(State(pool): State<PgPool>, _caller: Caller, Query(query): Q
     Ok(Json(repository::rates(&pool, &base, &quote, query.limit.unwrap_or(30).clamp(1, 365)).await?))
 }
 
+/// Which rate is asked for.
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+pub struct RateAtQuery {
+    /// The currency being priced.
+    pub base: String,
+    /// The currency it is priced in.
+    pub quote: String,
+    /// The day. Today when omitted.
+    pub on: Option<NaiveDate>,
+}
+
+/// The rate in force on a day: what a screen suggests before an amount in
+/// another currency is recorded.
+///
+/// The newest rate not after the day, for the pair as recorded, inverted, or
+/// through a third currency - with the day it was set for, its age by the day
+/// asked about, and whether that makes it stale. A stale rate is still answered:
+/// it is the last thing known, and the flag is what keeps it from being read as
+/// today's.
+#[utoipa::path(
+    get,
+    path = "/api/v1/ledger/rates/at",
+    tag = "ledger",
+    params(RateAtQuery),
+    responses(
+        (status = 200, description = "The rate in force, and how old it is", body = RateInForce),
+        (status = 404, description = "No rate for the pair is known on or before the day", body = austeris_common::error::ErrorBody),
+    ),
+)]
+async fn rate_at(State(pool): State<PgPool>, _caller: Caller, Query(query): Query<RateAtQuery>) -> AppResult<Json<RateInForce>> {
+    let (base, quote) = (currency_code(&query.base)?, currency_code(&query.quote)?);
+    let on = query.on.unwrap_or_else(today);
+    repository::rate_in_force(&pool, &base, &quote, on)
+        .await?
+        .map(Json)
+        .ok_or_else(|| AppError::not_found(anyhow::anyhow!("no {base}->{quote} rate is known on or before {on}")))
+}
+
 /// Today, as the ledger reckons it.
 ///
 /// The server's day. A person entering a receipt at one in the morning in
@@ -726,19 +1023,33 @@ fn is_unique_violation(error: &anyhow::Error) -> bool {
 
 /// Turns a failed post into the answer the caller can act on.
 ///
-/// The balance rule and the ownership check both come back as errors from the
-/// repository; both are the caller's to fix, and a 500 would tell them to
-/// contact an administrator about their own arithmetic.
-fn unbalanced_or_missing(error: anyhow::Error) -> AppError {
+/// The database's rules - the entry balances, a conversion converts, an
+/// account line is in the account's currency - and the ownership check all
+/// come back as errors from the repository. They are the caller's to fix, and
+/// a 500 would tell them to contact an administrator about their own
+/// arithmetic. A rule is recognised by its SQLSTATE rather than its wording, so
+/// a rule added later is a 400 without anyone remembering to list it here.
+fn refused_or_missing(error: anyhow::Error) -> AppError {
+    let refused = error
+        .chain()
+        .filter_map(|cause| cause.downcast_ref::<sqlx::Error>())
+        .filter_map(|error| error.as_database_error())
+        .find(|db| db.code().as_deref() == Some(CHECK_VIOLATION))
+        .map(|db| db.message().to_owned());
+    if let Some(message) = refused {
+        return AppError::bad_request(anyhow::anyhow!("{message}"));
+    }
+
     let text = format!("{error:#}");
-    if text.contains("does not balance") {
-        AppError::bad_request(anyhow::anyhow!("{text}"))
-    } else if text.contains("does not exist") {
+    if text.contains("does not exist") {
         AppError::not_found(anyhow::anyhow!("{text}"))
     } else {
         AppError::internal(error)
     }
 }
+
+/// PostgreSQL's code for a rule of the schema refusing a write.
+const CHECK_VIOLATION: &str = "23514";
 
 /// This service's share of the platform's `OpenAPI` document.
 #[derive(utoipa::OpenApi)]
@@ -755,21 +1066,32 @@ fn unbalanced_or_missing(error: anyhow::Error) -> AppError {
         create_entry,
         quick_entry,
         delete_entry,
+        exchange,
         balances,
         record_rate,
         list_rates,
+        rate_at,
     ),
     components(schemas(
         Account,
         AccountKind,
         Category,
+        Purpose,
         Flow,
         Entry,
         Line,
+        LineSide,
         Balance,
         Balances,
         Total,
         ExchangeRate,
+        RateInForce,
+        Recorded,
+        ExchangeBody,
+        Money,
+        Summary,
+        exchange::DealRate,
+        exchange::NoFee,
         NewAccount,
         Closing,
         NewCategory,
@@ -793,6 +1115,7 @@ mod tests {
         NewEntryLine {
             account_id: Some(Uuid::new_v4()),
             category_id: None,
+            conversion: false,
             amount: Decimal::from_str(amount).expect("a decimal"),
             currency: currency.to_owned(),
             note: String::new(),
@@ -855,6 +1178,26 @@ mod tests {
             ..line("100", "USD")
         };
         assert!(validate_lines(vec![both, line("-100", "USD")]).is_err(), "a line naming both was accepted");
+
+        // A conversion names no account: one that did would be two sides at
+        // once, and which balance it moved would depend on who read it.
+        let conversion_on_account = NewEntryLine {
+            conversion: true,
+            ..line("100", "USD")
+        };
+        assert!(
+            validate_lines(vec![conversion_on_account, line("-100", "USD")]).is_err(),
+            "a conversion naming an account was accepted"
+        );
+        let conversion = NewEntryLine {
+            account_id: None,
+            conversion: true,
+            ..line("100", "USD")
+        };
+        assert!(
+            validate_lines(vec![conversion, line("-100", "USD")]).is_ok(),
+            "a plain conversion line was refused"
+        );
     }
 
     #[test]

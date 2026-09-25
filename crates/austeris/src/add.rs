@@ -1,4 +1,4 @@
-//! The `add` and `login` subcommands: recording an entry from a terminal.
+//! The `add`, `exchange` and `login` subcommands: recording from a terminal.
 //!
 //! `austeris add "45000 food lunch"` is the fastest way there is to record an
 //! expense, and it is the point of the one-line form - a ledger someone keeps
@@ -31,6 +31,31 @@ pub struct AddArgs {
     /// The day it happened, as `YYYY-MM-DD`. Today when omitted.
     #[arg(long, value_name = "DATE")]
     pub on: Option<String>,
+}
+
+/// Arguments to `austeris exchange`.
+#[derive(Debug, clap::Args)]
+pub struct ExchangeArgs {
+    /// How much you handed over, in the currency of the account it left.
+    #[arg(value_name = "GIVEN")]
+    pub given: String,
+    /// The account it left, by name.
+    #[arg(value_name = "FROM")]
+    pub from: String,
+    /// How much you received, in the currency of the account it went into.
+    #[arg(value_name = "GOT")]
+    pub got: String,
+    /// The account it went into, by name.
+    #[arg(value_name = "TO")]
+    pub to: String,
+
+    /// The day it happened, as `YYYY-MM-DD`. Today when omitted.
+    #[arg(long, value_name = "DATE")]
+    pub on: Option<String>,
+
+    /// What to call it: the exchange office, the bank.
+    #[arg(long)]
+    pub note: Option<String>,
 }
 
 /// Arguments to `austeris login`.
@@ -118,9 +143,179 @@ pub async fn add(args: &AddArgs) -> Result<()> {
         bail!("{}", message_from(response).await);
     }
 
-    let entry: Entry = response.json().await.context("reading the entry back")?;
-    println!("{}", describe(&entry));
+    let recorded: Recorded = response.json().await.context("reading the entry back")?;
+    println!("{}", describe(&recorded.entry));
+    if let Some(conversion) = &recorded.conversion {
+        println!("  {}", describe_conversion(conversion));
+    }
     Ok(())
+}
+
+/// Records money changed from one account's currency into another's.
+///
+/// The accounts are named the way `add` names them, and matched the way the
+/// ledger matches a name: the whole name, in any case.
+///
+/// # Errors
+///
+/// Returns an error when there is no session, when an amount is not one, when
+/// an account name matches nothing, or when the installation refuses the
+/// exchange.
+pub async fn exchange(args: &ExchangeArgs) -> Result<()> {
+    let session = read_session()?;
+    // The ledger's own reading of an amount, so `600.000` means here what it
+    // means in a typed line.
+    let amount = |text: &str| austeris_ledger::parse::amount(text).with_context(|| format!("`{text}` is not an amount"));
+    let (given, got) = (amount(&args.given)?, amount(&args.got)?);
+
+    let client = austeris_common::http::client();
+    let response = client
+        .get(format!("{}/api/v1/ledger/accounts", base_url()))
+        .header(reqwest::header::COOKIE, &session)
+        .send()
+        .await
+        .with_context(|| format!("reaching austeris at {}", base_url()))?;
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        bail!("that session is no longer good; run `austeris login` again");
+    }
+    if !response.status().is_success() {
+        bail!("{}", message_from(response).await);
+    }
+    let accounts: Vec<Account> = response.json().await.context("reading the accounts")?;
+    let (from, to) = (named(&accounts, &args.from)?, named(&accounts, &args.to)?);
+
+    let mut body = serde_json::json!({
+        "from_account": from.id,
+        "given": given.to_string(),
+        "to_account": to.id,
+        "got": got.to_string(),
+        "description": args.note.clone().unwrap_or_default(),
+    });
+    if let Some(on) = &args.on {
+        body["occurred_on"] = serde_json::Value::String(on.clone());
+    }
+
+    let response = client
+        .post(format!("{}/api/v1/ledger/exchanges", base_url()))
+        .header(reqwest::header::COOKIE, &session)
+        .json(&body)
+        .send()
+        .await
+        .with_context(|| format!("reaching austeris at {}", base_url()))?;
+    if !response.status().is_success() {
+        bail!("{}", message_from(response).await);
+    }
+
+    let recorded: Recorded = response.json().await.context("reading the exchange back")?;
+    println!(
+        "Exchanged {} {} from {} for {} {} into {} on {}",
+        trim_zeros(&given.to_string()),
+        from.currency,
+        from.name,
+        trim_zeros(&got.to_string()),
+        to.currency,
+        to.name,
+        recorded.entry.occurred_on
+    );
+    if let Some(conversion) = &recorded.conversion {
+        println!("  {}", describe_conversion(conversion));
+    }
+    Ok(())
+}
+
+/// Just enough of an account to name it and say its currency.
+#[derive(Debug, serde::Deserialize)]
+struct Account {
+    id: String,
+    name: String,
+    currency: String,
+}
+
+/// The account a name refers to: the whole name, in any case - the rule the
+/// ledger applies to `from cash` in a typed line.
+fn named<'a>(accounts: &'a [Account], name: &str) -> Result<&'a Account> {
+    accounts.iter().find(|account| account.name.eq_ignore_ascii_case(name.trim())).with_context(|| {
+        format!(
+            "you have no account called `{name}`; you have {}",
+            accounts.iter().map(|account| account.name.as_str()).collect::<Vec<_>>().join(", ")
+        )
+    })
+}
+
+/// What the installation answers after recording: the entry, and the
+/// conversion when money changed currency.
+#[derive(Debug, serde::Deserialize)]
+struct Recorded {
+    entry: Entry,
+    conversion: Option<Conversion>,
+}
+
+/// Just enough of a conversion to say what it cost.
+#[derive(Debug, serde::Deserialize)]
+struct Conversion {
+    deal: Deal,
+    reference: Option<Reference>,
+    fee: Option<Money>,
+    no_fee: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct Deal {
+    base: String,
+    quote: String,
+    rate: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct Reference {
+    base_currency: String,
+    quote_currency: String,
+    rate: String,
+    on_date: String,
+    source: String,
+    age_days: i64,
+    stale: bool,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct Money {
+    amount: String,
+    currency: String,
+}
+
+/// One line on what a conversion cost: the deal's rate, the day's rate it was
+/// measured against and how old that was, and the fee.
+fn describe_conversion(conversion: &Conversion) -> String {
+    let deal = &conversion.deal;
+    let mut said = vec![format!("at {} {} per {}", trim_zeros(&deal.rate), deal.quote, deal.base)];
+
+    if let Some(reference) = &conversion.reference {
+        let age = match reference.age_days {
+            0 => String::new(),
+            1 => ", a day old".to_owned(),
+            days => format!(", {days} days old"),
+        };
+        let stale = if reference.stale { " - stale" } else { "" };
+        said.push(format!(
+            "the day's rate was {} {} per {} ({}, {}{age}{stale})",
+            trim_zeros(&reference.rate),
+            reference.quote_currency,
+            reference.base_currency,
+            reference.source,
+            reference.on_date
+        ));
+    }
+
+    match (&conversion.fee, conversion.no_fee.as_deref()) {
+        (Some(fee), _) => match fee.amount.strip_prefix('-') {
+            Some(gained) => said.push(format!("{} {} better than it", trim_zeros(gained), fee.currency)),
+            None => said.push(format!("the exchange kept {} {}", trim_zeros(&fee.amount), fee.currency)),
+        },
+        (None, Some("no_reference")) => said.push("no rate for the day is known, so no fee was measured".to_owned()),
+        (None, Some("stale_reference")) => said.push("that rate is too old to measure a fee against".to_owned()),
+        (None, _) => {}
+    }
+    said.join("; ")
 }
 
 /// Just enough of an entry to say what was recorded.
@@ -128,6 +323,8 @@ pub async fn add(args: &AddArgs) -> Result<()> {
 /// Deliberately not the ledger's own type: this is a client of an HTTP API, and
 /// sharing a struct across that boundary would make a change to the service's
 /// internals a compile error here rather than a versioned change to a contract.
+/// The amount reader above is the exception, because it is not a type of the
+/// contract but the one reading of `1.500,50` every surface has to agree on.
 #[derive(Debug, serde::Deserialize)]
 struct Entry {
     occurred_on: String,
@@ -248,7 +445,52 @@ fn read_session() -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Entry, Line, describe, trim_zeros};
+    use super::{Conversion, Deal, Entry, Line, Money, Reference, describe, describe_conversion, trim_zeros};
+
+    fn conversion(fee: Option<&str>, no_fee: Option<&str>, stale: bool) -> Conversion {
+        Conversion {
+            deal: Deal {
+                base: "USD".to_owned(),
+                quote: "PYG".to_owned(),
+                rate: "5965.000000000000000000".to_owned(),
+            },
+            reference: Some(Reference {
+                base_currency: "USD".to_owned(),
+                quote_currency: "PYG".to_owned(),
+                rate: "5900.280000000000000000".to_owned(),
+                on_date: "2026-09-24".to_owned(),
+                source: "bcp".to_owned(),
+                age_days: if stale { 9 } else { 1 },
+                stale,
+            }),
+            fee: fee.map(|amount| Money {
+                amount: amount.to_owned(),
+                currency: "PYG".to_owned(),
+            }),
+            no_fee: no_fee.map(ToOwned::to_owned),
+        }
+    }
+
+    #[test]
+    fn a_conversion_says_its_rate_the_days_rate_and_what_was_kept() {
+        assert_eq!(
+            describe_conversion(&conversion(Some("647"), None, false)),
+            "at 5965 PYG per USD; the day's rate was 5900.28 PYG per USD (bcp, 2026-09-24, a day old); the exchange kept 647 PYG"
+        );
+    }
+
+    #[test]
+    fn a_stale_rate_is_called_stale_where_it_is_printed() {
+        let said = describe_conversion(&conversion(None, Some("stale_reference"), true));
+        assert!(said.contains("9 days old - stale"), "{said}");
+        assert!(said.contains("too old to measure a fee"), "{said}");
+    }
+
+    #[test]
+    fn a_deal_better_than_the_days_rate_is_not_printed_as_a_negative_fee() {
+        let said = describe_conversion(&conversion(Some("-1003"), None, false));
+        assert!(said.ends_with("1003 PYG better than it"), "{said}");
+    }
 
     #[test]
     fn a_stored_amount_is_printed_the_way_a_person_says_it() {

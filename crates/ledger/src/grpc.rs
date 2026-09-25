@@ -11,14 +11,16 @@
 use std::str::FromStr;
 
 use austeris_proto::ledger::v1::ledger_service_server::{LedgerService, LedgerServiceServer};
-use austeris_proto::ledger::v1::{Balance, GetBalancesRequest, GetBalancesResponse, PostEntryRequest, PostEntryResponse, line::Side};
+use austeris_proto::ledger::v1::{
+    Balance, GetBalancesRequest, GetBalancesResponse, PostEntryRequest, PostEntryResponse, RecordRatesRequest, RecordRatesResponse, line::Side as ProtoSide,
+};
 use chrono::{NaiveDate, Utc};
 use rust_decimal::Decimal;
 use sqlx::PgPool;
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
-use crate::repository::{NewEntry, NewLine};
+use crate::repository::{NewEntry, NewLine, ObservedRate, Side};
 use crate::{balance, repository};
 
 /// The service implementation.
@@ -75,19 +77,19 @@ impl LedgerService for Service {
                 return Err(Status::invalid_argument("a line of zero records nothing"));
             }
 
-            let (account_id, category_id) = match &line.side {
-                Some(Side::AccountId(id)) => (Some(parse_id(id, "account")?), None),
-                Some(Side::CategoryId(id)) => (None, Some(parse_id(id, "category")?)),
+            let side = match &line.side {
+                Some(ProtoSide::AccountId(id)) => Side::Account(parse_id(id, "account")?),
+                Some(ProtoSide::CategoryId(id)) => Side::Category(parse_id(id, "category")?),
+                Some(ProtoSide::Conversion(_)) => Side::Conversion,
                 None => {
                     return Err(Status::invalid_argument(
-                        "a line names an account or a category; one that names neither is money from nowhere",
+                        "a line names an account, a category or a conversion; one that names none is money from nowhere",
                     ));
                 }
             };
 
             lines.push(NewLine {
-                account_id,
-                category_id,
+                side,
                 amount,
                 currency: currency_code(&line.currency)?,
                 note: line.note.trim().to_owned(),
@@ -146,8 +148,48 @@ impl LedgerService for Service {
                     // a column of these must not silently include a zero for
                     // money that simply could not be converted.
                     converted: balance.converted.map(|amount| amount.to_string()).unwrap_or_default(),
+                    rate_on: balance.rate_used.as_ref().map(|rate| rate.on_date.to_string()).unwrap_or_default(),
+                    rate_stale: balance.rate_used.as_ref().is_some_and(|rate| rate.stale),
                 })
                 .collect(),
+        }))
+    }
+
+    async fn record_rates(&self, request: Request<RecordRatesRequest>) -> Result<Response<RecordRatesResponse>, Status> {
+        let request = request.into_inner();
+
+        let source = request.source.trim();
+        // A rate with no source cannot be told apart from one a person typed,
+        // and those are kept by different rules.
+        if source.is_empty() || source.eq_ignore_ascii_case("manual") {
+            return Err(Status::invalid_argument("rates from a module name the source that published them"));
+        }
+
+        let mut rates = Vec::with_capacity(request.rates.len());
+        for rate in &request.rates {
+            let (base, quote) = (currency_code(&rate.base)?, currency_code(&rate.quote)?);
+            if base == quote {
+                return Err(Status::invalid_argument(format!("a rate of {base} in itself is one, and is not recorded")));
+            }
+            let value = Decimal::from_str(&rate.rate).map_err(|_| Status::invalid_argument(format!("`{}` is not a rate", rate.rate)))?;
+            if !value.is_sign_positive() || value.is_zero() {
+                return Err(Status::invalid_argument(format!("a rate is positive; {base}->{quote} is {value}")));
+            }
+            let on_date = NaiveDate::from_str(&rate.on_date).map_err(|_| Status::invalid_argument("on_date is not a date (YYYY-MM-DD)"))?;
+            rates.push(ObservedRate {
+                base,
+                quote,
+                on_date,
+                rate: value,
+            });
+        }
+
+        let recorded = repository::record_observed_rates(&self.pool, source, &rates)
+            .await
+            .map_err(internal("recording rates"))?;
+
+        Ok(Response::new(RecordRatesResponse {
+            recorded: u32::try_from(recorded).unwrap_or(u32::MAX),
         }))
     }
 }
@@ -168,12 +210,24 @@ fn currency_code(raw: &str) -> Result<String, Status> {
 
 /// Tells a module what it got wrong, and hides what it did not.
 ///
-/// An entry that does not balance and one naming somebody else's account are
-/// both the caller's mistakes, and a module retrying an `internal` forever
-/// because its own arithmetic is wrong is the failure this avoids.
+/// An entry the schema's rules refuse and one naming somebody else's account
+/// are both the caller's mistakes, and a module retrying an `internal` forever
+/// because its own arithmetic is wrong is the failure this avoids. A rule is
+/// recognised by its SQLSTATE, so one added to the schema later is refused
+/// here without being listed.
 fn refused_or_internal(error: &anyhow::Error) -> Status {
+    let refused = error
+        .chain()
+        .filter_map(|cause| cause.downcast_ref::<sqlx::Error>())
+        .filter_map(|error| error.as_database_error())
+        .find(|db| db.code().as_deref() == Some("23514"))
+        .map(|db| db.message().to_owned());
+    if let Some(message) = refused {
+        return Status::invalid_argument(message);
+    }
+
     let text = format!("{error:#}");
-    if text.contains("does not balance") || text.contains("does not exist") {
+    if text.contains("does not exist") {
         Status::invalid_argument(text)
     } else {
         tracing::error!(%error, "posting an entry failed");
