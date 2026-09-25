@@ -19,8 +19,14 @@
 -- would read as a conversion instead of failing.
 CREATE TYPE line_side AS ENUM ('account', 'category', 'conversion');
 
+-- The balance trigger is off while the column is filled in. Every update would
+-- otherwise queue a deferred balance check - of amounts this does not touch -
+-- and PostgreSQL refuses to alter a table with checks still queued, so the
+-- next statement would fail on any installation that has entries.
 ALTER TABLE entry_lines ADD COLUMN side line_side;
+ALTER TABLE entry_lines DISABLE TRIGGER entry_lines_balance;
 UPDATE entry_lines SET side = CASE WHEN account_id IS NOT NULL THEN 'account'::line_side ELSE 'category'::line_side END;
+ALTER TABLE entry_lines ENABLE TRIGGER entry_lines_balance;
 ALTER TABLE entry_lines ALTER COLUMN side SET NOT NULL;
 
 -- The side and the references agree: an account line names an account and

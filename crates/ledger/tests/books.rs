@@ -1342,3 +1342,82 @@ async fn a_currency_code_that_is_also_one_of_the_persons_categories_is_the_categ
     let balances = repository::balances(&pool, books.owner, day(2030, 1, 1)).await.expect("reading");
     assert_eq!(balances[0].amount, decimal("55000"));
 }
+
+/// Takes a freshly migrated schema back to v0.7's shape and writes one
+/// expense into it the way v0.7 stored them: two lines, no side, in `currency`
+/// on an account in `account_currency`.
+async fn books_from_before_conversions(pool: &PgPool, account_currency: &str, currency: &str) {
+    austeris_common::migrate::undo(pool, &MIGRATOR, 20_260_917_100_001)
+        .await
+        .expect("rolling back to v0.7");
+
+    let owner = Uuid::new_v4();
+    let account: Uuid = sqlx::query_scalar("INSERT INTO accounts (owner_id, kind, name, currency) VALUES ($1, 'cash', 'Wallet', $2) RETURNING id")
+        .bind(owner)
+        .bind(account_currency)
+        .fetch_one(pool)
+        .await
+        .expect("an account");
+    let food: Uuid = sqlx::query_scalar("INSERT INTO categories (owner_id, flow, name) VALUES ($1, 'expense', 'food') RETURNING id")
+        .bind(owner)
+        .fetch_one(pool)
+        .await
+        .expect("a category");
+    let entry: Uuid = sqlx::query_scalar("INSERT INTO entries (owner_id, occurred_on) VALUES ($1, '2026-09-20') RETURNING id")
+        .bind(owner)
+        .fetch_one(pool)
+        .await
+        .expect("an entry");
+    // One statement, so the deferred balance check sees both lines.
+    sqlx::query(
+        "INSERT INTO entry_lines (entry_id, account_id, category_id, amount, currency)
+         VALUES ($1, $2, NULL, -45000, $4), ($1, NULL, $3, 45000, $4)",
+    )
+    .bind(entry)
+    .bind(account)
+    .bind(food)
+    .bind(currency)
+    .execute(pool)
+    .await
+    .expect("the lines");
+}
+
+#[tokio::test]
+async fn an_installation_with_entries_migrates_to_conversions() {
+    // Every other test migrates an empty schema, where filling in the new
+    // column touches nothing. The stand had entries, and the migration failed
+    // there on checks it had queued itself.
+    let Some(pool) = pool("test_ledger_migrate_with_entries").await else { return };
+    books_from_before_conversions(&pool, "PYG", "PYG").await;
+
+    austeris_common::migrate::run(&pool, &MIGRATOR)
+        .await
+        .expect("migrating a schema that has entries");
+
+    let sides: Vec<String> = sqlx::query_scalar("SELECT side::text FROM entry_lines ORDER BY amount")
+        .fetch_all(&pool)
+        .await
+        .expect("reading sides");
+    assert_eq!(sides, ["account", "category"]);
+
+    // And back: with no conversions among them, the entries survive a
+    // rollback to the previous schema too.
+    austeris_common::migrate::undo(&pool, &MIGRATOR, 20_260_917_100_001)
+        .await
+        .expect("rolling back over entries");
+    let lines: i64 = sqlx::query_scalar("SELECT count(*) FROM entry_lines").fetch_one(&pool).await.expect("counting");
+    assert_eq!(lines, 2);
+}
+
+#[tokio::test]
+async fn an_installation_holding_a_line_in_the_wrong_currency_is_told_before_it_migrates() {
+    // v0.7 let a dollar line onto a guarani account; nothing can say which of
+    // the two currencies was meant, so the migration stops and says so.
+    let Some(pool) = pool("test_ledger_migrate_mismatched").await else { return };
+    books_from_before_conversions(&pool, "PYG", "USD").await;
+
+    let error = austeris_common::migrate::run(&pool, &MIGRATOR)
+        .await
+        .expect_err("a mismatched line was migrated");
+    assert!(format!("{error:#}").contains("in a currency other than its own"), "{error:#}");
+}
