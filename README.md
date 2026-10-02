@@ -80,8 +80,10 @@ Recorded -45000 PYG on 2026-09-17 - lunch at the corner
 ```
 
 `+` turns a line around (`austeris add +2500000 salary september`), `from` names
-an account when you have more than one, and everything after the category is the
-note. What it cannot know, it asks about rather than guesses:
+an account when you have more than one, `@` names who was paid, `#` adds a tag,
+a leading `~` marks a card payment the bank still holds, and everything after
+the category is the note. What it cannot know, it asks about rather than
+guesses:
 
 ```console
 $ austeris add 9000 yachts
@@ -104,7 +106,9 @@ Every endpoint, with its shape: **[the ledger reference](https://lacodda.github.
 Early, and the books are open: entries, accounts, categories and balances work
 end to end, with the balance rule held by the database; money changes currency
 as an exchange with its fee on a line of its own, and the day's rates arrive
-from the central banks of Paraguay and Russia, each saying how old it is. The
+from the central banks of Paraguay and Russia, each saying how old it is. An
+entry names who was paid, where and under which tags, card payments are held
+until the bank posts them, and totals gather spending by any of those. The
 whole thing installs as one container from a published image. A crypto-portfolio
 tracker lived in this repository through 2025 and is preserved at the tag
 [`legacy-2025`](https://github.com/lacodda/austeris/tree/legacy-2025) - it is

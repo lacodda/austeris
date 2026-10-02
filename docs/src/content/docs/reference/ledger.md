@@ -103,6 +103,27 @@ with the currency and the gap named:
   "message": "the entry does not balance in PYG: the lines sum to -100" }
 ```
 
+An entry also says who, where and which labels, all optional:
+
+```json
+{
+  "counterparty_id": "…",
+  "place": { "country": "PY", "city": "Asunción" },
+  "tags": ["holiday-2027"],
+  "pending": true,
+  "lines": ["…"]
+}
+```
+
+`counterparty_id` is one of your [counterparties](#counterparties); `place` is
+found or created by what it is ([places](#places)); each tag is found by name in
+any case, or created ([tags](#tags)). `pending: true` records a payment the bank
+has not posted yet - see [held payments](#held-payments).
+
+Every entry comes back with all of it: `status` (`pending` or `cleared`),
+`cleared_on` (the day the bank posted it; absent while held), `counterparty`
+(`id` and `name`), `place`, and `tags` in alphabetical order.
+
 ### `POST /api/v1/ledger/entries/quick`
 
 One typed line, which is the fastest way there is to record an expense:
@@ -111,7 +132,10 @@ One typed line, which is the fastest way there is to record an expense:
 { "text": "45000 food lunch at the corner" }
 ```
 
-The shape is `[+]<amount> [<currency>] <category> [from|to <account>] [@<rate>] [note…]`:
+The shape is `[~][+]<amount> [<currency>] [<category>] [note…]`, with any of
+`from|to <account>`, `@<rate>`, `@<counterparty>` and `#<tag>` anywhere after the
+amount. The category is the first word that is none of those, and every plain
+word after it is the note:
 
 | Typed | Means |
 | --- | --- |
@@ -123,10 +147,40 @@ The shape is `[+]<amount> [<currency>] <category> [from|to <account>] [@<rate>] 
 | `1,500.50 food` / `1.500,50 food` | the same amount; thousands separators and either decimal mark |
 | `10 usd subscriptions from card` | 10 USD charged to a guarani card, converted at the day's rate |
 | `10 usd subscriptions @5965 from card` | …at the rate the bank actually charged |
+| `45000 food @casarica lunch` | paid to the counterparty *Casa Rica* |
+| `45000 @casarica` | …filed under its usual category |
+| `45000 food #holiday-2027` | labelled with a tag |
+| `~300000 hotel from card` | a payment the bank is still holding |
+
+After `@`, a word starting with a digit is a rate and anything else is a
+counterparty - so `@59oo` is refused as a mistyped rate rather than taken for a
+shop called *59oo*. A counterparty is matched without case, spaces or
+punctuation: `@casarica`, `@Casa-Rica` and `@casa_rica` are all *Casa Rica*. A
+rate or a counterparty said twice is refused.
+
+A counterparty named for the first time is **created**, with the line's category
+as its usual one, and the answer says so in `new_counterparty` - so the next
+line can be `45000 @casarica`, and a mistyped name is seen the first time. A
+line that names only a counterparty needs one with a usual category; one never
+used before needs a category beside it.
+
+A tag is `#` and a word starting with a letter - `order #1234` stays a note about
+an order. One used for the first time is created and listed in `new_tags`.
+
+A leading `~` holds the payment: it is out of what is available, and not in the
+balance until it [posts](#held-payments). With `+`, either order: `~+5000` and
+`+~5000` are the same.
 
 `-45000` is **not** accepted as the opposite of `+`. An expense is what a bare
 line already means, and a second spelling of the common case is how a `-` typed
 out of habit comes to record income.
+
+The place goes beside the text rather than in it, like the day - it is where you
+are, not something you say about each purchase:
+
+```json
+{ "text": "45000 food lunch", "place": { "country": "BR", "city": "São Paulo" } }
+```
 
 What the parser cannot know is resolved against your own books, and refused
 rather than guessed:
@@ -167,13 +221,171 @@ did:
 
 ### `GET /api/v1/ledger/entries`
 
-Newest first. Takes `?from=`, `?to=`, `?account=`, `?category=`, `?limit=`
-(50 by default, 200 at most) and `?offset=`.
+Newest first. Takes `?from=`, `?to=`, `?account=`, `?category=`, `?tag=` (a
+name, in any case), `?counterparty=`, `?place=`, `?status=` (`pending` or
+`cleared`), `?limit=` (50 by default, 200 at most) and `?offset=`.
+
+### `PATCH /api/v1/ledger/entries/{id}`
+
+Changes what an entry says about itself - never its lines:
+
+```json
+{ "description": "dinner", "counterparty_id": null, "tags": ["holiday-2027"] }
+```
+
+Takes `occurred_on`, `description`, `counterparty_id`, `place` and `tags`. A
+field left out stays as it is; `null` clears the counterparty or the place, and
+`tags` replaces every tag the entry had (`[]` takes them all off). An entry
+posted the day it happened moves its posting day with it.
 
 ### `DELETE /api/v1/ledger/entries/{id}`
 
 A whole entry with its lines, never one line: half an entry is money from
 nowhere.
+
+## Held payments
+
+A card payment leaves the moment it is made and is posted days later, often for
+a different amount - a hotel's pre-authorisation, a fuel pump's, a charge in
+another currency converted at the bank's rate on the day it posts. Until then it
+is **held**: recorded with `"pending": true` or a leading `~`, it is out of what
+is [available](#balances) and not yet in the balance.
+
+### `POST /api/v1/ledger/entries/{id}/clear`
+
+```json
+{ "on": "2026-09-12", "amount": "180000" }
+```
+
+Posts a held entry on `on` (today by default; not before the day it happened).
+With `amount` - positive, in the account's currency - it posts for what the bank
+actually took instead of what was held:
+
+- a plain payment's category moves with it;
+- a payment in another currency keeps what it cost in that currency - the
+  10 USD stay 10 USD - and the conversion between the two is worked out again,
+  with the [fee](#exchanges) measured against the rate on the day it posted;
+- a payment from two accounts, or one split across categories, does not say
+  which part changed, and is refused: record it again instead.
+
+The answer is the entry, with `conversion` when it was worked out again. `409`
+when it was posted already.
+
+A balance as of a past day reads the same before and after a payment posts: the
+day it posted is kept, so a payment posted on the 12th was held on the 11th.
+
+## Counterparties
+
+Who money goes to or comes from: a shop, a service, a person, an employer.
+
+### `GET /api/v1/ledger/counterparties`
+
+```json
+[{ "id": "…", "name": "Casa Rica", "key": "casarica", "kind": "shop",
+   "default_category_id": "…" }]
+```
+
+`key` is how it is typed after `@`: the name in lower case without spaces or
+punctuation. Derived, never set - and unique, so *Casa Rica* and *casa-rica*
+cannot be two counterparties splitting what was spent there.
+
+### `POST /api/v1/ledger/counterparties`
+
+```json
+{ "name": "Casa Rica", "kind": "shop", "default_category_id": "…" }
+```
+
+`kind` is `shop`, `service`, `person` or `organisation`, and is left unsaid when
+omitted - one created from a typed line is not known to be a shop.
+`default_category_id` is what money spent there usually is for. `409` when you
+have one typed the same way.
+
+### `PATCH /api/v1/ledger/counterparties/{id}`
+
+Takes `name`, `kind` and `default_category_id`; `null` clears the last two.
+Every entry naming it follows: they name the counterparty, not a copy of its
+name.
+
+### `DELETE /api/v1/ledger/counterparties/{id}`
+
+Only one that no entry names; `409` otherwise.
+
+## Places
+
+A country, as its ISO 3166-1 code, and a city in it when one is said. A code that
+only looks like one is refused - the United Kingdom is `GB`, not `UK`.
+
+### `GET /api/v1/ledger/places`
+
+Every place you have recorded something at.
+
+### `PATCH /api/v1/ledger/places/{id}`
+
+```json
+{ "country": "PY", "city": "Asunción" }
+```
+
+Renames it on every entry that happened there at once. A place is found by what
+it is, in any case, so *asuncion* typed twice is one place; `409` when you
+already have the one it is renamed to.
+
+## Tags
+
+Your own labels across categories: `#holiday-2027` on the flights, the hotel and
+the dinners, whatever each was filed under. A tag is one word starting with a
+letter, then letters, digits, `-` and `_`.
+
+### `GET /api/v1/ledger/tags`
+
+Every tag, by name.
+
+### `PATCH /api/v1/ledger/tags/{id}`
+
+```json
+{ "name": "holiday-2028" }
+```
+
+### `DELETE /api/v1/ledger/tags/{id}`
+
+Takes the tag off every entry that carried it. The entries stay.
+
+## Totals
+
+### `GET /api/v1/ledger/totals`
+
+What money was spent on and earned from, gathered:
+
+```json
+{
+  "by": "counterparty",
+  "groups": [
+    { "id": "…", "name": "Casa Rica",
+      "amounts": [{ "currency": "PYG", "spent": "1250000", "earned": "0" }] },
+    { "id": null, "name": null,
+      "amounts": [{ "currency": "PYG", "spent": "310000", "earned": "2500000" }] }
+  ]
+}
+```
+
+`?by=` is `category`, `tag`, `counterparty`, `place` or `country`. It takes
+`?from=`, `?to=`, and narrows to `?tag=`, `?counterparty=` or `?account=`:
+
+| Asked | Answers |
+| --- | --- |
+| `?by=counterparty` | who got how much, and who paid how much |
+| `?by=tag` | what each tag has gathered so far |
+| `?by=category&tag=holiday-2027` | what the holiday went on |
+| `?by=country&from=2026-01-01` | what was spent in each country this year |
+
+Read from the lines on categories, which is what money is for: a transfer
+between your own accounts moves nothing here, and an exchange's fee is spending
+like any other. `spent` is the expense lines less refunds; `earned` the income
+lines. Each group is reported in every currency it moved in and never added
+across them. Held payments count on the day they were made.
+
+The entries that name no counterparty, tag or place are reported too, last, as
+a group with no `id` and no `name`, so the groups account for every line. An
+entry with two tags counts under both.
 
 ## Exchanges
 
@@ -219,9 +431,11 @@ Both accounts in one currency is a transfer, and is refused.
   "as_of": "2026-09-17",
   "accounts": [
     { "account_id": "…", "name": "Wallet", "currency": "PYG",
-      "amount": "392500.000000000000000000", "converted": "51.025000000000000000" }
+      "amount": "392500.000000000000000000", "available": "362500.000000000000000000",
+      "converted": "51.025000000000000000", "converted_available": "47.125000000000000000" }
   ],
-  "total": { "currency": "USD", "amount": "251.025000000000000000" }
+  "total": { "currency": "USD", "amount": "251.025000000000000000",
+             "available": "247.125000000000000000" }
 }
 ```
 
@@ -230,6 +444,11 @@ at the rate in force on that day and sums them.
 
 Balances are computed from the entries every time and never stored. `as_of`
 includes the day itself — an entry on that date has happened by the end of it.
+
+`amount` is what the bank had posted by the end of the day - the number the
+account's statement shows. `available` is that less the [payments still
+held](#held-payments) on it: money that has left and not been posted. Money held
+on its way **in** is not added until it arrives, which is how a bank counts it.
 
 A balance in a currency with no rate for the day carries **no** `converted`
 field, and its currency is named in `total.unconverted`.
@@ -295,6 +514,30 @@ Recorded -45000 PYG on 2026-09-17 - lunch at the corner
 `austeris add` takes its words unquoted or quoted, and `--on YYYY-MM-DD` for a
 day other than today. It calls this API like any other client: the gateway is
 the only way in, and the line is parsed by the service, not by the CLI.
+
+A counterparty, tags and a hold are printed back the way the line said them,
+and anything named for the first time is pointed out:
+
+```console
+$ austeris add "~45000 @Casa-Rica food #holiday-2027 lunch" --country PY --city Asunción
+Recorded -45000 PYG on 2026-09-17 @Casa-Rica #holiday-2027 (held) - lunch
+  new counterparty Casa-Rica, typed as @casarica
+  new tag #holiday-2027
+```
+
+A shell reads `#` as the start of a comment, and PowerShell reads a leading `@`
+as its own: quote a line that has either.
+
+`austeris pending` lists what is held, with the start of each id; `austeris
+clear` posts one, for what the bank took when that was another amount:
+
+```console
+$ austeris pending
+3f2a91c0  -45000 PYG on 2026-09-17 @Casa-Rica #holiday-2027 - lunch
+
+$ austeris clear 3f2a 47500 --on 2026-09-19
+Posted -47500 PYG on 2026-09-19, made on 2026-09-17 @Casa-Rica #holiday-2027 - lunch
+```
 
 A converted line says what the conversion did:
 

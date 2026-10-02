@@ -43,6 +43,13 @@ Either way it prints how to sign in:
 - **Four months of entries** up to today: a salary on the first, rent on the
   third, groceries every few days, weekly trips to the cash machine and a
   monthly transfer into savings - transfers are entries like any other.
+- **The shops and people it pays**, each with its usual category: the grocer,
+  the bistro, the landlord, the power company, the employer and a few more.
+- **A trip every other month**, paid from the dollar card in Boston, with the
+  dollars bought before it - all of it tagged `trip-YYYY-MM`, so a tag's
+  totals have something to gather.
+- **Held card payments** for the last two days, which the next run posts once a
+  bank would have.
 - **A dollar rate for every day**, so balances in two currencies add up.
 - **Two instruments nobody trades**, `DMC` and `DWLD`, with a price a day. Their
   names are invented on purpose: a demo price can never be mistaken for a real

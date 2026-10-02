@@ -93,6 +93,12 @@ about it.
 The cost is a `SUM` per read, over an index built for it. For one person's
 finances that is not a cost.
 
+A payment the bank has not posted yet is the one line an account's balance
+leaves out: it is **held**, out of what is available and not yet in the balance,
+the way a bank shows a card payment for the days before it posts. Both numbers
+are computed the same way, from the same lines - the balance counts what had
+posted by the end of the day, what is available also subtracts what was held.
+
 ## Opening balances are not entries
 
 What was in an account before austeris knew about it lives on the account, not as
