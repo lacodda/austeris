@@ -19,8 +19,8 @@
 use anyhow::{Context, Result, bail};
 use austeris_common::{Config, db};
 use austeris_ledger::exchange::{self, Money};
-use austeris_ledger::model::{AccountKind, Flow, Purpose};
-use austeris_ledger::repository::{self as ledger, NewEntry, NewLine, Side};
+use austeris_ledger::model::{AccountKind, CounterpartyKind, EntryStatus, Flow, Purpose};
+use austeris_ledger::repository::{self as ledger, CounterpartyChoice, EntryFilter, NewEntry, NewLine, NewPlace, Side};
 use austeris_market::model::Kind;
 use austeris_market::repository as market;
 use chrono::{Datelike, Days, NaiveDate, NaiveTime, Utc};
@@ -42,6 +42,9 @@ const DAYS: u64 = 120;
 
 /// Where each entry and price says it came from.
 const SOURCE: &str = "demo";
+
+/// How many days a card payment stays held before the bank posts it.
+const HELD_DAYS: u64 = 2;
 
 /// Whether `AUSTERIS_DEMO` asks `serve` to seed before it starts.
 #[must_use]
@@ -150,7 +153,7 @@ pub async fn seed(books: &Books) -> Result<Seeded> {
         // recorded before the day's entries, because the exchange before a trip
         // is measured against it.
         ledger::record_rate(&books.ledger, "USD", "EUR", day, usd_in_eur(day), SOURCE).await?;
-        let mut day_entries = household.day(day);
+        let mut day_entries = household.day(day, today);
         if let Some(exchange) = household.exchange(&books.ledger, owner, day).await? {
             day_entries.push(exchange);
         }
@@ -160,13 +163,41 @@ pub async fn seed(books: &Books) -> Result<Seeded> {
             }
         }
     }
+    post_what_the_bank_has_taken(&books.ledger, owner, today).await?;
 
     prices(&books.market, first, today).await?;
     Ok(Seeded { created, entries })
 }
 
-/// The household's accounts and categories, found or created.
+/// Posts the card payments held for longer than a bank takes, as of today.
+///
+/// A payment is seeded held when it is recent; a run days later finds it
+/// still held - its key says it is already there - and posts it on the day the
+/// bank would have.
+async fn post_what_the_bank_has_taken(pool: &PgPool, owner: Uuid, today: NaiveDate) -> Result<()> {
+    let held = ledger::entries(
+        pool,
+        owner,
+        &EntryFilter {
+            status: Some(EntryStatus::Pending),
+            limit: 200,
+            ..EntryFilter::default()
+        },
+    )
+    .await?;
+    for entry in held {
+        let posted_on = entry.occurred_on + Days::new(HELD_DAYS);
+        if posted_on <= today {
+            ledger::clear_entry(pool, owner, entry.id, posted_on, None).await?;
+        }
+    }
+    Ok(())
+}
+
+/// The household's accounts, categories and the people and shops it deals
+/// with, found or created.
 struct Household {
+    shops: Shops,
     everyday: Uuid,
     cash: Uuid,
     savings: Uuid,
@@ -199,20 +230,39 @@ impl Household {
 
         let home = category(pool, owner, None, Flow::Expense, "Home").await?;
         let food = category(pool, owner, None, Flow::Expense, "Food").await?;
+        let salary = category(pool, owner, None, Flow::Income, "Salary").await?;
+        let rent = category(pool, owner, Some(home), Flow::Expense, "Rent").await?;
+        let utilities = category(pool, owner, Some(home), Flow::Expense, "Utilities").await?;
+        let groceries = category(pool, owner, Some(food), Flow::Expense, "Groceries").await?;
+        let eating_out = category(pool, owner, Some(food), Flow::Expense, "Eating out").await?;
+        let transport = category(pool, owner, None, Flow::Expense, "Transport").await?;
+        let health = category(pool, owner, None, Flow::Expense, "Health").await?;
+        let fun = category(pool, owner, None, Flow::Expense, "Fun").await?;
+        let shops = Shops {
+            employer: counterparty(pool, owner, "Northwind Works", CounterpartyKind::Organisation, salary).await?,
+            landlord: counterparty(pool, owner, "Mrs Alder", CounterpartyKind::Person, rent).await?,
+            power: counterparty(pool, owner, "Brightline Energy", CounterpartyKind::Service, utilities).await?,
+            grocer: counterparty(pool, owner, "Corner Grocer", CounterpartyKind::Shop, groceries).await?,
+            bistro: counterparty(pool, owner, "Bistro Nine", CounterpartyKind::Shop, eating_out).await?,
+            transit: counterparty(pool, owner, "Metro Line", CounterpartyKind::Service, transport).await?,
+            pharmacy: counterparty(pool, owner, "Greenleaf Pharmacy", CounterpartyKind::Shop, health).await?,
+            cinema: counterparty(pool, owner, "Lumen Cinema", CounterpartyKind::Shop, fun).await?,
+        };
         Ok(Self {
+            shops,
             everyday,
             cash,
             savings,
             travel,
-            salary: category(pool, owner, None, Flow::Income, "Salary").await?,
+            salary,
             side_work: category(pool, owner, None, Flow::Income, "Side work").await?,
-            rent: category(pool, owner, Some(home), Flow::Expense, "Rent").await?,
-            utilities: category(pool, owner, Some(home), Flow::Expense, "Utilities").await?,
-            groceries: category(pool, owner, Some(food), Flow::Expense, "Groceries").await?,
-            eating_out: category(pool, owner, Some(food), Flow::Expense, "Eating out").await?,
-            transport: category(pool, owner, None, Flow::Expense, "Transport").await?,
-            health: category(pool, owner, None, Flow::Expense, "Health").await?,
-            fun: category(pool, owner, None, Flow::Expense, "Fun").await?,
+            rent,
+            utilities,
+            groceries,
+            eating_out,
+            transport,
+            health,
+            fun,
             trips: category(pool, owner, None, Flow::Expense, "Trips").await?,
         })
     }
@@ -220,53 +270,107 @@ impl Household {
     /// What happened on one day.
     ///
     /// Decided by the day alone: the same day always yields the same entries,
-    /// which is what lets a second run recognise the first one's by key.
-    fn day(&self, day: NaiveDate) -> Vec<NewEntry> {
+    /// which is what lets a second run recognise the first one's by key. A
+    /// card payment made in the last days before `today` is held, the way the
+    /// bank has it.
+    fn day(&self, day: NaiveDate, today: NaiveDate) -> Vec<NewEntry> {
         let mut dice = Dice::for_day(day);
         let mut out = Vec::new();
-        let mut spend = |key: &str, account: Uuid, category: Uuid, currency: &str, amount: Decimal, what: &str| {
-            out.push(movement(day, key, (account, currency), Side::Category(category), -amount, what));
+        let held = day + Days::new(HELD_DAYS) > today;
+        let shops = &self.shops;
+        let mut spend = |key: &str, (account, currency): (Uuid, &str), (category, shop): (Uuid, Option<Uuid>), amount: Decimal, what: &str| {
+            let mut entry = movement(day, key, (account, currency), Side::Category(category), -amount, what);
+            entry.counterparty = shop.map(CounterpartyChoice::Existing);
+            entry.pending = held && account != self.cash;
+            out.push(entry);
         };
+        let eur = |account| (account, "EUR");
 
         match day.day() {
-            3 => spend("rent", self.everyday, self.rent, "EUR", Decimal::from(1_150), "Rent"),
-            11 => spend("power", self.everyday, self.utilities, "EUR", dice.cents(70, 140), "Power and water"),
+            3 => spend("rent", eur(self.everyday), (self.rent, Some(shops.landlord)), Decimal::from(1_150), "Rent"),
+            11 => spend(
+                "power",
+                eur(self.everyday),
+                (self.utilities, Some(shops.power)),
+                dice.cents(70, 140),
+                "Power and water",
+            ),
             _ => {}
         }
         if dice.chance(38) {
             let account = if dice.chance(25) { self.cash } else { self.everyday };
-            spend("groceries", account, self.groceries, "EUR", dice.cents(18, 115), "Groceries");
+            spend(
+                "groceries",
+                eur(account),
+                (self.groceries, Some(shops.grocer)),
+                dice.cents(18, 115),
+                "Groceries",
+            );
         }
         if day.weekday().number_from_monday() >= 5 && dice.chance(55) {
-            spend("out", self.cash, self.eating_out, "EUR", dice.cents(14, 68), "Dinner out");
+            spend("out", eur(self.cash), (self.eating_out, Some(shops.bistro)), dice.cents(14, 68), "Dinner out");
         }
         if dice.chance(20) {
-            spend("transport", self.everyday, self.transport, "EUR", dice.cents(9, 48), "Fuel and tickets");
+            spend(
+                "transport",
+                eur(self.everyday),
+                (self.transport, Some(shops.transit)),
+                dice.cents(9, 48),
+                "Fuel and tickets",
+            );
         }
         if dice.chance(5) {
-            spend("health", self.everyday, self.health, "EUR", dice.cents(12, 90), "Pharmacy");
+            spend(
+                "health",
+                eur(self.everyday),
+                (self.health, Some(shops.pharmacy)),
+                dice.cents(12, 90),
+                "Pharmacy",
+            );
         }
         if dice.chance(9) {
-            spend("fun", self.everyday, self.fun, "EUR", dice.cents(10, 75), "Cinema and books");
+            spend(
+                "fun",
+                eur(self.everyday),
+                (self.fun, Some(shops.cinema)),
+                dice.cents(10, 75),
+                "Cinema and books",
+            );
         }
         // A trip abroad every other month, paid in dollars from the card kept
-        // in dollars - so the balances page has a second currency to convert.
+        // in dollars - so the balances page has a second currency to convert,
+        // and a tag and a place to gather the trip by.
         if day.month().is_multiple_of(2) && (12..=16).contains(&day.day()) {
-            spend("trip", self.travel, self.trips, "USD", dice.cents(40, 160), "Travelling");
+            spend("trip", (self.travel, "USD"), (self.trips, None), dice.cents(40, 160), "Travelling");
+            if let Some(entry) = out.last_mut() {
+                entry.tags = vec![trip_tag(day)];
+                entry.place = Some(NewPlace {
+                    country: "US".to_owned(),
+                    city: Some("Boston".to_owned()),
+                });
+            }
         }
 
-        let mut earn = |key: &str, category: Uuid, amount: Decimal, what: &str| {
-            out.push(movement(day, key, (self.everyday, "EUR"), Side::Category(category), amount, what));
+        let mut earn = |key: &str, category: Uuid, from: Option<Uuid>, amount: Decimal, what: &str| {
+            let mut entry = movement(day, key, (self.everyday, "EUR"), Side::Category(category), amount, what);
+            entry.counterparty = from.map(CounterpartyChoice::Existing);
+            out.push(entry);
         };
         if day.day() == 1 {
-            earn("salary", self.salary, Decimal::from(3_400), "Salary");
+            earn("salary", self.salary, Some(shops.employer), Decimal::from(3_400), "Salary");
         }
         if day.day() == 18 && !day.month().is_multiple_of(3) {
-            earn("side", self.side_work, dice.cents(250, 620), "Invoice paid");
+            earn("side", self.side_work, None, dice.cents(250, 620), "Invoice paid");
         }
 
-        // Money moved between the household's own accounts: the case double
-        // entry makes the same as any other movement.
+        out.extend(self.transfers(day));
+        out
+    }
+
+    /// Money moved between the household's own accounts on a day: the case
+    /// double entry makes the same as any other movement.
+    fn transfers(&self, day: NaiveDate) -> Vec<NewEntry> {
+        let mut out = Vec::new();
         if day.weekday().number_from_monday() == 1 {
             out.push(movement(
                 day,
@@ -326,9 +430,36 @@ impl Household {
             description: "Dollars for the trip".to_owned(),
             idempotency_key: Some(format!("{SOURCE}:{day}:exchange")),
             source: Some(SOURCE.to_owned()),
+            tags: vec![trip_tag(day)],
             lines: plan.lines(Side::Account(self.everyday), Side::Account(self.travel), fees)?,
             ..NewEntry::default()
         }))
+    }
+}
+
+/// The people and shops the household pays and is paid by.
+struct Shops {
+    employer: Uuid,
+    landlord: Uuid,
+    power: Uuid,
+    grocer: Uuid,
+    bistro: Uuid,
+    transit: Uuid,
+    pharmacy: Uuid,
+    cinema: Uuid,
+}
+
+/// The tag a trip's money is gathered by: one per trip, named for its month.
+fn trip_tag(day: NaiveDate) -> String {
+    format!("trip-{}", day.format("%Y-%m"))
+}
+
+/// A counterparty, found by name or created with what it is and what money
+/// spent there is usually for.
+async fn counterparty(pool: &PgPool, owner: Uuid, name: &str, kind: CounterpartyKind, usual: Uuid) -> Result<Uuid> {
+    match ledger::counterparty_by_name(pool, owner, name).await? {
+        Some(found) => Ok(found.id),
+        None => Ok(ledger::create_counterparty(pool, owner, name, Some(kind), Some(usual)).await?.id),
     }
 }
 
@@ -503,9 +634,33 @@ mod tests {
             .await
             .expect("reading balances");
         assert_eq!(balances.len(), 4, "the demo has four accounts");
-        for balance in balances {
+        for balance in &balances {
             assert!(balance.amount > Decimal::ZERO, "{} went below zero: {}", balance.name, balance.amount);
         }
+
+        // Who it pays, a tag per trip, and nothing held for longer than a bank
+        // takes to post it.
+        let counterparties = austeris_ledger::repository::counterparties(&books.ledger, owner).await.expect("listing");
+        assert_eq!(counterparties.len(), 8);
+        assert!(counterparties.iter().all(|counterparty| counterparty.default_category_id.is_some()));
+        let tags = austeris_ledger::repository::tags(&books.ledger, owner).await.expect("listing");
+        assert!(!tags.is_empty() && tags.iter().all(|tag| tag.name.starts_with("trip-")), "{tags:?}");
+        let held = austeris_ledger::repository::entries(
+            &books.ledger,
+            owner,
+            &austeris_ledger::repository::EntryFilter {
+                status: Some(austeris_ledger::model::EntryStatus::Pending),
+                limit: 200,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("listing held entries");
+        let today = Utc::now().date_naive();
+        assert!(
+            held.iter().all(|entry| entry.occurred_on + chrono::Days::new(super::HELD_DAYS) > today),
+            "a payment stayed held for longer than a bank takes"
+        );
     }
 
     #[tokio::test]
