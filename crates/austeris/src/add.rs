@@ -232,7 +232,7 @@ pub async fn clear(args: &ClearArgs) -> Result<()> {
     let response = answered(response).await?;
 
     let recorded: Recorded = response.json().await.context("reading the entry back")?;
-    println!("Posted {}", describe(&recorded.entry).trim_start_matches("Recorded "));
+    println!("{}", describe_posted(&recorded.entry));
     if let Some(conversion) = &recorded.conversion {
         println!("  {}", describe_conversion(conversion));
     }
@@ -473,6 +473,8 @@ struct Entry {
     occurred_on: String,
     #[serde(default)]
     status: String,
+    #[serde(default)]
+    cleared_on: Option<String>,
     description: String,
     #[serde(default)]
     counterparty: Option<Named>,
@@ -509,6 +511,18 @@ fn describe(entry: &Entry) -> String {
 /// A held entry as `pending` lists it: when, how much, and what it was.
 fn describe_held(entry: &Entry) -> String {
     describe(entry).trim_start_matches("Recorded ").replace(" (held)", "")
+}
+
+/// A held entry once posted: the day the bank posted it, beside the day it
+/// was made, because those are the two dates a statement and a receipt carry.
+fn describe_posted(entry: &Entry) -> String {
+    let posted = entry.cleared_on.as_deref().unwrap_or("?");
+    let made = describe(entry);
+    let rest = made.trim_start_matches("Recorded ");
+    match rest.split_once(&format!(" on {}", entry.occurred_on)) {
+        Some((moved, said)) => format!("Posted {moved} on {posted}, made on {}{said}", entry.occurred_on),
+        None => format!("Posted {rest}"),
+    }
 }
 
 /// What an entry says about itself, written the way a line says it: `@who`,
@@ -627,6 +641,7 @@ mod tests {
             id: String::new(),
             occurred_on: "2026-09-17".to_owned(),
             status: "cleared".to_owned(),
+            cleared_on: None,
             description: description.to_owned(),
             counterparty: None,
             tags: Vec::new(),
@@ -731,6 +746,13 @@ mod tests {
         held.tags = vec!["holiday".to_owned()];
         held.status = "pending".to_owned();
         assert_eq!(describe(&held), "Recorded -45000 PYG on 2026-09-17 @Casa Rica #holiday (held) - lunch");
+    }
+
+    #[test]
+    fn a_posted_payment_says_when_it_posted_and_when_it_was_made() {
+        let mut posted = entry("lunch", vec![paid("-47500")]);
+        posted.cleared_on = Some("2026-09-19".to_owned());
+        assert_eq!(super::describe_posted(&posted), "Posted -47500 PYG on 2026-09-19, made on 2026-09-17 - lunch");
     }
 
     #[test]
