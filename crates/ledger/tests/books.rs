@@ -1272,7 +1272,7 @@ async fn balances_cross_the_contract_as_strings_with_every_digit() {
     let btc = answer.balances.iter().find(|balance| balance.currency == "BTC").expect("the wallet");
     assert_eq!(btc.amount, "0.123456789012345678", "a digit was lost crossing the contract");
     // Nothing was asked to be converted, so nothing claims to have been.
-    assert!(btc.converted.is_empty());
+    assert_eq!(btc.converted, "");
 }
 
 #[tokio::test]

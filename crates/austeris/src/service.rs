@@ -224,7 +224,7 @@ mod tests {
     fn every_routed_service_has_a_prefix_and_the_gateway_has_none() {
         assert!(Service::routed().iter().all(|s| !s.prefix().is_empty()));
         assert!(!Service::routed().contains(&Service::Gateway), "the gateway must not forward to itself");
-        assert!(Service::Gateway.prefix().is_empty());
+        assert_eq!(Service::Gateway.prefix(), "");
     }
 
     #[test]
