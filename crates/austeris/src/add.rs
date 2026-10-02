@@ -1,4 +1,5 @@
-//! The `add`, `exchange` and `login` subcommands: recording from a terminal.
+//! The `add`, `exchange`, `pending`, `clear` and `login` subcommands:
+//! recording from a terminal.
 //!
 //! `austeris add "45000 food lunch"` is the fastest way there is to record an
 //! expense, and it is the point of the one-line form - a ledger someone keeps
@@ -29,6 +30,31 @@ pub struct AddArgs {
     pub words: Vec<String>,
 
     /// The day it happened, as `YYYY-MM-DD`. Today when omitted.
+    #[arg(long, value_name = "DATE")]
+    pub on: Option<String>,
+
+    /// The country it happened in, as its ISO 3166-1 code: `PY`, `BR`.
+    #[arg(long, value_name = "CODE")]
+    pub country: Option<String>,
+
+    /// The city it happened in; needs `--country`.
+    #[arg(long, value_name = "NAME", requires = "country")]
+    pub city: Option<String>,
+}
+
+/// Arguments to `austeris clear`.
+#[derive(Debug, clap::Args)]
+pub struct ClearArgs {
+    /// The held entry, by the start of its id as `austeris pending` prints it.
+    #[arg(value_name = "ID")]
+    pub id: String,
+
+    /// What the account actually moved by, when the bank posted another
+    /// amount than was held.
+    #[arg(value_name = "AMOUNT")]
+    pub amount: Option<String>,
+
+    /// The day the bank posted it, as `YYYY-MM-DD`. Today when omitted.
     #[arg(long, value_name = "DATE")]
     pub on: Option<String>,
 }
@@ -125,6 +151,9 @@ pub async fn add(args: &AddArgs) -> Result<()> {
     if let Some(on) = &args.on {
         body["occurred_on"] = serde_json::Value::String(on.clone());
     }
+    if let Some(country) = &args.country {
+        body["place"] = serde_json::json!({ "country": country, "city": args.city });
+    }
 
     let response = austeris_common::http::client()
         .post(format!("{}/api/v1/ledger/entries/quick", base_url()))
@@ -133,22 +162,124 @@ pub async fn add(args: &AddArgs) -> Result<()> {
         .send()
         .await
         .with_context(|| format!("reaching austeris at {}", base_url()))?;
-
-    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
-        bail!("that session is no longer good; run `austeris login` again");
-    }
-    if !response.status().is_success() {
-        // The message is the ledger's own - "you have no category called
-        // `yachts`", "say which account" - and it is what the person needs.
-        bail!("{}", message_from(response).await);
-    }
+    // The message is the ledger's own - "you have no category called
+    // `yachts`", "say which account" - and it is what the person needs.
+    let response = answered(response).await?;
 
     let recorded: Recorded = response.json().await.context("reading the entry back")?;
     println!("{}", describe(&recorded.entry));
     if let Some(conversion) = &recorded.conversion {
         println!("  {}", describe_conversion(conversion));
     }
+    // Said the first time, so a mistyped name is noticed now rather than in a
+    // report a month later.
+    if let Some(counterparty) = &recorded.new_counterparty {
+        println!("  new counterparty {}, typed as @{}", counterparty.name, counterparty.key);
+    }
+    for tag in &recorded.new_tags {
+        println!("  new tag #{tag}");
+    }
     Ok(())
+}
+
+/// Lists the payments still held, oldest first, with the ids `clear` takes.
+///
+/// # Errors
+///
+/// Returns an error when there is no session, or the installation cannot be
+/// reached or refuses.
+pub async fn pending() -> Result<()> {
+    let mut held = held_entries(&read_session()?).await?;
+    if held.is_empty() {
+        println!("Nothing is held.");
+        return Ok(());
+    }
+    held.reverse();
+    for entry in &held {
+        println!("{}  {}", short_id(&entry.id), describe_held(entry));
+    }
+    Ok(())
+}
+
+/// Posts a held payment, for the amount the bank took when that was another.
+///
+/// # Errors
+///
+/// Returns an error when there is no session, the id matches no held entry or
+/// more than one, the amount is not one, or the installation refuses.
+pub async fn clear(args: &ClearArgs) -> Result<()> {
+    let session = read_session()?;
+    let held = held_entries(&session).await?;
+    let entry = held_by_prefix(&held, &args.id)?;
+
+    let mut body = serde_json::json!({});
+    if let Some(amount) = &args.amount {
+        // The ledger's own reading of an amount, as for `exchange`.
+        let amount = austeris_ledger::parse::amount(amount).with_context(|| format!("`{amount}` is not an amount"))?;
+        body["amount"] = serde_json::Value::String(amount.to_string());
+    }
+    if let Some(on) = &args.on {
+        body["on"] = serde_json::Value::String(on.clone());
+    }
+
+    let response = austeris_common::http::client()
+        .post(format!("{}/api/v1/ledger/entries/{}/clear", base_url(), entry.id))
+        .header(reqwest::header::COOKIE, &session)
+        .json(&body)
+        .send()
+        .await
+        .with_context(|| format!("reaching austeris at {}", base_url()))?;
+    let response = answered(response).await?;
+
+    let recorded: Recorded = response.json().await.context("reading the entry back")?;
+    println!("Posted {}", describe(&recorded.entry).trim_start_matches("Recorded "));
+    if let Some(conversion) = &recorded.conversion {
+        println!("  {}", describe_conversion(conversion));
+    }
+    Ok(())
+}
+
+/// Every held entry, newest first, as the ledger lists them.
+async fn held_entries(session: &str) -> Result<Vec<Entry>> {
+    let response = austeris_common::http::client()
+        .get(format!("{}/api/v1/ledger/entries", base_url()))
+        .query(&[("status", "pending"), ("limit", "200")])
+        .header(reqwest::header::COOKIE, session)
+        .send()
+        .await
+        .with_context(|| format!("reaching austeris at {}", base_url()))?;
+    answered(response).await?.json().await.context("reading the held entries")
+}
+
+/// The one held entry whose id starts with what was typed.
+fn held_by_prefix<'a>(held: &'a [Entry], typed: &str) -> Result<&'a Entry> {
+    let typed = typed.trim().to_lowercase();
+    if typed.is_empty() {
+        bail!("say which entry, by the start of its id as `austeris pending` prints it");
+    }
+    let found: Vec<&Entry> = held.iter().filter(|entry| entry.id.starts_with(&typed)).collect();
+    match found.as_slice() {
+        [only] => Ok(only),
+        [] => bail!("no held entry's id starts with `{typed}`; `austeris pending` lists them"),
+        // Posting the wrong one of two moves money that is still held.
+        several => bail!("`{typed}` starts the ids of {} held entries; type more of it", several.len()),
+    }
+}
+
+/// The start of an id, long enough to tell one held entry from another.
+fn short_id(id: &str) -> &str {
+    id.get(..8).unwrap_or(id)
+}
+
+/// A response that answered, or the reason it did not, as the person needs it.
+async fn answered(response: reqwest::Response) -> Result<reqwest::Response> {
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        bail!("that session is no longer good; run `austeris login` again");
+    }
+    if !response.status().is_success() {
+        bail!("{}", message_from(response).await);
+    }
+    Ok(response)
 }
 
 /// Records money changed from one account's currency into another's.
@@ -242,12 +373,22 @@ fn named<'a>(accounts: &'a [Account], name: &str) -> Result<&'a Account> {
     })
 }
 
-/// What the installation answers after recording: the entry, and the
-/// conversion when money changed currency.
+/// What the installation answers after recording: the entry, the conversion
+/// when money changed currency, and whatever the line named for the first time.
 #[derive(Debug, serde::Deserialize)]
 struct Recorded {
     entry: Entry,
     conversion: Option<Conversion>,
+    new_counterparty: Option<NewCounterparty>,
+    #[serde(default)]
+    new_tags: Vec<String>,
+}
+
+/// Just enough of a counterparty to say how it is typed.
+#[derive(Debug, serde::Deserialize)]
+struct NewCounterparty {
+    name: String,
+    key: String,
 }
 
 /// Just enough of a conversion to say what it cost.
@@ -327,9 +468,22 @@ fn describe_conversion(conversion: &Conversion) -> String {
 /// contract but the one reading of `1.500,50` every surface has to agree on.
 #[derive(Debug, serde::Deserialize)]
 struct Entry {
+    #[serde(default)]
+    id: String,
     occurred_on: String,
+    #[serde(default)]
+    status: String,
     description: String,
+    #[serde(default)]
+    counterparty: Option<Named>,
+    #[serde(default)]
+    tags: Vec<String>,
     lines: Vec<Line>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct Named {
+    name: String,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -349,13 +503,34 @@ fn describe(entry: &Entry) -> String {
         .find(|line| line.account_id.is_some())
         .map_or_else(|| "?".to_owned(), |line| format!("{} {}", trim_zeros(&line.amount), line.currency));
 
-    let description = if entry.description.is_empty() {
-        String::new()
-    } else {
-        format!(" - {}", entry.description)
-    };
+    format!("Recorded {} on {}{}", moved, entry.occurred_on, said_about(entry))
+}
 
-    format!("Recorded {} on {}{}", moved, entry.occurred_on, description)
+/// A held entry as `pending` lists it: when, how much, and what it was.
+fn describe_held(entry: &Entry) -> String {
+    describe(entry).trim_start_matches("Recorded ").replace(" (held)", "")
+}
+
+/// What an entry says about itself, written the way a line says it: `@who`,
+/// `#tags`, whether it is held, and the note.
+fn said_about(entry: &Entry) -> String {
+    let mut said = String::new();
+    if let Some(counterparty) = &entry.counterparty {
+        said.push_str(" @");
+        said.push_str(&counterparty.name);
+    }
+    for tag in &entry.tags {
+        said.push_str(" #");
+        said.push_str(tag);
+    }
+    if entry.status == "pending" {
+        said.push_str(" (held)");
+    }
+    if !entry.description.is_empty() {
+        said.push_str(" - ");
+        said.push_str(&entry.description);
+    }
+    said
 }
 
 /// Drops the trailing zeros a `NUMERIC(38, 18)` comes back with.
@@ -445,7 +620,27 @@ fn read_session() -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Conversion, Deal, Entry, Line, Money, Reference, describe, describe_conversion, trim_zeros};
+    use super::{Conversion, Deal, Entry, Line, Money, Named, Reference, describe, describe_conversion, held_by_prefix, trim_zeros};
+
+    fn entry(description: &str, lines: Vec<Line>) -> Entry {
+        Entry {
+            id: String::new(),
+            occurred_on: "2026-09-17".to_owned(),
+            status: "cleared".to_owned(),
+            description: description.to_owned(),
+            counterparty: None,
+            tags: Vec::new(),
+            lines,
+        }
+    }
+
+    fn paid(amount: &str) -> Line {
+        Line {
+            account_id: Some("a".to_owned()),
+            amount: amount.to_owned(),
+            currency: "PYG".to_owned(),
+        }
+    }
 
     fn conversion(fee: Option<&str>, no_fee: Option<&str>, stale: bool) -> Conversion {
         Conversion {
@@ -514,36 +709,47 @@ mod tests {
     fn what_is_printed_back_is_the_money_that_moved() {
         // The account's side, not the category's: its sign is what tells the
         // person the line was read the way they meant it.
-        let entry = Entry {
-            occurred_on: "2026-09-17".to_owned(),
-            description: "lunch".to_owned(),
-            lines: vec![
-                Line {
-                    account_id: Some("a".to_owned()),
-                    amount: "-45000.000000000000000000".to_owned(),
-                    currency: "PYG".to_owned(),
-                },
+        let entry = entry(
+            "lunch",
+            vec![
+                paid("-45000.000000000000000000"),
                 Line {
                     account_id: None,
                     amount: "45000.000000000000000000".to_owned(),
                     currency: "PYG".to_owned(),
                 },
             ],
-        };
+        );
         assert_eq!(describe(&entry), "Recorded -45000 PYG on 2026-09-17 - lunch");
     }
 
     #[test]
-    fn an_entry_with_no_note_does_not_print_a_dangling_dash() {
-        let entry = Entry {
-            occurred_on: "2026-09-17".to_owned(),
-            description: String::new(),
-            lines: vec![Line {
-                account_id: Some("a".to_owned()),
-                amount: "-45000.000000000000000000".to_owned(),
-                currency: "PYG".to_owned(),
-            }],
+    fn what_is_printed_back_says_who_which_tags_and_whether_it_is_held() {
+        // The way the line said it, so the person sees it was read as meant.
+        let mut held = entry("lunch", vec![paid("-45000")]);
+        held.counterparty = Some(Named { name: "Casa Rica".to_owned() });
+        held.tags = vec!["holiday".to_owned()];
+        held.status = "pending".to_owned();
+        assert_eq!(describe(&held), "Recorded -45000 PYG on 2026-09-17 @Casa Rica #holiday (held) - lunch");
+    }
+
+    #[test]
+    fn a_held_entry_is_named_by_the_start_of_its_id_and_never_guessed() {
+        let held = |id: &str| Entry {
+            id: id.to_owned(),
+            ..entry("", vec![paid("-1")])
         };
+        let list = [held("3f2a0000-aaaa"), held("3f2b0000-bbbb")];
+        assert_eq!(held_by_prefix(&list, "3F2A").expect("one").id, "3f2a0000-aaaa");
+        // Two match: posting the wrong one moves money still held.
+        assert!(held_by_prefix(&list, "3f2").is_err());
+        assert!(held_by_prefix(&list, "9").is_err());
+        assert!(held_by_prefix(&list, " ").is_err());
+    }
+
+    #[test]
+    fn an_entry_with_no_note_does_not_print_a_dangling_dash() {
+        let entry = entry("", vec![paid("-45000.000000000000000000")]);
         assert_eq!(describe(&entry), "Recorded -45000 PYG on 2026-09-17");
     }
 }

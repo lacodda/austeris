@@ -53,6 +53,11 @@ enum Command {
     /// Records money changed between two accounts in different currencies:
     /// `austeris exchange 600000 cash 100 dollars`.
     Exchange(add::ExchangeArgs),
+    /// Lists the payments still held: made, and not yet posted by the bank.
+    Pending,
+    /// Posts a held payment, for the amount the bank took when that was
+    /// another: `austeris clear 3f2a 180000`.
+    Clear(add::ClearArgs),
     /// Signs in, so `add` has a session to record with.
     Login(add::LoginArgs),
     /// Prints the `OpenAPI` document to stdout.
@@ -74,6 +79,8 @@ async fn main() -> Result<()> {
         Command::Migrate(args) => migrate::run(&args).await,
         Command::Add(args) => add::add(&args).await,
         Command::Exchange(args) => add::exchange(&args).await,
+        Command::Pending => add::pending().await,
+        Command::Clear(args) => add::clear(&args).await,
         Command::Login(args) => add::login(&args).await,
         Command::Openapi => {
             println!("{}", serde_json::to_string_pretty(&openapi::document())?);
