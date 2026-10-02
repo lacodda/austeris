@@ -105,6 +105,10 @@ impl LedgerService for Service {
                 idempotency_key: Some(request.idempotency_key.trim().to_owned()),
                 source: (!request.source.trim().is_empty()).then(|| request.source.trim().to_owned()),
                 lines,
+                // A module posts what has happened: a salary paid, an instalment
+                // due. It names no counterparty, place or tags, and holds
+                // nothing - those are a person's words about their own entries.
+                ..NewEntry::default()
             },
         )
         .await
@@ -144,10 +148,12 @@ impl LedgerService for Service {
                     name: balance.name.clone(),
                     currency: balance.currency.clone(),
                     amount: balance.amount.to_string(),
+                    available: balance.available.to_string(),
                     // Empty, not "0", when there is no rate: a caller adding up
                     // a column of these must not silently include a zero for
                     // money that simply could not be converted.
                     converted: balance.converted.map(|amount| amount.to_string()).unwrap_or_default(),
+                    converted_available: balance.converted_available.map(|amount| amount.to_string()).unwrap_or_default(),
                     rate_on: balance.rate_used.as_ref().map(|rate| rate.on_date.to_string()).unwrap_or_default(),
                     rate_stale: balance.rate_used.as_ref().is_some_and(|rate| rate.stale),
                 })

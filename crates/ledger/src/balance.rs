@@ -30,6 +30,8 @@ pub struct Total {
     pub currency: String,
     /// The sum of every balance that could be converted.
     pub amount: Decimal,
+    /// The sum of what was available on each of them.
+    pub available: Decimal,
     /// Currencies no rate was found for, so their balances are not in `amount`.
     ///
     /// Reported rather than quietly dropped: a total that silently omits a
@@ -53,6 +55,7 @@ pub struct Total {
 /// Returns an error when a rate cannot be read.
 pub async fn convert(pool: &PgPool, balances: &mut [Balance], into: &str, as_of: NaiveDate) -> Result<Total> {
     let mut total = Decimal::ZERO;
+    let mut available = Decimal::ZERO;
     let mut unconverted: Vec<String> = Vec::new();
     let mut stale: Vec<String> = Vec::new();
 
@@ -78,13 +81,17 @@ pub async fn convert(pool: &PgPool, balances: &mut [Balance], into: &str, as_of:
             .and_then(|(_, rate)| rate.clone());
         if let Some(rate) = rate {
             let converted = (balance.amount * rate.rate).round_dp(SCALE);
+            let converted_available = (balance.available * rate.rate).round_dp(SCALE);
             balance.converted = Some(converted);
+            balance.converted_available = Some(converted_available);
             // A currency in itself needs no rate shown; one that was converted
             // says at what, and how old that was.
             balance.rate_used = (balance.currency != into).then_some(rate);
             total += converted;
+            available += converted_available;
         } else {
             balance.converted = None;
+            balance.converted_available = None;
             balance.rate_used = None;
             if !unconverted.contains(&balance.currency) {
                 unconverted.push(balance.currency.clone());
@@ -97,6 +104,7 @@ pub async fn convert(pool: &PgPool, balances: &mut [Balance], into: &str, as_of:
         // Rounded again: the sum of rounded parts can still carry a longer
         // scale than any of them, and the total is what a person reads.
         amount: total.round_dp(SCALE),
+        available: available.round_dp(SCALE),
         unconverted,
         stale,
     })

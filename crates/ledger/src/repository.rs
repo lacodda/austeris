@@ -8,7 +8,30 @@ use rust_decimal::Decimal;
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
-use crate::model::{Account, AccountKind, Balance, Category, Entry, ExchangeRate, Flow, Line, LineSide, Purpose, RateInForce};
+use crate::model::{
+    Account, AccountKind, Balance, Category, CounterpartyRef, Entry, EntryStatus, ExchangeRate, Flow, Line, LineSide, Place, Purpose, RateInForce,
+};
+
+mod details;
+mod totals;
+
+pub use details::*;
+pub use totals::*;
+
+/// What an entry's header is read with: its own columns, who and where it was,
+/// and its tags - everything but the lines, which come in a query of their own.
+macro_rules! header_select {
+    () => {
+        "SELECT e.id, e.occurred_on, e.status, e.cleared_on, e.description, e.source,
+                cp.id AS counterparty_id, cp.name AS counterparty_name,
+                p.id AS place_id, p.country::text AS country, p.city,
+                ARRAY(SELECT t.name FROM entry_tags et JOIN tags t ON t.id = et.tag_id
+                       WHERE et.entry_id = e.id ORDER BY lower(t.name)) AS tags
+           FROM entries e
+           LEFT JOIN counterparties cp ON cp.id = e.counterparty_id
+           LEFT JOIN places p ON p.id = e.place_id"
+    };
+}
 
 /// Every account a person has, open ones first.
 ///
@@ -336,7 +359,7 @@ pub struct NewLine {
 }
 
 /// An entry about to be written.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct NewEntry {
     /// The day the money moved.
     pub occurred_on: NaiveDate,
@@ -346,8 +369,33 @@ pub struct NewEntry {
     pub idempotency_key: Option<String>,
     /// Which module posted it.
     pub source: Option<String>,
+    /// Held rather than posted: a card payment the bank has not posted yet.
+    /// Otherwise it is posted the day it happened.
+    pub pending: bool,
+    /// Who the money went to or came from.
+    pub counterparty: Option<CounterpartyChoice>,
+    /// Where it happened; found or created.
+    pub place: Option<NewPlace>,
+    /// The person's labels on it, by name; each found or created.
+    pub tags: Vec<String>,
     /// The sides of the movement.
     pub lines: Vec<NewLine>,
+}
+
+/// The counterparty an entry names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CounterpartyChoice {
+    /// One the person already has.
+    Existing(Uuid),
+    /// One named for the first time, created with the entry - in the same
+    /// transaction, so a refused entry leaves no counterparty behind. When one
+    /// by that key appeared in the meantime, it is used instead.
+    New {
+        /// What to call it.
+        name: String,
+        /// What money spent there is usually for.
+        usual_category: Option<Uuid>,
+    },
 }
 
 /// What posting an entry did.
@@ -393,20 +441,51 @@ pub async fn post_entry(pool: &PgPool, owner_id: Uuid, new: &NewEntry) -> Result
     // at the owner.
     ensure_sides_belong_to(&mut transaction, owner_id, &new.lines).await?;
 
+    let counterparty_id = match &new.counterparty {
+        Some(choice) => Some(details::choose_counterparty(&mut transaction, owner_id, choice).await?),
+        None => None,
+    };
+    let place_id = match &new.place {
+        Some(place) => Some(details::find_or_create_place(&mut transaction, owner_id, place).await?),
+        None => None,
+    };
+    let (status, cleared_on) = if new.pending {
+        (EntryStatus::Pending, None)
+    } else {
+        (EntryStatus::Cleared, Some(new.occurred_on))
+    };
+
     let entry_id: Uuid = sqlx::query_scalar(
-        "INSERT INTO entries (owner_id, occurred_on, description, idempotency_key, source)
-         VALUES ($1, $2, $3, $4, $5) RETURNING id",
+        "INSERT INTO entries (owner_id, occurred_on, description, idempotency_key, source, counterparty_id, place_id, status, cleared_on)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id",
     )
     .bind(owner_id)
     .bind(new.occurred_on)
     .bind(&new.description)
     .bind(new.idempotency_key.as_deref())
     .bind(new.source.as_deref())
+    .bind(counterparty_id)
+    .bind(place_id)
+    .bind(status)
+    .bind(cleared_on)
     .fetch_one(&mut *transaction)
     .await
     .context("creating an entry")?;
 
-    for line in &new.lines {
+    insert_lines(&mut transaction, entry_id, &new.lines).await?;
+    details::set_tags(&mut transaction, owner_id, entry_id, &new.tags).await?;
+
+    // This is where an unbalanced entry fails: the trigger is deferred, so the
+    // rule is applied to the whole entry at once.
+    transaction.commit().await.context("recording the entry")?;
+
+    let entry = entry(pool, owner_id, entry_id).await?.context("the entry vanished after being written")?;
+    Ok(Posted { entry, created: true })
+}
+
+/// Writes the lines of an entry.
+async fn insert_lines(transaction: &mut Transaction<'_, Postgres>, entry_id: Uuid, lines: &[NewLine]) -> Result<()> {
+    for line in lines {
         sqlx::query(
             "INSERT INTO entry_lines (entry_id, side, account_id, category_id, amount, currency, note)
              VALUES ($1, $2, $3, $4, $5, $6, $7)",
@@ -418,17 +497,228 @@ pub async fn post_entry(pool: &PgPool, owner_id: Uuid, new: &NewEntry) -> Result
         .bind(line.amount)
         .bind(&line.currency)
         .bind(&line.note)
-        .execute(&mut *transaction)
+        .execute(&mut **transaction)
         .await
         .context("adding a line to an entry")?;
     }
+    Ok(())
+}
 
-    // This is where an unbalanced entry fails: the trigger is deferred, so the
-    // rule is applied to the whole entry at once.
-    transaction.commit().await.context("recording the entry")?;
+/// What happens to a field that can be empty, when something is changed.
+///
+/// Three cases rather than an `Option` of an `Option`: "leave it" and "clear
+/// it" are both "nothing new", and a reader of two nested `None`s has to
+/// remember which one means which. In a JSON body, a field left out is
+/// [`Change::Keep`], `null` is [`Change::Clear`] and a value is
+/// [`Change::Set`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Change<T> {
+    /// Leave it as it is.
+    #[default]
+    Keep,
+    /// Make it empty.
+    Clear,
+    /// Make it this.
+    Set(T),
+}
 
-    let entry = entry(pool, owner_id, entry_id).await?.context("the entry vanished after being written")?;
-    Ok(Posted { entry, created: true })
+impl<T> Change<T> {
+    /// The same change, of a value turned into another.
+    ///
+    /// # Errors
+    ///
+    /// Returns whatever turning the value returns.
+    pub fn try_map<U, E>(self, turn: impl FnOnce(T) -> Result<U, E>) -> Result<Change<U>, E> {
+        Ok(match self {
+            Self::Keep => Change::Keep,
+            Self::Clear => Change::Clear,
+            Self::Set(value) => Change::Set(turn(value)?),
+        })
+    }
+
+    /// Whether anything is to change.
+    #[must_use]
+    pub fn changes(&self) -> bool {
+        !matches!(self, Self::Keep)
+    }
+
+    /// The value it becomes; `None` when it is cleared or kept.
+    #[must_use]
+    pub fn value(self) -> Option<T> {
+        match self {
+            Self::Set(value) => Some(value),
+            Self::Keep | Self::Clear => None,
+        }
+    }
+}
+
+impl<'de, T: serde::Deserialize<'de>> serde::Deserialize<'de> for Change<T> {
+    /// Called only for a field that was sent - one left out never reaches
+    /// here and is the `#[serde(default)]`, [`Change::Keep`].
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(match Option::<T>::deserialize(deserializer)? {
+            Some(value) => Self::Set(value),
+            None => Self::Clear,
+        })
+    }
+}
+
+/// What changes about an entry other than its lines.
+#[derive(Debug, Clone, Default)]
+pub struct EntryChanges {
+    /// The day the money moved.
+    pub occurred_on: Option<NaiveDate>,
+    /// What a person would call it.
+    pub description: Option<String>,
+    /// Who the money went to or came from.
+    pub counterparty: Change<CounterpartyChoice>,
+    /// Where it happened.
+    pub place: Change<NewPlace>,
+    /// The labels, replacing the ones it had.
+    pub tags: Option<Vec<String>>,
+}
+
+/// Changes what an entry says about itself, leaving its lines as they are.
+///
+/// Returns `None` when there is no such entry of this person's.
+///
+/// # Errors
+///
+/// Returns an error when a change breaks a rule of the schema - a day moved to
+/// after the one the bank posted it on - or when a write fails.
+pub async fn change_entry(pool: &PgPool, owner_id: Uuid, id: Uuid, changes: &EntryChanges) -> Result<Option<Entry>> {
+    let mut transaction = pool.begin().await.context("opening a transaction")?;
+
+    let exists: Option<Uuid> = sqlx::query_scalar("SELECT id FROM entries WHERE owner_id = $1 AND id = $2 FOR UPDATE")
+        .bind(owner_id)
+        .bind(id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .context("finding the entry")?;
+    if exists.is_none() {
+        return Ok(None);
+    }
+
+    if let Some(occurred_on) = changes.occurred_on {
+        // A posted entry moves with its posting day when that was the same
+        // day: it was posted when it happened, and still is.
+        sqlx::query(
+            "UPDATE entries SET cleared_on = CASE WHEN cleared_on = occurred_on THEN $3 ELSE cleared_on END, occurred_on = $3, updated_at = now()
+              WHERE owner_id = $1 AND id = $2",
+        )
+        .bind(owner_id)
+        .bind(id)
+        .bind(occurred_on)
+        .execute(&mut *transaction)
+        .await
+        .context("moving the entry to another day")?;
+    }
+    if let Some(description) = &changes.description {
+        sqlx::query("UPDATE entries SET description = $3, updated_at = now() WHERE owner_id = $1 AND id = $2")
+            .bind(owner_id)
+            .bind(id)
+            .bind(description)
+            .execute(&mut *transaction)
+            .await
+            .context("describing the entry")?;
+    }
+    if changes.counterparty.changes() {
+        let counterparty_id = match &changes.counterparty {
+            Change::Set(choice) => Some(details::choose_counterparty(&mut transaction, owner_id, choice).await?),
+            Change::Keep | Change::Clear => None,
+        };
+        sqlx::query("UPDATE entries SET counterparty_id = $3, updated_at = now() WHERE owner_id = $1 AND id = $2")
+            .bind(owner_id)
+            .bind(id)
+            .bind(counterparty_id)
+            .execute(&mut *transaction)
+            .await
+            .context("naming who the entry was with")?;
+    }
+    if changes.place.changes() {
+        let place_id = match &changes.place {
+            Change::Set(place) => Some(details::find_or_create_place(&mut transaction, owner_id, place).await?),
+            Change::Keep | Change::Clear => None,
+        };
+        sqlx::query("UPDATE entries SET place_id = $3, updated_at = now() WHERE owner_id = $1 AND id = $2")
+            .bind(owner_id)
+            .bind(id)
+            .bind(place_id)
+            .execute(&mut *transaction)
+            .await
+            .context("placing the entry")?;
+    }
+    if let Some(tags) = &changes.tags {
+        sqlx::query("DELETE FROM entry_tags WHERE owner_id = $1 AND entry_id = $2")
+            .bind(owner_id)
+            .bind(id)
+            .execute(&mut *transaction)
+            .await
+            .context("taking the entry's tags off")?;
+        details::set_tags(&mut transaction, owner_id, id, tags).await?;
+    }
+
+    transaction.commit().await.context("changing the entry")?;
+    entry(pool, owner_id, id).await
+}
+
+/// What clearing a held entry found.
+#[derive(Debug)]
+pub enum Cleared {
+    /// It is posted now.
+    Now(Box<Entry>),
+    /// It had been posted already, on this day.
+    Already(NaiveDate),
+    /// There is no such entry of this person's.
+    Missing,
+}
+
+/// Posts a held entry: the bank has taken the money, on `on`.
+///
+/// `lines`, when given, replace the entry's lines in the same transaction -
+/// a hold that posted for a different amount is posted as what it actually
+/// was, and the balance rule is checked against the new lines at commit.
+///
+/// # Errors
+///
+/// Returns an error when the new lines do not balance or name something that
+/// is not this person's, when `on` is before the day it happened, or when a
+/// write fails.
+pub async fn clear_entry(pool: &PgPool, owner_id: Uuid, id: Uuid, on: NaiveDate, lines: Option<&[NewLine]>) -> Result<Cleared> {
+    let mut transaction = pool.begin().await.context("opening a transaction")?;
+
+    let found: Option<(EntryStatus, Option<NaiveDate>)> = sqlx::query_as("SELECT status, cleared_on FROM entries WHERE owner_id = $1 AND id = $2 FOR UPDATE")
+        .bind(owner_id)
+        .bind(id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .context("finding the entry")?;
+    match found {
+        None => return Ok(Cleared::Missing),
+        Some((EntryStatus::Cleared, Some(day))) => return Ok(Cleared::Already(day)),
+        Some(_) => {}
+    }
+
+    if let Some(lines) = lines {
+        ensure_sides_belong_to(&mut transaction, owner_id, lines).await?;
+        sqlx::query("DELETE FROM entry_lines WHERE entry_id = $1")
+            .bind(id)
+            .execute(&mut *transaction)
+            .await
+            .context("taking the held lines off")?;
+        insert_lines(&mut transaction, id, lines).await?;
+    }
+
+    sqlx::query("UPDATE entries SET status = 'cleared', cleared_on = $3, updated_at = now() WHERE owner_id = $1 AND id = $2")
+        .bind(owner_id)
+        .bind(id)
+        .bind(on)
+        .execute(&mut *transaction)
+        .await
+        .context("posting the entry")?;
+
+    transaction.commit().await.context("posting the entry")?;
+    Ok(entry(pool, owner_id, id).await?.map_or(Cleared::Missing, |entry| Cleared::Now(Box::new(entry))))
 }
 
 /// Refuses lines pointing at something that is not this person's.
@@ -480,25 +770,53 @@ fn dedup(ids: &[Uuid]) -> Vec<Uuid> {
 ///
 /// Returns an error when the query fails.
 pub async fn entry(pool: &PgPool, owner_id: Uuid, id: Uuid) -> Result<Option<Entry>> {
-    let Some(header) = sqlx::query_as::<_, (Uuid, NaiveDate, String, Option<String>)>(
-        "SELECT id, occurred_on, description, source FROM entries WHERE owner_id = $1 AND id = $2",
-    )
-    .bind(owner_id)
-    .bind(id)
-    .fetch_optional(pool)
-    .await
-    .context("reading an entry")?
-    else {
+    let header: Option<Header> = sqlx::query_as(concat!(header_select!(), " WHERE e.owner_id = $1 AND e.id = $2"))
+        .bind(owner_id)
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .context("reading an entry")?;
+    let Some(header) = header else {
         return Ok(None);
     };
 
-    Ok(Some(Entry {
-        id: header.0,
-        occurred_on: header.1,
-        description: header.2,
-        source: header.3,
-        lines: lines_of(pool, &[header.0]).await?.remove(&header.0).unwrap_or_default(),
-    }))
+    let mut lines = lines_of(pool, &[header.id]).await?;
+    Ok(Some(header.with_lines(&mut lines)))
+}
+
+/// An entry's header as it comes back.
+#[derive(sqlx::FromRow)]
+struct Header {
+    id: Uuid,
+    occurred_on: NaiveDate,
+    status: EntryStatus,
+    cleared_on: Option<NaiveDate>,
+    description: String,
+    source: Option<String>,
+    counterparty_id: Option<Uuid>,
+    counterparty_name: Option<String>,
+    place_id: Option<Uuid>,
+    country: Option<String>,
+    city: Option<String>,
+    tags: Vec<String>,
+}
+
+impl Header {
+    /// The entry, with its lines taken from those read for a page.
+    fn with_lines(self, lines: &mut HashMap<Uuid, Vec<Line>>) -> Entry {
+        Entry {
+            id: self.id,
+            occurred_on: self.occurred_on,
+            status: self.status,
+            cleared_on: self.cleared_on,
+            description: self.description,
+            source: self.source,
+            counterparty: self.counterparty_id.zip(self.counterparty_name).map(|(id, name)| CounterpartyRef { id, name }),
+            place: self.place_id.zip(self.country).map(|(id, country)| Place { id, country, city: self.city }),
+            tags: self.tags,
+            lines: lines.remove(&self.id).unwrap_or_default(),
+        }
+    }
 }
 
 /// The entry an idempotency key already produced, if any.
@@ -527,6 +845,14 @@ pub struct EntryFilter {
     pub account_id: Option<Uuid>,
     /// Only entries with a line attributed to this category.
     pub category_id: Option<Uuid>,
+    /// Only entries carrying this tag, by name in any case.
+    pub tag: Option<String>,
+    /// Only entries with this counterparty.
+    pub counterparty_id: Option<Uuid>,
+    /// Only entries at this place.
+    pub place_id: Option<Uuid>,
+    /// Only entries in this state.
+    pub status: Option<EntryStatus>,
     /// How many to return.
     pub limit: i64,
     /// How many to skip.
@@ -543,41 +869,40 @@ pub async fn entries(pool: &PgPool, owner_id: Uuid, filter: &EntryFilter) -> Res
     // query: a join would repeat each header once per line and the pagination
     // would then count lines rather than entries, which is not what a page of
     // entries means.
-    let headers: Vec<(Uuid, NaiveDate, String, Option<String>)> = sqlx::query_as(
-        "SELECT e.id, e.occurred_on, e.description, e.source
-           FROM entries e
-          WHERE e.owner_id = $1
+    let headers: Vec<Header> = sqlx::query_as(concat!(
+        header_select!(),
+        " WHERE e.owner_id = $1
             AND ($2::date IS NULL OR e.occurred_on >= $2)
             AND ($3::date IS NULL OR e.occurred_on <= $3)
             AND ($4::uuid IS NULL OR EXISTS (SELECT 1 FROM entry_lines l WHERE l.entry_id = e.id AND l.account_id = $4))
             AND ($5::uuid IS NULL OR EXISTS (SELECT 1 FROM entry_lines l WHERE l.entry_id = e.id AND l.category_id = $5))
+            AND ($6::text IS NULL OR EXISTS (SELECT 1 FROM entry_tags et JOIN tags t ON t.id = et.tag_id
+                                              WHERE et.entry_id = e.id AND lower(t.name) = lower($6)))
+            AND ($7::uuid IS NULL OR e.counterparty_id = $7)
+            AND ($8::uuid IS NULL OR e.place_id = $8)
+            AND ($9::entry_status IS NULL OR e.status = $9)
           ORDER BY e.occurred_on DESC, e.created_at DESC, e.id DESC
-          LIMIT $6 OFFSET $7",
-    )
+          LIMIT $10 OFFSET $11"
+    ))
     .bind(owner_id)
     .bind(filter.from)
     .bind(filter.to)
     .bind(filter.account_id)
     .bind(filter.category_id)
+    .bind(filter.tag.as_deref())
+    .bind(filter.counterparty_id)
+    .bind(filter.place_id)
+    .bind(filter.status)
     .bind(filter.limit)
     .bind(filter.offset)
     .fetch_all(pool)
     .await
     .context("listing entries")?;
 
-    let ids: Vec<Uuid> = headers.iter().map(|header| header.0).collect();
+    let ids: Vec<Uuid> = headers.iter().map(|header| header.id).collect();
     let mut lines = lines_of(pool, &ids).await?;
 
-    Ok(headers
-        .into_iter()
-        .map(|header| Entry {
-            id: header.0,
-            occurred_on: header.1,
-            description: header.2,
-            source: header.3,
-            lines: lines.remove(&header.0).unwrap_or_default(),
-        })
-        .collect())
+    Ok(headers.into_iter().map(|header| header.with_lines(&mut lines)).collect())
 }
 
 /// A row of `entry_lines` as it comes back: the entry it belongs to, then the
@@ -638,17 +963,27 @@ pub async fn delete_entry(pool: &PgPool, owner_id: Uuid, id: Uuid) -> Result<boo
 
 /// What every account held at the end of a day.
 ///
-/// Opening balance plus every line up to and including that day. Computed, never
-/// stored: a balance kept beside the lines is a second copy of the same truth,
-/// and the day they disagree there is no way to tell which is right.
+/// Opening balance plus every line the bank had posted by the end of that day,
+/// and what of it was available - less the money that had left and was still
+/// held. Computed, never stored: a balance kept beside the lines is a second
+/// copy of the same truth, and the day they disagree there is no way to tell
+/// which is right.
+///
+/// "Held on the day" is read from the dates rather than the state: an entry
+/// posted on the 30th was held on the 29th, so a balance as of the 29th reads
+/// the same before and after it posted.
 ///
 /// # Errors
 ///
 /// Returns an error when the query fails.
 pub async fn balances(pool: &PgPool, owner_id: Uuid, as_of: NaiveDate) -> Result<Vec<Balance>> {
-    let rows: Vec<(Uuid, String, String, Decimal)> = sqlx::query_as(
+    let rows: Vec<(Uuid, String, String, Decimal, Decimal)> = sqlx::query_as(
         "SELECT a.id, a.name, a.currency,
-                a.opening_balance + COALESCE(SUM(l.amount) FILTER (WHERE e.occurred_on <= $2), 0)
+                a.opening_balance + COALESCE(SUM(l.amount) FILTER (WHERE e.cleared_on <= $2), 0),
+                a.opening_balance + COALESCE(SUM(l.amount) FILTER (
+                    WHERE e.cleared_on <= $2
+                       OR (l.amount < 0 AND e.occurred_on <= $2 AND (e.cleared_on IS NULL OR e.cleared_on > $2))
+                ), 0)
            FROM accounts a
            LEFT JOIN entry_lines l ON l.account_id = a.id
            LEFT JOIN entries e ON e.id = l.entry_id
@@ -669,7 +1004,9 @@ pub async fn balances(pool: &PgPool, owner_id: Uuid, as_of: NaiveDate) -> Result
             name: row.1,
             currency: row.2,
             amount: row.3,
+            available: row.4,
             converted: None,
+            converted_available: None,
             rate_used: None,
         })
         .collect())

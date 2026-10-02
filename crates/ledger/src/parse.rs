@@ -21,10 +21,17 @@ pub struct Spoken {
     pub amount: Decimal,
     /// Which way the money went.
     pub flow: Flow,
+    /// The payment is held, not posted: said with a leading `~`.
+    pub pending: bool,
     /// The category, as it was written. Resolved against the person's own
     /// categories by the caller - matching is a question about what exists, and
-    /// this function does not know.
-    pub category: String,
+    /// this function does not know. `None` when the line named a counterparty
+    /// instead, whose usual category the caller looks up.
+    pub category: Option<String>,
+    /// Who the money went to or came from, as written after `@`.
+    pub counterparty: Option<String>,
+    /// The labels written after `#`, each once, in the order they appeared.
+    pub tags: Vec<String>,
     /// The account, when the line named one after `from` or `to`. `None` means
     /// the person's default.
     pub account: Option<String>,
@@ -65,14 +72,20 @@ pub enum ParseError {
     #[error("an entry of zero records nothing")]
     ZeroAmount,
     /// An amount but nothing to attribute it to.
-    #[error("`{0}` needs something it was for, as in `{0} food`")]
+    #[error("`{0}` needs something it was for, as in `{0} food`, or who it was paid to, as in `{0} @shop`")]
     NoCategory(String),
     /// A preposition with nothing after it.
     #[error("`{0}` names no account")]
     DanglingAccount(String),
-    /// An `@` that is not followed by a rate.
+    /// An `@` followed by a number that is not one.
     #[error("`{0}` is not a rate; write it as `@5965`, how many of the account's currency one unit cost")]
     BadRate(String),
+    /// An `@` followed by nothing.
+    #[error("`@` names nothing; write `@5965` for the rate charged or `@shop` for who was paid")]
+    BareAt,
+    /// A rate or a counterparty said twice.
+    #[error("`{0}` says again what the line already said; one rate and one counterparty to a line")]
+    Twice(String),
 }
 
 /// The words that introduce an account rather than a note.
@@ -85,14 +98,17 @@ const ACCOUNT_WORDS: [&str; 2] = ["from", "to"];
 
 /// Reads a line.
 ///
-/// The shape is `[+]<amount> [<currency>] <category> [from|to <account>] [@<rate>] [note...]`.
-/// Everything after the category that is not an account or a rate is the note,
-/// which is why the note needs no quoting and can say anything.
+/// The shape is `[~][+]<amount> [<currency>] [<category>] [note...]`, with any
+/// of `from|to <account>`, `@<rate>`, `@<counterparty>` and `#<tag>` anywhere
+/// after the amount. The category is the first word that is none of those;
+/// every plain word after it is the note, which is why the note needs no
+/// quoting and can say anything.
 ///
 /// # Errors
 ///
-/// Returns [`ParseError`] when the line has no amount, no category, or names an
-/// account without saying which.
+/// Returns [`ParseError`] when the line has no amount, says neither a category
+/// nor a counterparty, names an account without saying which, or says a rate or
+/// a counterparty twice.
 pub fn line(input: &str) -> Result<Spoken, ParseError> {
     let mut words = input.split_whitespace();
 
@@ -102,15 +118,29 @@ pub fn line(input: &str) -> Result<Spoken, ParseError> {
     // accepted as its opposite: an expense is what a bare line already means,
     // and offering two ways to write the common case is how `-` ends up
     // silently recording income when someone types it out of habit.
-    let (flow, digits) = match first.strip_prefix('+') {
-        Some(rest) => (Flow::Income, rest),
-        None => (Flow::Expense, first),
-    };
+    //
+    // A leading `~` says the payment is held rather than posted - roughly this
+    // much, not final yet, which is what a card's hold is. Either mark may come
+    // first: `~+` and `+~` are the same line, and refusing one would be
+    // grammar for its own sake.
+    let (mut flow, mut pending, mut digits) = (Flow::Expense, false, first);
+    loop {
+        if flow == Flow::Expense
+            && let Some(rest) = digits.strip_prefix('+')
+        {
+            (flow, digits) = (Flow::Income, rest);
+        } else if !pending && let Some(rest) = digits.strip_prefix('~') {
+            (pending, digits) = (true, rest);
+        } else {
+            break;
+        }
+    }
 
     let amount = parse_amount(digits).ok_or_else(|| ParseError::NoAmount(first.to_owned()))?;
     if amount.is_zero() {
         return Err(ParseError::ZeroAmount);
     }
+    let head = Head { amount, flow, pending, first };
 
     // A currency may follow the amount: `10 usd food`. Only an ISO 4217 code
     // counts, and only when something follows it to be the category. Since an
@@ -120,65 +150,139 @@ pub fn line(input: &str) -> Result<Spoken, ParseError> {
     // and for those the reading as a category is kept alongside, for the
     // caller to prefer when the person has a category by that name.
     let rest: Vec<&str> = words.collect();
+    let plain = || read(&head, None, &rest);
     match rest.split_first() {
-        Some((word, tail)) if is_currency_code(word) && !tail.is_empty() => {
-            let mut spoken = read(amount, flow, Some(word.to_uppercase()), tail, first)?;
-            spoken.if_not_a_currency = read(amount, flow, None, &rest, first).ok().map(Box::new);
-            Ok(spoken)
-        }
-        _ => read(amount, flow, None, &rest, first),
+        Some((word, tail)) if is_currency_code(word) && !tail.is_empty() => match read(&head, Some(word.to_uppercase()), tail) {
+            Ok(mut spoken) => {
+                spoken.if_not_a_currency = plain().ok().map(Box::new);
+                Ok(spoken)
+            }
+            // `45000 cup #home` says nothing it was for once `cup` is taken
+            // as the currency, so it was the category all along.
+            Err(_) => plain(),
+        },
+        _ => plain(),
     }
 }
 
-/// Reads what follows the amount and its currency: the category, the account,
-/// a rate and the note.
-fn read(amount: Decimal, flow: Flow, currency: Option<String>, rest: &[&str], first: &str) -> Result<Spoken, ParseError> {
-    let (category, rest) = rest.split_first().ok_or_else(|| ParseError::NoCategory(first.to_owned()))?;
+/// What the first word of a line said.
+struct Head<'a> {
+    amount: Decimal,
+    flow: Flow,
+    pending: bool,
+    first: &'a str,
+}
 
-    // The account may be named anywhere in the tail: `45000 food from cash for
-    // lunch` and `45000 food lunch from cash` say the same thing, and a person
-    // typing quickly does not think about which.
+/// Reads what follows the amount and its currency: the category, the account,
+/// a rate, a counterparty, tags and the note.
+fn read(head: &Head<'_>, currency: Option<String>, rest: &[&str]) -> Result<Spoken, ParseError> {
+    // Everything but the category and the note may be said anywhere: `45000
+    // food from cash lunch` and `45000 food lunch from cash` say the same
+    // thing, and a person typing quickly does not think about which.
+    let mut category: Option<&str> = None;
     let mut account = None;
     let mut rate = None;
+    let mut counterparty: Option<String> = None;
+    let mut tags: Vec<String> = Vec::new();
     let mut note_words: Vec<&str> = Vec::new();
     let mut index = 0;
     while index < rest.len() {
         let word = rest[index];
-        // `@5965`: the rate a foreign amount was charged at. One token, so a
-        // note can still contain an `@` inside a word - an email address is not
-        // a rate.
-        if rate.is_none()
-            && let Some(digits) = word.strip_prefix('@')
-        {
-            let parsed = parse_amount(digits)
-                .filter(|value| !value.is_zero())
-                .ok_or_else(|| ParseError::BadRate(word.to_owned()))?;
-            rate = Some(parsed);
-            index += 1;
+        index += 1;
+
+        // `@` starts a token of its own, so a note can still hold an `@` inside
+        // a word - an email address is neither a rate nor a counterparty.
+        if let Some(after) = word.strip_prefix('@') {
+            match at_sign(after)? {
+                At::Rate(value) if rate.is_none() => rate = Some(value),
+                At::Counterparty(name) if counterparty.is_none() => counterparty = Some(name),
+                // Said twice, which of the two was meant is a guess.
+                _ => return Err(ParseError::Twice(word.to_owned())),
+            }
+            continue;
+        }
+        if let Some(tag) = word.strip_prefix('#').and_then(|after| tag_name(trailing_punctuation(after))) {
+            if !tags.iter().any(|seen| seen.to_lowercase() == tag.to_lowercase()) {
+                tags.push(tag);
+            }
             continue;
         }
         if account.is_none() && ACCOUNT_WORDS.iter().any(|w| w.eq_ignore_ascii_case(word)) {
-            let Some(named) = rest.get(index + 1) else {
+            let Some(named) = rest.get(index) else {
                 return Err(ParseError::DanglingAccount(word.to_owned()));
             };
             account = Some((*named).to_owned());
-            index += 2;
+            index += 1;
             continue;
         }
-        note_words.push(word);
-        index += 1;
+        match category {
+            None => category = Some(word),
+            Some(_) => note_words.push(word),
+        }
+    }
+
+    if category.is_none() && counterparty.is_none() {
+        return Err(ParseError::NoCategory(head.first.to_owned()));
     }
 
     Ok(Spoken {
-        amount,
-        flow,
-        category: (*category).to_owned(),
+        amount: head.amount,
+        flow: head.flow,
+        pending: head.pending,
+        category: category.map(ToOwned::to_owned),
+        counterparty,
+        tags,
         account,
         currency,
         rate,
         note: note_words.join(" "),
         if_not_a_currency: None,
     })
+}
+
+/// What a word after `@` says.
+enum At {
+    /// The rate the amount was charged at.
+    Rate(Decimal),
+    /// Who was paid, or who paid.
+    Counterparty(String),
+}
+
+/// Reads what follows an `@`: a rate when it starts with a digit, a
+/// counterparty otherwise.
+///
+/// Decided by the first character alone, so `@59oo` is a mistyped rate and
+/// refused - kept as a counterparty called `59oo`, the amount would convert at
+/// the day's rate while the person believes they stated one.
+fn at_sign(after: &str) -> Result<At, ParseError> {
+    let said = trailing_punctuation(after);
+    match said.chars().next() {
+        None => Err(ParseError::BareAt),
+        Some(first) if first.is_ascii_digit() => parse_amount(said)
+            .filter(|value| !value.is_zero())
+            .map(At::Rate)
+            .ok_or_else(|| ParseError::BadRate(format!("@{after}"))),
+        Some(_) => Ok(At::Counterparty(said.to_owned())),
+    }
+}
+
+/// A word without the punctuation a sentence leaves on it: `#trip,` is `trip`.
+fn trailing_punctuation(word: &str) -> &str {
+    word.trim_end_matches(['.', ',', ';', ':', '!', '?'])
+}
+
+/// A tag's name, when the text is one: a letter, then letters, digits, `-` and
+/// `_`.
+///
+/// A letter first so `order #1234` stays a note about an order. The same rule
+/// holds for a tag created any other way, so every tag can be typed after a
+/// `#` and found again.
+#[must_use]
+pub fn tag_name(text: &str) -> Option<String> {
+    let text = text.trim();
+    let mut chars = text.chars();
+    let starts_with_a_letter = chars.next().is_some_and(char::is_alphabetic);
+    (starts_with_a_letter && chars.all(|c| c.is_alphanumeric() || c == '-' || c == '_')).then(|| text.to_owned())
 }
 
 /// An amount as a person writes it, read the way a typed line reads one.
@@ -247,7 +351,7 @@ mod tests {
         let spoken = line("45000 food").expect("parsing");
         assert_eq!(spoken.amount, decimal("45000"));
         assert_eq!(spoken.flow, Flow::Expense);
-        assert_eq!(spoken.category, "food");
+        assert_eq!(spoken.category.as_deref(), Some("food"));
         assert_eq!(spoken.note, "");
         assert_eq!(spoken.account, None);
         assert_eq!(spoken.currency, None);
@@ -258,7 +362,7 @@ mod tests {
         // No quoting: a person typing a receipt should not have to think about
         // where the note starts.
         let spoken = line("45000 food lunch with the neighbours").expect("parsing");
-        assert_eq!(spoken.category, "food");
+        assert_eq!(spoken.category.as_deref(), Some("food"));
         assert_eq!(spoken.note, "lunch with the neighbours");
     }
 
@@ -267,7 +371,7 @@ mod tests {
         let spoken = line("+2500000 salary september").expect("parsing");
         assert_eq!(spoken.flow, Flow::Income);
         assert_eq!(spoken.amount, decimal("2500000"));
-        assert_eq!(spoken.category, "salary");
+        assert_eq!(spoken.category.as_deref(), Some("salary"));
     }
 
     #[test]
@@ -310,7 +414,7 @@ mod tests {
         let spoken = line("10 usd coffee airport").expect("parsing");
         assert_eq!(spoken.amount, decimal("10"));
         assert_eq!(spoken.currency.as_deref(), Some("USD"));
-        assert_eq!(spoken.category, "coffee");
+        assert_eq!(spoken.category.as_deref(), Some("coffee"));
         assert_eq!(spoken.note, "airport");
     }
 
@@ -339,8 +443,113 @@ mod tests {
         // Kept as a note, `@59oo` would convert at the day's rate while the
         // person believes they stated one.
         assert!(matches!(line("10 usd food @59oo"), Err(ParseError::BadRate(_))));
-        assert!(matches!(line("10 usd food @"), Err(ParseError::BadRate(_))));
         assert!(matches!(line("10 usd food @0"), Err(ParseError::BadRate(_))));
+        assert_eq!(line("10 usd food @"), Err(ParseError::BareAt));
+    }
+
+    #[test]
+    fn an_at_sign_before_a_name_is_who_was_paid() {
+        let spoken = line("45000 food @superseis lunch").expect("parsing");
+        assert_eq!(spoken.counterparty.as_deref(), Some("superseis"));
+        assert_eq!(spoken.category.as_deref(), Some("food"));
+        assert_eq!(spoken.note, "lunch");
+        assert_eq!(spoken.rate, None);
+
+        // A rate and a counterparty in one line, in either order.
+        let both = line("10 usd subscriptions @5965 @netflix").expect("parsing");
+        assert_eq!((both.rate, both.counterparty.as_deref()), (Some(decimal("5965")), Some("netflix")));
+        // The comma a sentence leaves is not part of the name.
+        assert_eq!(
+            line("45000 food @superseis, lunch").expect("parsing").counterparty.as_deref(),
+            Some("superseis")
+        );
+    }
+
+    #[test]
+    fn a_counterparty_can_stand_for_the_category() {
+        // "This shop is groceries": the caller looks the category up.
+        let spoken = line("45000 @superseis").expect("parsing");
+        assert_eq!(spoken.category, None);
+        assert_eq!(spoken.counterparty.as_deref(), Some("superseis"));
+
+        // Any plain word after it is the category, not a note: which of the
+        // two a word was meant as cannot be read off the word.
+        let spoken = line("45000 @superseis lunch").expect("parsing");
+        assert_eq!(spoken.category.as_deref(), Some("lunch"));
+        assert_eq!(spoken.note, "");
+    }
+
+    #[test]
+    fn a_rate_or_a_counterparty_said_twice_is_refused_rather_than_one_picked() {
+        assert!(matches!(line("10 usd food @5965 @5970"), Err(ParseError::Twice(_))));
+        assert!(matches!(line("45000 food @superseis @stock"), Err(ParseError::Twice(_))));
+    }
+
+    #[test]
+    fn tags_are_said_with_a_hash_anywhere_after_the_amount() {
+        let spoken = line("45000 #holiday-2027 food dinner #Beach #holiday-2027").expect("parsing");
+        assert_eq!(spoken.category.as_deref(), Some("food"));
+        assert_eq!(spoken.note, "dinner");
+        // Each once, however often written and in whatever case.
+        assert_eq!(spoken.tags, ["holiday-2027", "Beach"]);
+        // A tag may be in any alphabet: it is the person's own word.
+        assert_eq!(line("45000 food #отпуск-2027").expect("parsing").tags, ["отпуск-2027"]);
+    }
+
+    #[test]
+    fn a_hash_before_a_number_is_part_of_the_note() {
+        // An order number is not a label.
+        let spoken = line("45000 food order #1234").expect("parsing");
+        assert_eq!(spoken.tags, Vec::<String>::new());
+        assert_eq!(spoken.note, "order #1234");
+        assert_eq!(line("45000 food #").expect("parsing").note, "#");
+    }
+
+    #[test]
+    fn a_leading_tilde_says_the_payment_is_held() {
+        let spoken = line("~120000 fuel from card").expect("parsing");
+        assert!(spoken.pending);
+        assert_eq!(spoken.amount, decimal("120000"));
+        assert_eq!(spoken.flow, Flow::Expense);
+        assert!(!line("120000 fuel").expect("parsing").pending);
+
+        // With a plus, in either order.
+        for spelling in ["~+5000 refund", "+~5000 refund"] {
+            let spoken = line(spelling).expect("parsing");
+            assert!(spoken.pending, "{spelling}");
+            assert_eq!(spoken.flow, Flow::Income, "{spelling}");
+        }
+        // Each mark once.
+        assert!(matches!(line("~~5000 fuel"), Err(ParseError::NoAmount(_))));
+        assert!(matches!(line("++5000 salary"), Err(ParseError::NoAmount(_))));
+    }
+
+    #[test]
+    fn the_category_is_the_first_word_that_says_nothing_else() {
+        let spoken = line("45000 from cash #trip food lunch").expect("parsing");
+        assert_eq!(spoken.category.as_deref(), Some("food"));
+        assert_eq!(spoken.account.as_deref(), Some("cash"));
+        assert_eq!(spoken.note, "lunch");
+    }
+
+    #[test]
+    fn a_currency_word_with_only_marks_after_it_is_the_category() {
+        // `cup` taken as the currency would leave the line saying nothing it
+        // was for.
+        let spoken = line("45000 cup #kitchen").expect("parsing");
+        assert_eq!((spoken.currency, spoken.category.as_deref()), (None, Some("cup")));
+        // With a counterparty after it, the currency reading stands.
+        let spoken = line("10 usd @netflix").expect("parsing");
+        assert_eq!((spoken.currency.as_deref(), spoken.category), (Some("USD"), None));
+    }
+
+    #[test]
+    fn a_tag_name_starts_with_a_letter_and_is_one_word() {
+        assert_eq!(super::tag_name("holiday-2027").as_deref(), Some("holiday-2027"));
+        assert_eq!(super::tag_name("  work_trip ").as_deref(), Some("work_trip"));
+        for bad in ["", "2027", "-trip", "two words", "trip!", "a#b"] {
+            assert_eq!(super::tag_name(bad), None, "`{bad}` was taken for a tag");
+        }
     }
 
     #[test]
@@ -349,7 +558,7 @@ mod tests {
         // money at a rate for a currency that does not exist.
         let spoken = line("45000 fun cinema").expect("parsing");
         assert_eq!(spoken.currency, None);
-        assert_eq!(spoken.category, "fun");
+        assert_eq!(spoken.category.as_deref(), Some("fun"));
         assert_eq!(spoken.note, "cinema");
         assert_eq!(spoken.if_not_a_currency, None);
     }
@@ -358,9 +567,12 @@ mod tests {
     fn a_currency_code_that_is_also_a_word_keeps_both_readings() {
         let spoken = line("45000 pen office supplies").expect("parsing");
         assert_eq!(spoken.currency.as_deref(), Some("PEN"));
-        assert_eq!(spoken.category, "office");
+        assert_eq!(spoken.category.as_deref(), Some("office"));
         let other = spoken.if_not_a_currency.expect("the other reading");
-        assert_eq!((other.currency, other.category.as_str(), other.note.as_str()), (None, "pen", "office supplies"));
+        assert_eq!(
+            (other.currency, other.category.as_deref(), other.note.as_str()),
+            (None, Some("pen"), "office supplies")
+        );
     }
 
     #[test]
@@ -369,7 +581,7 @@ mod tests {
         // be the currency of, so it is the category.
         let spoken = line("45000 gas").expect("parsing");
         assert_eq!(spoken.currency, None);
-        assert_eq!(spoken.category, "gas");
+        assert_eq!(spoken.category.as_deref(), Some("gas"));
     }
 
     #[test]
@@ -414,7 +626,7 @@ mod tests {
     fn spacing_does_not_change_what_was_said() {
         let spaced = line("  45000   food    lunch  ").expect("parsing");
         assert_eq!(spaced.amount, decimal("45000"));
-        assert_eq!(spaced.category, "food");
+        assert_eq!(spaced.category.as_deref(), Some("food"));
         assert_eq!(spaced.note, "lunch");
     }
 }

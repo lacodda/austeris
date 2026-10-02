@@ -19,7 +19,7 @@ use austeris_common::{Config, USER_HEADER, db};
 use austeris_proto::ledger::v1::ledger_service_server::LedgerService as _;
 use austeris_proto::ledger::v1::{GetBalancesRequest, Line as ProtoLine, PostEntryRequest, Rate as ProtoRate, RecordRatesRequest, line::Side as ProtoSide};
 
-use austeris_ledger::model::{AccountKind, Flow, Purpose};
+use austeris_ledger::model::{AccountKind, EntryStatus, Flow, Purpose};
 use austeris_ledger::repository::{NewEntry, NewLine, Side};
 use austeris_ledger::{MIGRATOR, grpc, repository, routes};
 use axum::body::Body;
@@ -133,6 +133,7 @@ fn spend(books: &Books, amount: &str, on: NaiveDate) -> NewEntry {
                 note: String::new(),
             },
         ],
+        ..NewEntry::default()
     }
 }
 
@@ -258,6 +259,7 @@ async fn a_split_receipt_is_one_entry_with_one_payment() {
                     note: "bus fare".to_owned(),
                 },
             ],
+            ..NewEntry::default()
         },
     )
     .await
@@ -301,6 +303,7 @@ async fn a_transfer_between_accounts_touches_no_category() {
                     note: String::new(),
                 },
             ],
+            ..NewEntry::default()
         },
     )
     .await
@@ -411,6 +414,7 @@ async fn a_line_in_a_currency_other_than_its_accounts_is_refused() {
                 line(Side::Account(books.account), "-10", "USD"),
                 line(Side::Account(dollars.id), "10", "USD"),
             ],
+            ..NewEntry::default()
         },
     )
     .await
@@ -461,6 +465,7 @@ async fn a_conversion_that_does_not_convert_is_refused() {
                     note: String::new(),
                 },
             ],
+            ..NewEntry::default()
         },
     )
     .await
@@ -1309,6 +1314,7 @@ async fn an_amount_survives_storage_with_every_digit() {
                     note: String::new(),
                 },
             ],
+            ..NewEntry::default()
         },
     )
     .await
@@ -1420,4 +1426,665 @@ async fn an_installation_holding_a_line_in_the_wrong_currency_is_told_before_it_
         .await
         .expect_err("a mismatched line was migrated");
     assert!(format!("{error:#}").contains("in a currency other than its own"), "{error:#}");
+}
+
+/// Records a typed line as the person, answering the status and the body.
+async fn quick(pool: &PgPool, owner: Uuid, body: &str) -> (StatusCode, serde_json::Value) {
+    let (status, text) = call(pool, owner, "POST", "/ledger/entries/quick", Some(body)).await;
+    let json = serde_json::from_str(&text).unwrap_or(serde_json::Value::String(text));
+    (status, json)
+}
+
+/// The amount on an entry's line of the given side, as a decimal.
+fn amount_on(entry: &serde_json::Value, side: &str) -> Decimal {
+    let line = entry["lines"]
+        .as_array()
+        .expect("lines")
+        .iter()
+        .find(|line| line["side"] == side)
+        .unwrap_or_else(|| panic!("no {side} line in {entry}"));
+    decimal(line["amount"].as_str().expect("an amount"))
+}
+
+#[tokio::test]
+async fn a_counterparty_named_for_the_first_time_is_created_with_the_lines_category_as_its_usual_one() {
+    let Some(pool) = pool("test_ledger_counterparty_new").await else { return };
+    let books = books(&pool).await;
+
+    let (status, first) = quick(&pool, books.owner, r#"{"text":"45000 food @Casa-Rica lunch","occurred_on":"2026-09-17"}"#).await;
+    assert_eq!(status, StatusCode::CREATED, "{first}");
+    let created = &first["new_counterparty"];
+    assert_eq!(created["name"], "Casa-Rica", "{first}");
+    assert_eq!(created["default_category_id"], books.food.to_string());
+    assert_eq!(first["entry"]["counterparty"]["name"], "Casa-Rica");
+    assert_eq!(first["entry"]["description"], "lunch");
+
+    // The next line may leave the category out, and types the name any way.
+    let (status, second) = quick(&pool, books.owner, r#"{"text":"30000 @casarica","occurred_on":"2026-09-18"}"#).await;
+    assert_eq!(status, StatusCode::CREATED, "{second}");
+    assert!(second.get("new_counterparty").is_none(), "a known counterparty was reported as new: {second}");
+    assert_eq!(second["entry"]["counterparty"]["id"], created["id"]);
+    let category = second["entry"]["lines"]
+        .as_array()
+        .expect("lines")
+        .iter()
+        .find(|line| line["side"] == "category")
+        .expect("a category line")["category_id"]
+        .clone();
+    assert_eq!(category, books.food.to_string(), "the usual category was not used");
+
+    assert_eq!(repository::counterparties(&pool, books.owner).await.expect("listing").len(), 1);
+}
+
+#[tokio::test]
+async fn a_counterparty_is_found_however_its_name_is_typed() {
+    let Some(pool) = pool("test_ledger_counterparty_key").await else { return };
+    let books = books(&pool).await;
+    let (status, body) = call(
+        &pool,
+        books.owner,
+        "POST",
+        "/ledger/counterparties",
+        Some(&format!(r#"{{"name":"Casa Rica","kind":"shop","default_category_id":"{}"}}"#, books.food)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    for typed in ["@casarica", "@Casa-Rica", "@casa_rica"] {
+        let (status, recorded) = quick(&pool, books.owner, &format!(r#"{{"text":"1000 {typed}"}}"#)).await;
+        assert_eq!(status, StatusCode::CREATED, "{typed}: {recorded}");
+        assert_eq!(recorded["entry"]["counterparty"]["name"], "Casa Rica", "{typed}");
+    }
+
+    // One shop however it is spelt: a second row would split what was spent
+    // there in two.
+    let (status, body) = call(&pool, books.owner, "POST", "/ledger/counterparties", Some(r#"{"name":"casa-rica"}"#)).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    let (status, body) = call(&pool, books.owner, "POST", "/ledger/counterparties", Some(r#"{"name":" - "}"#)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "a name nobody could type was accepted: {body}");
+}
+
+#[tokio::test]
+async fn a_line_naming_only_a_counterparty_needs_one_that_says_what_it_is_for() {
+    let Some(pool) = pool("test_ledger_counterparty_usual").await else { return };
+    let books = books(&pool).await;
+    repository::create_counterparty(&pool, books.owner, "Kiosk", None, None)
+        .await
+        .expect("creating a counterparty");
+
+    let (status, body) = quick(&pool, books.owner, r#"{"text":"5000 @kiosk"}"#).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body.to_string().contains("no usual category"), "{body}");
+
+    // A name never used, and nothing to file under: refused, and nothing is
+    // created by the refusal.
+    let (status, body) = quick(&pool, books.owner, r#"{"text":"5000 @nobody"}"#).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    let (status, body) = quick(&pool, books.owner, r#"{"text":"5000 yachts @marina"}"#).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    let names: Vec<String> = repository::counterparties(&pool, books.owner)
+        .await
+        .expect("listing")
+        .into_iter()
+        .map(|counterparty| counterparty.name)
+        .collect();
+    assert_eq!(names, ["Kiosk"], "a refused line left a counterparty behind");
+}
+
+#[tokio::test]
+async fn one_persons_counterparty_and_category_cannot_be_named_by_another() {
+    let Some(pool) = pool("test_ledger_counterparty_owner").await else { return };
+    let mine = books(&pool).await;
+    let theirs = books(&pool).await;
+    let their_shop = repository::create_counterparty(&pool, theirs.owner, "Their shop", None, None)
+        .await
+        .expect("creating a counterparty");
+
+    let body = format!(
+        r#"{{"counterparty_id":"{}","lines":[{{"account_id":"{}","amount":"-100","currency":"PYG"}},{{"category_id":"{}","amount":"100","currency":"PYG"}}]}}"#,
+        their_shop.id, mine.account, mine.food
+    );
+    let (status, answer) = call(&pool, mine.owner, "POST", "/ledger/entries", Some(&body)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{answer}");
+
+    let (status, answer) = call(
+        &pool,
+        mine.owner,
+        "POST",
+        "/ledger/counterparties",
+        Some(&format!(r#"{{"name":"Mine","default_category_id":"{}"}}"#, theirs.food)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "a counterparty took another person's category: {answer}");
+
+    // And the database holds it on its own, whoever writes.
+    let raw = sqlx::query("INSERT INTO counterparties (owner_id, name, default_category_id) VALUES ($1, 'Raw', $2)")
+        .bind(mine.owner)
+        .bind(theirs.food)
+        .execute(&pool)
+        .await;
+    assert!(raw.is_err(), "the schema let one person's counterparty point at another's category");
+}
+
+#[tokio::test]
+async fn tags_are_created_on_use_and_found_in_any_case() {
+    let Some(pool) = pool("test_ledger_tags").await else { return };
+    let books = books(&pool).await;
+
+    let (status, first) = quick(&pool, books.owner, r#"{"text":"45000 food #Holiday-2027 dinner"}"#).await;
+    assert_eq!(status, StatusCode::CREATED, "{first}");
+    assert_eq!(first["new_tags"], serde_json::json!(["Holiday-2027"]));
+    assert_eq!(first["entry"]["tags"], serde_json::json!(["Holiday-2027"]));
+    assert_eq!(first["entry"]["description"], "dinner");
+
+    let (status, second) = quick(&pool, books.owner, r#"{"text":"20000 food #holiday-2027 #beach"}"#).await;
+    assert_eq!(status, StatusCode::CREATED, "{second}");
+    assert_eq!(second["new_tags"], serde_json::json!(["beach"]), "a known tag was reported as new");
+    quick(&pool, books.owner, r#"{"text":"5000 food untagged"}"#).await;
+
+    let tags = repository::tags(&pool, books.owner).await.expect("listing tags");
+    assert_eq!(tags.len(), 2);
+
+    let (status, body) = call(&pool, books.owner, "GET", "/ledger/entries?tag=HOLIDAY-2027", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let listed: Vec<serde_json::Value> = serde_json::from_str(&body).expect("json");
+    assert_eq!(listed.len(), 2, "{body}");
+
+    // A tag that could never be typed is refused wherever it comes from.
+    let body = format!(
+        r#"{{"tags":["2027"],"lines":[{{"account_id":"{}","amount":"-100","currency":"PYG"}},{{"category_id":"{}","amount":"100","currency":"PYG"}}]}}"#,
+        books.account, books.food
+    );
+    let (status, answer) = call(&pool, books.owner, "POST", "/ledger/entries", Some(&body)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{answer}");
+
+    // Deleting a tag takes it off its entries and leaves them.
+    let beach = tags.iter().find(|tag| tag.name == "beach").expect("the tag");
+    let (status, _) = call(&pool, books.owner, "DELETE", &format!("/ledger/tags/{}", beach.id), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let entries = repository::entries(
+        &pool,
+        books.owner,
+        &repository::EntryFilter {
+            limit: 10,
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("listing");
+    assert_eq!(entries.len(), 3);
+    assert!(entries.iter().all(|entry| !entry.tags.iter().any(|tag| tag == "beach")));
+}
+
+#[tokio::test]
+async fn totals_gather_what_money_went_on_by_tag_counterparty_and_category() {
+    let Some(pool) = pool("test_ledger_totals").await else { return };
+    let books = books(&pool).await;
+    let savings = repository::create_account(&pool, books.owner, AccountKind::Deposit, "Savings", "PYG", Decimal::ZERO)
+        .await
+        .expect("creating an account");
+
+    for line in [
+        "45000 food @market #holiday",
+        "15000 @market #holiday",
+        "10000 food @market",
+        "+300000 salary @acme",
+    ] {
+        let (status, body) = quick(&pool, books.owner, &format!(r#"{{"text":"{line} from wallet","occurred_on":"2026-09-20"}}"#)).await;
+        assert_eq!(status, StatusCode::CREATED, "{line}: {body}");
+    }
+    // A transfer between the person's own accounts was not spent on anything.
+    repository::post_entry(
+        &pool,
+        books.owner,
+        &NewEntry {
+            occurred_on: day(2026, 9, 20),
+            tags: vec!["holiday".to_owned()],
+            lines: vec![
+                NewLine {
+                    side: Side::Account(books.account),
+                    amount: decimal("-50000"),
+                    currency: "PYG".to_owned(),
+                    note: String::new(),
+                },
+                NewLine {
+                    side: Side::Account(savings.id),
+                    amount: decimal("50000"),
+                    currency: "PYG".to_owned(),
+                    note: String::new(),
+                },
+            ],
+            ..NewEntry::default()
+        },
+    )
+    .await
+    .expect("a transfer");
+
+    let totals = |query: &'static str| {
+        let pool = pool.clone();
+        async move {
+            let (status, body) = call(&pool, books.owner, "GET", query, None).await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            let json: serde_json::Value = serde_json::from_str(&body).expect("json");
+            json["groups"].as_array().expect("groups").clone()
+        }
+    };
+    let flowed = |group: &serde_json::Value, field: &str| decimal(group["amounts"][0][field].as_str().expect("an amount"));
+
+    let by_tag = totals("/ledger/totals?by=tag").await;
+    assert_eq!(by_tag.len(), 2, "{by_tag:?}");
+    assert_eq!(by_tag[0]["name"], "holiday");
+    assert_eq!(flowed(&by_tag[0], "spent"), decimal("60000"), "the transfer was counted as spending");
+    // The untagged money is reported, last and nameless, so the groups
+    // account for every line.
+    assert!(by_tag[1]["name"].is_null());
+    assert_eq!(flowed(&by_tag[1], "spent"), decimal("10000"));
+    assert_eq!(flowed(&by_tag[1], "earned"), decimal("300000"));
+
+    let by_counterparty = totals("/ledger/totals?by=counterparty").await;
+    let market = by_counterparty.iter().find(|group| group["name"] == "market").expect("market");
+    assert_eq!(flowed(market, "spent"), decimal("70000"));
+    let acme = by_counterparty.iter().find(|group| group["name"] == "acme").expect("acme");
+    assert_eq!((flowed(acme, "spent"), flowed(acme, "earned")), (decimal("0"), decimal("300000")));
+
+    // What the holiday went on.
+    let holiday = totals("/ledger/totals?by=category&tag=holiday").await;
+    assert_eq!(holiday.len(), 1, "{holiday:?}");
+    assert_eq!(holiday[0]["name"], "food");
+    assert_eq!(flowed(&holiday[0], "spent"), decimal("60000"));
+
+    // A window that ends before it starts is a mistake, not an empty answer.
+    let (status, _) = call(&pool, books.owner, "GET", "/ledger/totals?by=tag&from=2026-10-01&to=2026-09-01", None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn a_place_is_found_by_what_it_is_and_renamed_everywhere_at_once() {
+    let Some(pool) = pool("test_ledger_places").await else { return };
+    let books = books(&pool).await;
+
+    for (text, place) in [
+        ("45000 food", r#"{"country":"br","city":"Sao Paulo"}"#),
+        ("15000 food", r#"{"country":"BR","city":" sao paulo "}"#),
+        ("5000 food", r#"{"country":"PY"}"#),
+    ] {
+        let (status, body) = quick(&pool, books.owner, &format!(r#"{{"text":"{text}","place":{place}}}"#)).await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+    }
+    let places = repository::places(&pool, books.owner).await.expect("listing places");
+    assert_eq!(places.len(), 2, "one city typed two ways became two places: {places:?}");
+
+    let sao_paulo = places.iter().find(|place| place.country == "BR").expect("the city");
+    let (status, body) = call(
+        &pool,
+        books.owner,
+        "PATCH",
+        &format!("/ledger/places/{}", sao_paulo.id),
+        Some(r#"{"country":"BR","city":"São Paulo"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let entries = repository::entries(
+        &pool,
+        books.owner,
+        &repository::EntryFilter {
+            limit: 10,
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("listing");
+    let named: Vec<&str> = entries.iter().filter_map(|entry| entry.place.as_ref()?.city.as_deref()).collect();
+    assert_eq!(named, ["São Paulo", "São Paulo"]);
+
+    let (status, body) = call(&pool, books.owner, "GET", "/ledger/totals?by=country", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let json: serde_json::Value = serde_json::from_str(&body).expect("json");
+    assert_eq!(json["groups"][0]["name"], "BR");
+    assert_eq!(decimal(json["groups"][0]["amounts"][0]["spent"].as_str().expect("spent")), decimal("60000"));
+
+    // The United Kingdom is GB: a code that only looks like one would file a
+    // trip under a country no report groups it with.
+    let (status, body) = quick(&pool, books.owner, r#"{"text":"1000 food","place":{"country":"UK"}}"#).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+}
+
+#[tokio::test]
+async fn changing_an_entry_keeps_what_was_left_out_and_clears_what_was_sent_empty() {
+    let Some(pool) = pool("test_ledger_patch").await else { return };
+    let books = books(&pool).await;
+    let (_, recorded) = quick(
+        &pool,
+        books.owner,
+        r#"{"text":"45000 food @market #holiday lunch","occurred_on":"2026-09-17","place":{"country":"PY"}}"#,
+    )
+    .await;
+    let id = recorded["entry"]["id"].as_str().expect("an id").to_owned();
+    let path = format!("/ledger/entries/{id}");
+
+    let (status, body) = call(&pool, books.owner, "PATCH", &path, Some(r#"{"description":"dinner"}"#)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let entry: serde_json::Value = serde_json::from_str(&body).expect("json");
+    assert_eq!(entry["description"], "dinner");
+    assert_eq!(entry["counterparty"]["name"], "market", "a field left out was changed");
+    assert_eq!(entry["place"]["country"], "PY", "a field left out was changed");
+    assert_eq!(entry["tags"], serde_json::json!(["holiday"]));
+
+    let (status, body) = call(&pool, books.owner, "PATCH", &path, Some(r#"{"counterparty_id":null,"place":null,"tags":[]}"#)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let entry: serde_json::Value = serde_json::from_str(&body).expect("json");
+    assert!(entry["counterparty"].is_null(), "null did not clear it: {entry}");
+    assert!(entry["place"].is_null(), "null did not clear it: {entry}");
+    assert_eq!(entry["tags"], serde_json::json!([]));
+    // The money is what it was.
+    assert_eq!(amount_on(&entry, "account"), decimal("-45000"));
+
+    // A posted entry moves with its day when it posted the day it happened.
+    let (status, body) = call(&pool, books.owner, "PATCH", &path, Some(r#"{"occurred_on":"2026-09-15"}"#)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let entry: serde_json::Value = serde_json::from_str(&body).expect("json");
+    assert_eq!(
+        (entry["occurred_on"].as_str(), entry["cleared_on"].as_str()),
+        (Some("2026-09-15"), Some("2026-09-15"))
+    );
+}
+
+#[tokio::test]
+async fn a_counterparty_that_entries_name_is_not_deleted_out_from_under_them() {
+    let Some(pool) = pool("test_ledger_counterparty_delete").await else { return };
+    let books = books(&pool).await;
+    let (_, recorded) = quick(&pool, books.owner, r#"{"text":"45000 food @market"}"#).await;
+    let market = recorded["new_counterparty"]["id"].as_str().expect("an id").to_owned();
+    let unused = repository::create_counterparty(&pool, books.owner, "Unused", None, None)
+        .await
+        .expect("creating");
+
+    let (status, body) = call(&pool, books.owner, "DELETE", &format!("/ledger/counterparties/{market}"), None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    let (status, _) = call(&pool, books.owner, "DELETE", &format!("/ledger/counterparties/{}", unused.id), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn a_held_payment_is_out_of_what_is_available_and_not_yet_in_the_balance() {
+    let Some(pool) = pool("test_ledger_hold").await else { return };
+    let books = books(&pool).await;
+
+    let (status, held) = quick(&pool, books.owner, r#"{"text":"~30000 food fuel","occurred_on":"2026-09-10"}"#).await;
+    assert_eq!(status, StatusCode::CREATED, "{held}");
+    assert_eq!(held["entry"]["status"], "pending");
+    assert!(held["entry"]["cleared_on"].is_null());
+    // Money held on its way in is not available until it arrives.
+    let (status, body) = quick(&pool, books.owner, r#"{"text":"~+5000 salary refund","occurred_on":"2026-09-10"}"#).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    let balance = |on| {
+        let pool = pool.clone();
+        async move {
+            let balances = repository::balances(&pool, books.owner, on).await.expect("reading balances");
+            (balances[0].amount, balances[0].available)
+        }
+    };
+    // Opening 100000: the bank has posted nothing, 30000 is already gone.
+    assert_eq!(balance(day(2026, 9, 11)).await, (decimal("100000"), decimal("70000")));
+
+    let id = held["entry"]["id"].as_str().expect("an id").to_owned();
+    let (status, body) = call(
+        &pool,
+        books.owner,
+        "POST",
+        &format!("/ledger/entries/{id}/clear"),
+        Some(r#"{"on":"2026-09-12"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // A balance as of a day before it posted reads as it did that day.
+    assert_eq!(balance(day(2026, 9, 11)).await, (decimal("100000"), decimal("70000")));
+    assert_eq!(balance(day(2026, 9, 12)).await, (decimal("70000"), decimal("70000")));
+
+    // Posted once.
+    let (status, body) = call(&pool, books.owner, "POST", &format!("/ledger/entries/{id}/clear"), Some("{}")).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+
+    let (status, body) = call(&pool, books.owner, "GET", "/ledger/entries?status=pending", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let pending: Vec<serde_json::Value> = serde_json::from_str(&body).expect("json");
+    assert_eq!(pending.len(), 1, "{body}");
+    assert_eq!(pending[0]["description"], "refund");
+}
+
+#[tokio::test]
+async fn a_hold_posts_for_what_was_actually_taken() {
+    let Some(pool) = pool("test_ledger_hold_amount").await else { return };
+    let books = books(&pool).await;
+
+    let (_, held) = quick(&pool, books.owner, r#"{"text":"~80000 food hotel","occurred_on":"2026-09-10"}"#).await;
+    let id = held["entry"]["id"].as_str().expect("an id").to_owned();
+
+    // Posted before it happened is a date typed wrong.
+    let (status, body) = call(
+        &pool,
+        books.owner,
+        "POST",
+        &format!("/ledger/entries/{id}/clear"),
+        Some(r#"{"on":"2026-09-09","amount":"60000"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+
+    let (status, body) = call(
+        &pool,
+        books.owner,
+        "POST",
+        &format!("/ledger/entries/{id}/clear"),
+        Some(r#"{"on":"2026-09-13","amount":"60000"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let recorded: serde_json::Value = serde_json::from_str(&body).expect("json");
+    assert_eq!(amount_on(&recorded["entry"], "account"), decimal("-60000"));
+    assert_eq!(amount_on(&recorded["entry"], "category"), decimal("60000"));
+    assert_eq!(recorded["entry"]["status"], "cleared");
+
+    let balances = repository::balances(&pool, books.owner, day(2026, 9, 30)).await.expect("reading");
+    assert_eq!((balances[0].amount, balances[0].available), (decimal("40000"), decimal("40000")));
+}
+
+#[tokio::test]
+async fn a_split_hold_does_not_guess_which_part_posted_for_another_amount() {
+    let Some(pool) = pool("test_ledger_hold_split").await else { return };
+    let books = books(&pool).await;
+    let household = repository::create_category(&pool, books.owner, None, Flow::Expense, "household")
+        .await
+        .expect("a category");
+    let posted = repository::post_entry(
+        &pool,
+        books.owner,
+        &NewEntry {
+            occurred_on: day(2026, 9, 10),
+            pending: true,
+            lines: vec![
+                NewLine {
+                    side: Side::Account(books.account),
+                    amount: decimal("-50000"),
+                    currency: "PYG".to_owned(),
+                    note: String::new(),
+                },
+                NewLine {
+                    side: Side::Category(books.food),
+                    amount: decimal("30000"),
+                    currency: "PYG".to_owned(),
+                    note: String::new(),
+                },
+                NewLine {
+                    side: Side::Category(household.id),
+                    amount: decimal("20000"),
+                    currency: "PYG".to_owned(),
+                    note: String::new(),
+                },
+            ],
+            ..NewEntry::default()
+        },
+    )
+    .await
+    .expect("a held split");
+    let path = format!("/ledger/entries/{}/clear", posted.entry.id);
+
+    let (status, body) = call(&pool, books.owner, "POST", &path, Some(r#"{"on":"2026-09-11","amount":"55000"}"#)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let (status, body) = call(&pool, books.owner, "POST", &path, Some(r#"{"on":"2026-09-11"}"#)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+#[tokio::test]
+async fn a_held_payment_in_another_currency_posts_at_the_banks_amount_with_the_fee_worked_out_again() {
+    let Some(pool) = pool("test_ledger_hold_foreign").await else { return };
+    let books = books(&pool).await;
+    repository::record_rate(&pool, "USD", "PYG", day(2026, 9, 10), decimal("5900"), "bcp")
+        .await
+        .expect("a rate");
+    repository::record_rate(&pool, "USD", "PYG", day(2026, 9, 12), decimal("6000"), "bcp")
+        .await
+        .expect("a rate");
+
+    // Held at the day's rate: 10 USD at 5900.
+    let (status, held) = quick(&pool, books.owner, r#"{"text":"~10 usd food streaming","occurred_on":"2026-09-10"}"#).await;
+    assert_eq!(status, StatusCode::CREATED, "{held}");
+    assert_eq!(amount_on(&held["entry"], "account"), decimal("-59000"));
+    let id = held["entry"]["id"].as_str().expect("an id").to_owned();
+
+    // Posted two days later for 60500: the bank's rate was 6000 that day, and
+    // it kept 500 on top.
+    let (status, body) = call(
+        &pool,
+        books.owner,
+        "POST",
+        &format!("/ledger/entries/{id}/clear"),
+        Some(r#"{"on":"2026-09-12","amount":"60500"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let recorded: serde_json::Value = serde_json::from_str(&body).expect("json");
+    let entry = &recorded["entry"];
+    assert_eq!(amount_on(entry, "account"), decimal("-60500"));
+    assert_eq!(decimal(recorded["conversion"]["fee"]["amount"].as_str().expect("a fee")), decimal("500"));
+
+    // The category kept what it cost in dollars, and nothing else changed
+    // currency: every currency still sums to zero, or the commit would have
+    // refused it.
+    let lines = entry["lines"].as_array().expect("lines");
+    let dollars: Vec<Decimal> = lines
+        .iter()
+        .filter(|line| line["side"] == "category" && line["currency"] == "USD")
+        .map(|line| decimal(line["amount"].as_str().expect("an amount")))
+        .collect();
+    assert_eq!(dollars, [decimal("10")]);
+    let fees = lines.iter().filter(|line| line["note"] == "exchange fee").count();
+    assert_eq!(fees, 1, "the fee held at was not replaced: {entry}");
+
+    let balances = repository::balances(&pool, books.owner, day(2026, 9, 30)).await.expect("reading");
+    assert_eq!(balances[0].amount, decimal("39500"));
+}
+
+#[tokio::test]
+async fn balances_cross_the_contract_with_what_is_available() {
+    let Some(pool) = pool("test_ledger_grpc_available").await else { return };
+    let books = books(&pool).await;
+    let service = grpc::Service::for_tests(pool.clone());
+    let (status, body) = quick(&pool, books.owner, r#"{"text":"~30000 food fuel","occurred_on":"2026-09-10"}"#).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    let response = service
+        .get_balances(tonic::Request::new(GetBalancesRequest {
+            owner_id: books.owner.to_string(),
+            as_of: "2026-09-30".to_owned(),
+            in_currency: String::new(),
+        }))
+        .await
+        .expect("reading balances")
+        .into_inner();
+    let wallet = &response.balances[0];
+    assert_eq!((decimal(&wallet.amount), decimal(&wallet.available)), (decimal("100000"), decimal("70000")));
+}
+
+/// Takes a freshly migrated schema back to v0.8's shape and writes one
+/// expense into it the way v0.8 stored them: lines with sides, no state.
+async fn books_from_before_holds(pool: &PgPool) -> Uuid {
+    austeris_common::migrate::undo(pool, &MIGRATOR, 20_260_925_100_001)
+        .await
+        .expect("rolling back to v0.8");
+
+    let owner = Uuid::new_v4();
+    let account: Uuid = sqlx::query_scalar("INSERT INTO accounts (owner_id, kind, name, currency) VALUES ($1, 'cash', 'Wallet', 'PYG') RETURNING id")
+        .bind(owner)
+        .fetch_one(pool)
+        .await
+        .expect("an account");
+    let food: Uuid = sqlx::query_scalar("INSERT INTO categories (owner_id, flow, name) VALUES ($1, 'expense', 'food') RETURNING id")
+        .bind(owner)
+        .fetch_one(pool)
+        .await
+        .expect("a category");
+    let entry: Uuid = sqlx::query_scalar("INSERT INTO entries (owner_id, occurred_on) VALUES ($1, '2026-09-20') RETURNING id")
+        .bind(owner)
+        .fetch_one(pool)
+        .await
+        .expect("an entry");
+    sqlx::query(
+        "INSERT INTO entry_lines (entry_id, side, account_id, category_id, amount, currency)
+         VALUES ($1, 'account', $2, NULL, -45000, 'PYG'), ($1, 'category', NULL, $3, 45000, 'PYG')",
+    )
+    .bind(entry)
+    .bind(account)
+    .bind(food)
+    .execute(pool)
+    .await
+    .expect("the lines");
+    owner
+}
+
+#[tokio::test]
+async fn an_installation_with_entries_migrates_to_holds_with_everything_posted() {
+    let Some(pool) = pool("test_ledger_migrate_holds").await else { return };
+    let owner = books_from_before_holds(&pool).await;
+
+    austeris_common::migrate::run(&pool, &MIGRATOR)
+        .await
+        .expect("migrating a schema that has entries");
+
+    let entries = repository::entries(
+        &pool,
+        owner,
+        &repository::EntryFilter {
+            limit: 10,
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("reading entries");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].status, EntryStatus::Cleared);
+    assert_eq!(
+        entries[0].cleared_on,
+        Some(day(2026, 9, 20)),
+        "an entry recorded before holds is not posted the day it happened"
+    );
+
+    // The balance is what it was before the migration.
+    let balances = repository::balances(&pool, owner, day(2026, 9, 30)).await.expect("reading balances");
+    assert_eq!((balances[0].amount, balances[0].available), (decimal("-45000"), decimal("-45000")));
+}
+
+#[tokio::test]
+async fn a_schema_holding_a_hold_refuses_to_roll_back_past_it() {
+    let Some(pool) = pool("test_ledger_rollback_holds").await else { return };
+    let books = books(&pool).await;
+    let (status, body) = quick(&pool, books.owner, r#"{"text":"~30000 food fuel"}"#).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    let error = austeris_common::migrate::undo(&pool, &MIGRATOR, 20_260_925_100_001)
+        .await
+        .expect_err("a schema with a held payment rolled back");
+    assert!(format!("{error:#}").contains("still held"), "{error:#}");
 }

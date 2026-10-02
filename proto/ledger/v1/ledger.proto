@@ -94,7 +94,9 @@ message Balance {
   string name = 2;
   // The account's own currency.
   string currency = 3;
-  // Opening balance plus every line, as a decimal string.
+  // Opening balance plus every line the bank had posted by the end of `as_of`,
+  // as a decimal string - what the account's statement shows. A payment still
+  // held is not in it yet.
   string amount = 4;
   // The same in the currency asked for. Empty when none was asked for, or when
   // no rate for that day was available - empty rather than a zero or a copy of
@@ -107,6 +109,12 @@ message Balance {
   // `converted` into a total carries this forward rather than presenting the
   // sum as current.
   bool rate_stale = 7;
+  // `amount` less the payments held on it: money that has left and not been
+  // posted. Money held on its way in is not added until it arrives.
+  string available = 8;
+  // `available` at the rate behind `converted`; empty exactly when `converted`
+  // is.
+  string converted_available = 9;
 }
 
 message RecordRatesRequest {

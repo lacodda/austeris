@@ -124,13 +124,40 @@ impl Plan {
             currency: given.currency.clone(),
             note: String::new(),
         }];
+        lines.extend(self.bridge(fee_category)?);
+        lines.push(NewLine {
+            side: to,
+            amount: got.amount,
+            currency: got.currency.clone(),
+            note: String::new(),
+        });
+        Ok(lines)
+    }
+
+    /// The lines between the two sides: the fee, when there is one, and the
+    /// conversion's two halves.
+    ///
+    /// On their own for a writer whose received side is more than one line - a
+    /// held payment in another currency split across categories, posted for a
+    /// different amount than it was held at, keeps its categories as they were
+    /// and has only what lies between them worked out again.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the plan has a fee and no category was given for
+    /// it.
+    pub fn bridge(&self, fee_category: Option<Uuid>) -> anyhow::Result<Vec<NewLine>> {
+        let given = &self.summary.given;
+        let got = &self.summary.got;
+
+        let mut lines = Vec::with_capacity(3);
         if let Some(fee) = &self.summary.fee {
             let category = fee_category.ok_or_else(|| anyhow::anyhow!("a conversion with a fee needs a category to file it under"))?;
             lines.push(NewLine {
                 side: Side::Category(category),
                 amount: fee.amount,
                 currency: fee.currency.clone(),
-                note: "exchange fee".to_owned(),
+                note: FEE_NOTE.to_owned(),
             });
         }
         lines.extend([
@@ -146,16 +173,13 @@ impl Plan {
                 currency: got.currency.clone(),
                 note: String::new(),
             },
-            NewLine {
-                side: to,
-                amount: got.amount,
-                currency: got.currency.clone(),
-                note: String::new(),
-            },
         ]);
         Ok(lines)
     }
 }
+
+/// What a fee line says it is.
+pub const FEE_NOTE: &str = "exchange fee";
 
 /// Why a conversion cannot be planned.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

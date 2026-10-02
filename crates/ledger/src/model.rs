@@ -117,6 +117,81 @@ impl Purpose {
     }
 }
 
+/// What a counterparty is, when the person has said.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type, utoipa::ToSchema)]
+#[sqlx(type_name = "counterparty_kind", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum CounterpartyKind {
+    /// Somewhere things are bought: a supermarket, a pharmacy, a restaurant.
+    Shop,
+    /// Something paid for over time: a subscription, electricity, a phone line.
+    Service,
+    /// Someone: a friend paid back, a relative sent money.
+    Person,
+    /// An employer, a bank, the state - money that is neither bought nor owed
+    /// to a person.
+    Organisation,
+}
+
+/// Who money went to or came from.
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, utoipa::ToSchema)]
+pub struct Counterparty {
+    /// Stable identifier.
+    pub id: Uuid,
+    /// What the person calls it.
+    pub name: String,
+    /// How it is written in a typed line after `@`: the name in lower case,
+    /// without spaces or punctuation. Derived, never set.
+    pub key: String,
+    /// What it is; absent until the person says.
+    pub kind: Option<CounterpartyKind>,
+    /// What money spent here is usually for, so a typed line naming it can
+    /// leave the category out.
+    pub default_category_id: Option<Uuid>,
+}
+
+/// A counterparty, as an entry names it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct CounterpartyRef {
+    /// Which one.
+    pub id: Uuid,
+    /// What the person calls it.
+    pub name: String,
+}
+
+/// Where something happened: a country, and a city in it when one was said.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, sqlx::FromRow, utoipa::ToSchema)]
+pub struct Place {
+    /// Stable identifier.
+    pub id: Uuid,
+    /// ISO 3166-1 alpha-2, as `PY`.
+    pub country: String,
+    /// The city, when one was said.
+    pub city: Option<String>,
+}
+
+/// One of the person's own labels across categories.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, sqlx::FromRow, utoipa::ToSchema)]
+pub struct Tag {
+    /// Stable identifier.
+    pub id: Uuid,
+    /// The label, as written after `#`.
+    pub name: String,
+}
+
+/// Whether the bank has posted an entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type, utoipa::ToSchema)]
+#[sqlx(type_name = "entry_status", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum EntryStatus {
+    /// The money has left but the bank has not posted it: a card payment's
+    /// hold. Not in the balance yet, already out of what is available.
+    Pending,
+    /// Posted. What every entry a person records is, unless they say it is
+    /// held.
+    Cleared,
+}
+
 /// One movement, whatever its shape.
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Entry {
@@ -124,10 +199,20 @@ pub struct Entry {
     pub id: Uuid,
     /// The day the money moved, not the instant it was recorded.
     pub occurred_on: NaiveDate,
+    /// Whether the bank has posted it.
+    pub status: EntryStatus,
+    /// The day the bank posted it; absent while it is held.
+    pub cleared_on: Option<NaiveDate>,
     /// What the person would call it: the shop, the payee, "salary".
     pub description: String,
     /// Which module produced it, or `None` when a person did.
     pub source: Option<String>,
+    /// Who the money went to or came from.
+    pub counterparty: Option<CounterpartyRef>,
+    /// Where it happened.
+    pub place: Option<Place>,
+    /// The person's labels on it, in alphabetical order.
+    pub tags: Vec<String>,
     /// The sides of the movement. They sum to zero in every currency.
     pub lines: Vec<Line>,
 }
@@ -198,6 +283,59 @@ pub struct Line {
     pub currency: String,
     /// What this side was for, when the entry's own description is not enough.
     pub note: String,
+}
+
+/// What money was spent on and earned from, gathered by one of the things an
+/// entry says about itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum GroupBy {
+    /// Each category: what the money went on.
+    Category,
+    /// Each tag. An entry with two tags counts under both, so the groups add
+    /// up to more than was spent.
+    Tag,
+    /// Each counterparty: who got how much, and who paid how much.
+    Counterparty,
+    /// Each place, a city or a country as a whole.
+    Place,
+    /// Each country, however many cities in it.
+    Country,
+}
+
+/// One group of a [`GroupBy`]: everything filed under one category, tag,
+/// counterparty, place or country.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct Group {
+    /// The category, tag, counterparty or place; absent for a country, which
+    /// is its code, and for the group of entries that name none.
+    pub id: Option<Uuid>,
+    /// What it is called - for a place, the city and its country; absent for
+    /// the group of entries that name none, which is reported rather than left
+    /// out, so the groups account for every line.
+    pub name: Option<String>,
+    /// One per currency the group's money moved in, never added across them.
+    pub amounts: Vec<Flowed>,
+}
+
+/// What was spent and earned in one currency.
+///
+/// Read from the lines on categories, which is what money was for: a transfer
+/// between a person's own accounts moves nothing here, and an exchange's fee
+/// is spending like any other.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct Flowed {
+    /// What it is in.
+    pub currency: String,
+    /// Lines on expense categories: what was spent, less what came back as
+    /// refunds.
+    #[serde(with = "rust_decimal::serde::str")]
+    #[schema(value_type = String, example = "1250000")]
+    pub spent: Decimal,
+    /// Lines on income categories, as a positive amount: what was earned.
+    #[serde(with = "rust_decimal::serde::str")]
+    #[schema(value_type = String, example = "0")]
+    pub earned: Decimal,
 }
 
 /// What one currency was worth in another on a day.
@@ -271,16 +409,28 @@ pub struct Balance {
     pub name: String,
     /// What it is denominated in.
     pub currency: String,
-    /// Opening balance plus every line, in the account's own currency.
+    /// Opening balance plus every line the bank had posted by the end of the
+    /// day, in the account's own currency - the number its statement shows.
     #[serde(with = "rust_decimal::serde::str")]
     #[schema(value_type = String, example = "1250.00")]
     pub amount: Decimal,
-    /// The same, converted to the currency asked for; absent when no rate for
+    /// The balance less what is held on it: money that has left and not been
+    /// posted. Money held on its way *in* is not added - it is not available
+    /// until it arrives, which is how a bank counts it too.
+    #[serde(with = "rust_decimal::serde::str")]
+    #[schema(value_type = String, example = "1180.00")]
+    pub available: Decimal,
+    /// `amount`, converted to the currency asked for; absent when no rate for
     /// the day was available. Absent rather than zero or equal to `amount`:
     /// either would be a number someone could add up.
     #[serde(skip_serializing_if = "Option::is_none", with = "converted")]
     #[schema(value_type = Option<String>, example = "0.16")]
     pub converted: Option<Decimal>,
+    /// `available`, converted at the same rate; absent exactly when
+    /// `converted` is.
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "converted")]
+    #[schema(value_type = Option<String>, example = "0.15")]
+    pub converted_available: Option<Decimal>,
     /// The rate `converted` was worked out at, with its age.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rate_used: Option<RateInForce>,
@@ -332,11 +482,17 @@ mod tests {
     }
 
     fn entry(lines: Vec<Line>) -> Entry {
+        let day = chrono::NaiveDate::from_ymd_opt(2026, 9, 17).expect("a date");
         Entry {
             id: Uuid::nil(),
-            occurred_on: chrono::NaiveDate::from_ymd_opt(2026, 9, 17).expect("a date"),
+            occurred_on: day,
+            status: super::EntryStatus::Cleared,
+            cleared_on: Some(day),
             description: String::new(),
             source: None,
+            counterparty: None,
+            place: None,
+            tags: Vec::new(),
             lines,
         }
     }

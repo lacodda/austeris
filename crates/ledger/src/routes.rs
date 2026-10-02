@@ -7,7 +7,7 @@
 use austeris_common::{AppError, AppResult, Caller, health};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::routing::{get, post};
+use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use chrono::{NaiveDate, Utc};
 use rust_decimal::Decimal;
@@ -16,9 +16,15 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::exchange::{self, Money, Summary};
-use crate::model::{Account, AccountKind, Balance, Category, Entry, ExchangeRate, Flow, Line, LineSide, Purpose, RateInForce};
-use crate::repository::{CategoryMatch, EntryFilter, NewEntry, NewLine, Side};
-use crate::{MIGRATOR, balance, currency, parse, repository};
+use crate::model::{
+    Account, AccountKind, Balance, Category, Counterparty, CounterpartyKind, CounterpartyRef, Entry, EntryStatus, ExchangeRate, Flow, Flowed, Group, GroupBy,
+    Line, LineSide, Place, Purpose, RateInForce, Tag,
+};
+use crate::repository::{CategoryMatch, CounterpartyChoice, EntryFilter, NewEntry, NewLine, NewPlace, Side};
+use crate::{MIGRATOR, balance, country, currency, parse, repository};
+
+mod details;
+mod holds;
 
 /// Builds the service's router.
 pub fn router(pool: PgPool) -> Router {
@@ -30,9 +36,22 @@ pub fn router(pool: PgPool) -> Router {
         .route("/ledger/categories", get(list_categories).post(create_category))
         .route("/ledger/entries", get(list_entries).post(create_entry))
         .route("/ledger/entries/quick", post(quick_entry))
-        .route("/ledger/entries/{id}", get(read_entry).delete(delete_entry))
+        .route("/ledger/entries/{id}", get(read_entry).patch(holds::change_entry).delete(delete_entry))
+        .route("/ledger/entries/{id}/clear", post(holds::clear_entry))
         .route("/ledger/exchanges", post(exchange))
         .route("/ledger/balances", get(balances))
+        .route("/ledger/totals", get(details::totals))
+        .route("/ledger/counterparties", get(details::list_counterparties).post(details::create_counterparty))
+        .route(
+            "/ledger/counterparties/{id}",
+            get(details::read_counterparty)
+                .patch(details::change_counterparty)
+                .delete(details::delete_counterparty),
+        )
+        .route("/ledger/places", get(details::list_places))
+        .route("/ledger/places/{id}", patch(details::change_place))
+        .route("/ledger/tags", get(details::list_tags))
+        .route("/ledger/tags/{id}", patch(details::rename_tag).delete(details::delete_tag))
         .route("/ledger/rates", get(list_rates).post(record_rate))
         .route("/ledger/rates/at", get(rate_at))
         .with_state(pool)
@@ -226,9 +245,60 @@ pub struct NewEntryBody {
     /// What a person would call it.
     #[serde(default)]
     pub description: String,
+    /// The payment is held: the bank has not posted it yet. Posted the day it
+    /// happened when omitted.
+    #[serde(default)]
+    pub pending: bool,
+    /// Who the money went to or came from.
+    pub counterparty_id: Option<Uuid>,
+    /// Where it happened.
+    pub place: Option<PlaceBody>,
+    /// Labels, by name; one used for the first time is created.
+    #[serde(default)]
+    pub tags: Vec<String>,
     /// The sides of the movement. At least two, summing to zero in every
     /// currency they touch.
     pub lines: Vec<NewEntryLine>,
+}
+
+/// A place, as a client states it.
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
+pub struct PlaceBody {
+    /// ISO 3166-1 alpha-2, in either case: `PY`, `br`.
+    pub country: String,
+    /// The city, when there is one.
+    pub city: Option<String>,
+}
+
+impl PlaceBody {
+    /// The place, with its country checked against the codes that exist and
+    /// its city trimmed - an empty one is the country as a whole.
+    fn checked(&self) -> AppResult<NewPlace> {
+        let country = country::code(&self.country).ok_or_else(|| {
+            AppError::bad_request(anyhow::anyhow!(
+                "`{}` is not a country code; two letters from ISO 3166-1, as in PY or BR (the United Kingdom is GB)",
+                self.country
+            ))
+        })?;
+        let city = self.city.as_deref().map(str::trim).filter(|city| !city.is_empty()).map(ToOwned::to_owned);
+        Ok(NewPlace { country, city })
+    }
+}
+
+/// Tag names as a client sent them, each checked and each once.
+fn tag_names(names: &[String]) -> AppResult<Vec<String>> {
+    let mut out: Vec<String> = Vec::with_capacity(names.len());
+    for raw in names {
+        let name = parse::tag_name(raw.trim().trim_start_matches('#')).ok_or_else(|| {
+            AppError::bad_request(anyhow::anyhow!(
+                "`{raw}` is not a tag; a tag is one word starting with a letter, as in `holiday-2027`"
+            ))
+        })?;
+        if !out.iter().any(|seen| seen.to_lowercase() == name.to_lowercase()) {
+            out.push(name);
+        }
+    }
+    Ok(out)
 }
 
 #[utoipa::path(
@@ -238,12 +308,14 @@ pub struct NewEntryBody {
     request_body = NewEntryBody,
     responses(
         (status = 201, description = "The entry, with its lines", body = Entry),
-        (status = 400, description = "The entry does not balance, or a line names neither an account nor a category", body = austeris_common::error::ErrorBody),
-        (status = 404, description = "A line names something that is not yours", body = austeris_common::error::ErrorBody),
+        (status = 400, description = "The entry does not balance, a line names neither an account nor a category, or a tag or a place is not one", body = austeris_common::error::ErrorBody),
+        (status = 404, description = "A line or the counterparty is not yours", body = austeris_common::error::ErrorBody),
     ),
 )]
 async fn create_entry(State(pool): State<PgPool>, caller: Caller, Json(new): Json<NewEntryBody>) -> AppResult<(StatusCode, Json<Entry>)> {
     let lines = validate_lines(new.lines)?;
+    let place = new.place.as_ref().map(PlaceBody::checked).transpose()?;
+    let tags = tag_names(&new.tags)?;
 
     let posted = repository::post_entry(
         &pool,
@@ -255,6 +327,10 @@ async fn create_entry(State(pool): State<PgPool>, caller: Caller, Json(new): Jso
             // are recording, and two coffees on one day are two entries.
             idempotency_key: None,
             source: None,
+            pending: new.pending,
+            counterparty: new.counterparty_id.map(CounterpartyChoice::Existing),
+            place,
+            tags,
             lines,
         },
     )
@@ -324,6 +400,9 @@ pub struct QuickEntry {
     pub text: String,
     /// The day the money moved. Today when omitted.
     pub occurred_on: Option<NaiveDate>,
+    /// Where it happened. Beside the line rather than in it, like the day: it
+    /// is where the person is, not something they say about each purchase.
+    pub place: Option<PlaceBody>,
 }
 
 /// An entry as it was recorded, and what converting it did.
@@ -335,6 +414,14 @@ pub struct Recorded {
     /// imply, the day's rate and its age, and what the difference cost.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conversion: Option<Summary>,
+    /// A counterparty the line named for the first time, created with it. Said
+    /// so a mistyped name is seen the first time rather than found in a report.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_counterparty: Option<Counterparty>,
+    /// Tags the line used for the first time, created with it - for the same
+    /// reason.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub new_tags: Vec<String>,
 }
 
 /// Records an entry from one typed line.
@@ -361,15 +448,42 @@ pub struct Recorded {
 )]
 async fn quick_entry(State(pool): State<PgPool>, caller: Caller, Json(quick): Json<QuickEntry>) -> AppResult<(StatusCode, Json<Recorded>)> {
     let spoken = parse::line(&quick.text).map_err(AppError::bad_request)?;
-    let (new, conversion) = resolve(&pool, caller.id(), &spoken, quick.occurred_on.unwrap_or_else(today)).await?;
-    let posted = repository::post_entry(&pool, caller.id(), &new).await.map_err(refused_or_missing)?;
+    let mut resolved = resolve(&pool, caller.id(), &spoken, quick.occurred_on.unwrap_or_else(today)).await?;
+    resolved.entry.place = quick.place.as_ref().map(PlaceBody::checked).transpose()?;
+    let posted = repository::post_entry(&pool, caller.id(), &resolved.entry).await.map_err(refused_or_missing)?;
+
+    // Read back as stored, so what is reported as new is the row itself.
+    let new_counterparty = match (&resolved.entry.counterparty, &posted.entry.counterparty) {
+        (Some(CounterpartyChoice::New { .. }), Some(stored)) => repository::counterparty(&pool, caller.id(), stored.id).await?,
+        _ => None,
+    };
     Ok((
         StatusCode::CREATED,
         Json(Recorded {
             entry: posted.entry,
-            conversion,
+            conversion: resolved.conversion,
+            new_counterparty,
+            new_tags: resolved.new_tags,
         }),
     ))
+}
+
+/// A typed line, resolved against the person's own books.
+struct Resolved {
+    /// The entry to post.
+    entry: NewEntry,
+    /// What converting it did, when money changed currency.
+    conversion: Option<Summary>,
+    /// The tags it uses for the first time.
+    new_tags: Vec<String>,
+}
+
+/// The counterparty a typed line named, as the person's books know it.
+enum Named {
+    /// One they have.
+    Known(Counterparty),
+    /// A name they have never used, as it was typed.
+    Unknown(String),
 }
 
 /// Turns what a person said into an entry against their own accounts.
@@ -379,7 +493,7 @@ async fn quick_entry(State(pool): State<PgPool>, caller: Caller, Json(quick): Js
 /// `food` and `cash` mean live in one place. Two lines for a plain expense -
 /// the account and the category - and a conversion between them when the
 /// amount was in another currency.
-async fn resolve(pool: &PgPool, owner_id: Uuid, spoken: &parse::Spoken, occurred_on: NaiveDate) -> AppResult<(NewEntry, Option<Summary>)> {
+async fn resolve(pool: &PgPool, owner_id: Uuid, spoken: &parse::Spoken, occurred_on: NaiveDate) -> AppResult<Resolved> {
     // `45000 pen office`: Peruvian soles on `office`, or 45 000 on `pen`? The
     // person's own categories decide - a word they chose outranks a list of
     // the world's currencies they may never use.
@@ -392,29 +506,15 @@ async fn resolve(pool: &PgPool, owner_id: Uuid, spoken: &parse::Spoken, occurred
         _ => spoken,
     };
 
-    let category = match repository::category_by_name(pool, owner_id, &spoken.category).await? {
-        CategoryMatch::One(category) => *category,
-        CategoryMatch::None => {
-            return Err(AppError::not_found(anyhow::anyhow!(
-                "you have no category called `{}`; create it first",
-                spoken.category
-            )));
-        }
-        // Resolved by asking, not by guessing: filing money under the wrong
-        // one of two categories with the same name is a mistake nobody sees
-        // until a report is wrong.
-        CategoryMatch::Several(names) => {
-            return Err(AppError::new(
-                StatusCode::CONFLICT,
-                anyhow::anyhow!(
-                    "`{}` means more than one category ({}); say which, as in `living/{}`",
-                    spoken.category,
-                    names.join(", "),
-                    spoken.category
-                ),
-            ));
-        }
+    let counterparty = match &spoken.counterparty {
+        Some(typed) => Some(match repository::counterparty_by_name(pool, owner_id, typed).await? {
+            Some(found) => Named::Known(found),
+            None => Named::Unknown(typed.clone()),
+        }),
+        None => None,
     };
+
+    let category = category_for(pool, owner_id, spoken, counterparty.as_ref()).await?;
 
     let account = match &spoken.account {
         Some(name) => repository::account_by_name(pool, owner_id, name)
@@ -484,16 +584,87 @@ async fn resolve(pool: &PgPool, owner_id: Uuid, spoken: &parse::Spoken, occurred
         }
     };
 
-    Ok((
-        NewEntry {
+    let new_tags = unknown_tags(pool, owner_id, &spoken.tags).await?;
+
+    Ok(Resolved {
+        entry: NewEntry {
             occurred_on,
             description: spoken.note.clone(),
             idempotency_key: None,
             source: None,
+            pending: spoken.pending,
+            // A counterparty named for the first time takes this line's
+            // category as its usual one, so the next line can leave it out.
+            counterparty: counterparty.map(|named| match named {
+                Named::Known(known) => CounterpartyChoice::Existing(known.id),
+                Named::Unknown(name) => CounterpartyChoice::New {
+                    name,
+                    usual_category: Some(category.id),
+                },
+            }),
+            place: None,
+            tags: spoken.tags.clone(),
             lines,
         },
         conversion,
-    ))
+        new_tags,
+    })
+}
+
+/// The tags of a typed line the person has never used.
+async fn unknown_tags(pool: &PgPool, owner_id: Uuid, typed: &[String]) -> AppResult<Vec<String>> {
+    if typed.is_empty() {
+        return Ok(Vec::new());
+    }
+    let known = repository::tags(pool, owner_id).await?;
+    Ok(typed
+        .iter()
+        .filter(|name| !known.iter().any(|tag| tag.name.to_lowercase() == name.to_lowercase()))
+        .cloned()
+        .collect())
+}
+
+/// The category a typed line is filed under: the one it names, or the usual
+/// one of the counterparty it names - "this shop is groceries".
+async fn category_for(pool: &PgPool, owner_id: Uuid, spoken: &parse::Spoken, counterparty: Option<&Named>) -> AppResult<Category> {
+    match (&spoken.category, counterparty) {
+        (Some(name), _) => category_named(pool, owner_id, name).await,
+        (None, Some(Named::Known(known))) => {
+            let usual = match known.default_category_id {
+                Some(id) => repository::categories(pool, owner_id).await?.into_iter().find(|category| category.id == id),
+                None => None,
+            };
+            usual.ok_or_else(|| {
+                AppError::bad_request(anyhow::anyhow!(
+                    "`{}` has no usual category; say what this was for, as in `{} food @{}`",
+                    known.name,
+                    spoken.amount,
+                    known.key
+                ))
+            })
+        }
+        (None, Some(Named::Unknown(typed))) => Err(AppError::not_found(anyhow::anyhow!(
+            "you have no counterparty called `{typed}`; say what this was for, as in `{} food @{typed}`, and it is created with that as its usual category",
+            spoken.amount
+        ))),
+        // The parser refuses a line that names neither.
+        (None, None) => Err(AppError::bad_request(anyhow::anyhow!("the line says nothing it was for"))),
+    }
+}
+
+/// The one category a typed name means.
+async fn category_named(pool: &PgPool, owner_id: Uuid, name: &str) -> AppResult<Category> {
+    match repository::category_by_name(pool, owner_id, name).await? {
+        CategoryMatch::One(category) => Ok(*category),
+        CategoryMatch::None => Err(AppError::not_found(anyhow::anyhow!("you have no category called `{name}`; create it first"))),
+        // Resolved by asking, not by guessing: filing money under the wrong
+        // one of two categories with the same name is a mistake nobody sees
+        // until a report is wrong.
+        CategoryMatch::Several(names) => Err(AppError::new(
+            StatusCode::CONFLICT,
+            anyhow::anyhow!("`{name}` means more than one category ({}); say which, as in `living/{name}`", names.join(", ")),
+        )),
+    }
 }
 
 /// The lines of an amount charged or paid in a currency the account is not in.
@@ -617,6 +788,13 @@ pub struct ExchangeBody {
     #[serde(with = "rust_decimal::serde::str")]
     #[schema(value_type = String, example = "100")]
     pub got: Decimal,
+    /// The exchange office or the bank, when it is one of your counterparties.
+    pub counterparty_id: Option<Uuid>,
+    /// Where it happened.
+    pub place: Option<PlaceBody>,
+    /// Labels, by name.
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 /// Records money changed from one currency into another.
@@ -648,6 +826,8 @@ async fn exchange(State(pool): State<PgPool>, caller: Caller, Json(body): Json<E
         .ok_or_else(|| AppError::not_found(anyhow::anyhow!("no such account to exchange into")))?;
 
     let occurred_on = body.occurred_on.unwrap_or_else(today);
+    let place = body.place.as_ref().map(PlaceBody::checked).transpose()?;
+    let tags = tag_names(&body.tags)?;
     let (lines, summary) = convert(
         &pool,
         owner_id,
@@ -675,9 +855,11 @@ async fn exchange(State(pool): State<PgPool>, caller: Caller, Json(body): Json<E
         &NewEntry {
             occurred_on,
             description,
-            idempotency_key: None,
-            source: None,
+            counterparty: body.counterparty_id.map(CounterpartyChoice::Existing),
+            place,
+            tags,
             lines,
+            ..NewEntry::default()
         },
     )
     .await
@@ -688,6 +870,8 @@ async fn exchange(State(pool): State<PgPool>, caller: Caller, Json(body): Json<E
         Json(Recorded {
             entry: posted.entry,
             conversion: Some(summary),
+            new_counterparty: None,
+            new_tags: Vec::new(),
         }),
     ))
 }
@@ -728,6 +912,14 @@ pub struct EntryQuery {
     pub account: Option<Uuid>,
     /// Only entries attributed to this category.
     pub category: Option<Uuid>,
+    /// Only entries carrying this tag, by name in any case.
+    pub tag: Option<String>,
+    /// Only entries with this counterparty.
+    pub counterparty: Option<Uuid>,
+    /// Only entries at this place.
+    pub place: Option<Uuid>,
+    /// Only held entries (`pending`), or only posted ones (`cleared`).
+    pub status: Option<EntryStatus>,
     /// How many to return. Fifty when omitted, two hundred at most.
     pub limit: Option<i64>,
     /// How many to skip.
@@ -756,6 +948,10 @@ async fn list_entries(State(pool): State<PgPool>, caller: Caller, Query(query): 
         to: query.to,
         account_id: query.account,
         category_id: query.category,
+        tag: query.tag.as_deref().map(|tag| tag.trim().trim_start_matches('#').to_owned()),
+        counterparty_id: query.counterparty,
+        place_id: query.place,
+        status: query.status,
         // Bounded rather than trusted: an unbounded page is a way to pull a
         // decade of entries into a Raspberry Pi's memory with one request.
         limit: query.limit.unwrap_or(50).clamp(1, 200),
@@ -834,6 +1030,10 @@ pub struct Total {
     #[serde(with = "rust_decimal::serde::str")]
     #[schema(value_type = String, example = "1575.00")]
     pub amount: Decimal,
+    /// The sum of what is available on each account, at the same rates.
+    #[serde(with = "rust_decimal::serde::str")]
+    #[schema(value_type = String, example = "1505.00")]
+    pub available: Decimal,
     /// Currencies no rate was found for, whose balances are *not* in `amount`.
     ///
     /// Named rather than dropped: a total that silently omits a third of
@@ -868,6 +1068,7 @@ async fn balances(State(pool): State<PgPool>, caller: Caller, Query(query): Quer
             Some(Total {
                 currency: summed.currency,
                 amount: summed.amount,
+                available: summed.available,
                 unconverted: summed.unconverted,
                 stale: summed.stale,
             })
@@ -1039,6 +1240,9 @@ fn refused_or_missing(error: anyhow::Error) -> AppError {
     if let Some(message) = refused {
         return AppError::bad_request(anyhow::anyhow!("{message}"));
     }
+    if is_foreign_key_violation(&error) {
+        return AppError::not_found(anyhow::anyhow!("the entry names a counterparty or a category that is not yours"));
+    }
 
     let text = format!("{error:#}");
     if text.contains("does not exist") {
@@ -1048,8 +1252,38 @@ fn refused_or_missing(error: anyhow::Error) -> AppError {
     }
 }
 
+/// Whether an error is PostgreSQL refusing a reference to a row that is not
+/// there - or, the keys naming the owner, that is someone else's.
+fn is_foreign_key_violation(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .filter_map(|cause| cause.downcast_ref::<sqlx::Error>())
+        .any(|error| error.as_database_error().is_some_and(|db| db.code().as_deref() == Some(FOREIGN_KEY_VIOLATION)))
+}
+
 /// PostgreSQL's code for a rule of the schema refusing a write.
 const CHECK_VIOLATION: &str = "23514";
+
+/// PostgreSQL's code for a reference to a row that is not there.
+const FOREIGN_KEY_VIOLATION: &str = "23503";
+
+/// Whether an error is PostgreSQL refusing to delete a row something still
+/// points at.
+///
+/// Two codes, because which one comes depends on how the reference was
+/// declared: `ON DELETE RESTRICT` answers `23001`, the default `NO ACTION`
+/// answers `23503`. Matching one of them only is a delete that fails as a 500
+/// the day a migration changes the other.
+fn is_still_referenced(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .filter_map(|cause| cause.downcast_ref::<sqlx::Error>())
+        .filter_map(|error| error.as_database_error())
+        .any(|db| matches!(db.code().as_deref(), Some(RESTRICT_VIOLATION | FOREIGN_KEY_VIOLATION)))
+}
+
+/// PostgreSQL's code for a delete refused by `ON DELETE RESTRICT`.
+const RESTRICT_VIOLATION: &str = "23001";
 
 /// This service's share of the platform's `OpenAPI` document.
 #[derive(utoipa::OpenApi)]
@@ -1066,8 +1300,21 @@ const CHECK_VIOLATION: &str = "23514";
         create_entry,
         quick_entry,
         delete_entry,
+        holds::change_entry,
+        holds::clear_entry,
         exchange,
         balances,
+        details::totals,
+        details::list_counterparties,
+        details::read_counterparty,
+        details::create_counterparty,
+        details::change_counterparty,
+        details::delete_counterparty,
+        details::list_places,
+        details::change_place,
+        details::list_tags,
+        details::rename_tag,
+        details::delete_tag,
         record_rate,
         list_rates,
         rate_at,
@@ -1079,6 +1326,12 @@ const CHECK_VIOLATION: &str = "23514";
         Purpose,
         Flow,
         Entry,
+        EntryStatus,
+        CounterpartyRef,
+        Counterparty,
+        CounterpartyKind,
+        Place,
+        Tag,
         Line,
         LineSide,
         Balance,
@@ -1097,10 +1350,20 @@ const CHECK_VIOLATION: &str = "23514";
         NewCategory,
         NewEntryBody,
         NewEntryLine,
+        PlaceBody,
         QuickEntry,
         NewRate,
+        holds::EntryPatch,
+        holds::ClearBody,
+        details::NewCounterparty,
+        details::CounterpartyPatch,
+        details::TagRename,
+        details::Totals,
+        GroupBy,
+        Group,
+        Flowed,
     )),
-    tags((name = "ledger", description = "Accounts, categories and the movements between them")),
+    tags((name = "ledger", description = "Accounts, categories, the movements between them, and who, where and which labels each one was")),
 )]
 pub struct ApiDoc;
 

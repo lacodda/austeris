@@ -327,6 +327,7 @@ impl Household {
             idempotency_key: Some(format!("{SOURCE}:{day}:exchange")),
             source: Some(SOURCE.to_owned()),
             lines: plan.lines(Side::Account(self.everyday), Side::Account(self.travel), fees)?,
+            ..NewEntry::default()
         }))
     }
 }
@@ -369,6 +370,7 @@ fn movement(day: NaiveDate, key: &str, (account, currency): (Uuid, &str), other:
                 note: String::new(),
             },
         ],
+        ..NewEntry::default()
     }
 }
 

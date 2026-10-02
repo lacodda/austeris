@@ -14,6 +14,7 @@
 //! stored: an account's balance is the sum of its lines.
 
 pub mod balance;
+pub mod country;
 pub mod currency;
 pub mod exchange;
 pub mod grpc;
