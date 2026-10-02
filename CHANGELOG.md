@@ -2,6 +2,22 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.9.0] - 2026-10-02
+
+### Breaking Changes
+- A balance's `amount` counts only what the bank has posted; `available` is new. In a typed line `@word` names a counterparty, and the category is the first word that is not a mark.
+
+### Dependencies
+- Update the toolchain and dependencies
+
+### Documentation
+- Counterparties, places, tags, held payments and totals
+
+### Features
+- Name who, where and which tags, and hold payments
+- Place an entry, and list and post held payments
+- Give the household its shops, trip tags and held payments
+
 ## [0.8.0] - 2026-09-25
 
 ### Bug Fixes
