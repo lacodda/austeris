@@ -1,0 +1,28 @@
+@import 'tailwindcss';
+
+/*
+ * The theme is dowel's - the token vocabulary of the lacodda line, in dark and
+ * light. austeris states one thing about its own look, its accent (orchid, the
+ * colour of its mark), and the theme derives the rest: the hover shade, the
+ * soft fill, the focus ring, the tint the greys carry, and what colour text
+ * has to be on an accent fill.
+ *
+ * Never write a colour down in a component. Name a token instead, so the theme
+ * can swap it underneath - `eslint` enforces this via `dowel/no-raw-color`.
+ * There is no theme switch either: without a class on <html> the reader's
+ * operating system decides, which is the line's default.
+ */
+@import 'dowel-ui/theme.css';
+@import 'dowel-ui/accents/austeris.css';
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--bg);
+  color: var(--text);
+}
