@@ -22,9 +22,13 @@ use axum::response::{IntoResponse, Response};
 
 /// How many requests one client may make per window.
 ///
-/// A person using the web UI makes a handful a second at most; a script
-/// guessing passwords makes thousands.
-const REQUESTS_PER_WINDOW: u32 = 120;
+/// A script guessing passwords makes thousands a minute. The web UI is chattier
+/// than a person typing: a screen loads its page and five or six lists at once,
+/// and every entry recorded refreshes the lists it may have changed - about ten
+/// requests a write. Behind a reverse proxy a whole household also shares one
+/// address. 120 was reachable by someone entering a week of receipts; ten a
+/// second is not, and is still two orders of magnitude below a script.
+const REQUESTS_PER_WINDOW: u32 = 600;
 
 /// How long a window lasts.
 const WINDOW: Duration = Duration::from_secs(60);

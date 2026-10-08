@@ -61,7 +61,9 @@ pub fn router(peers: &Peers) -> Router {
         // surface, never the data behind it.
         .merge(utoipa_swagger_ui::SwaggerUi::new("/docs").url("/openapi.json", crate::openapi::document()))
         .nest("/api/v1", api)
-        .fallback(not_found)
+        // Everything else is the web interface, which owns its own paths - or
+        // a 404, under `/api`, where a path nobody owns is a client mistake.
+        .fallback(crate::web::serve)
         // Applied last so it wraps everything, health probes included: an
         // orchestrator polls at a fixed low rate, and a probe that could bypass
         // the limit would be a way around it.
@@ -201,8 +203,9 @@ fn is_hop_by_hop(name: &str) -> bool {
     HOP_BY_HOP.contains(&name.to_ascii_lowercase().as_str())
 }
 
-async fn not_found() -> impl IntoResponse {
-    (StatusCode::NOT_FOUND, "no such endpoint\n")
+/// What a path nobody serves is answered with.
+pub(crate) fn not_found() -> Response {
+    (StatusCode::NOT_FOUND, "no such endpoint\n").into_response()
 }
 
 /// Whether a URI names a path the gateway will forward.

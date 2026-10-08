@@ -51,6 +51,9 @@ serde_json = { version = "1.0.151", features = ["arbitrary_precision"] }
 prost = "0.14.2"
 # Money and quantities are decimal, never binary floating point (ADR 0004):
 # a column of floats does not add up, and a ledger that drifts is not a ledger.
+# The web interface is compiled into the binary, so an installation is one file
+# and the interface can never be from another build than the API (ADR 0011).
+rust-embed = { version = "8.13.0", features = ["mime-guess"] }
 rust_decimal = { version = "1.39.0", features = ["db-postgres", "serde-with-str", "serde-with-arbitrary-precision"] }
 sha2 = "0.11.0"
 sqlx = { version = "0.9", features = ["runtime-tokio", "tls-rustls", "postgres", "migrate", "chrono", "uuid", "rust_decimal"] }

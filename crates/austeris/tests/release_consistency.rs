@@ -113,6 +113,44 @@ fn readme_links_resolve_off_github() {
     }
 }
 
+/// Pulls `"version": "x.y.z"` out of a package.json without a JSON dependency:
+/// the field is the only thing these checks care about.
+fn package_json_version(path: &str) -> String {
+    let manifest = read(path);
+    let key = "\"version\"";
+    let at = manifest.find(key).unwrap_or_else(|| panic!("{path} has no version field"));
+    let rest = &manifest[at + key.len()..];
+    let open = rest.find('"').unwrap_or_else(|| panic!("{path}: malformed version field"));
+    let rest = &rest[open + 1..];
+    let close = rest.find('"').unwrap_or_else(|| panic!("{path}: unterminated version string"));
+    rest[..close].to_string()
+}
+
+#[test]
+fn the_web_interface_ships_the_workspace_version() {
+    // The interface is compiled into the binary and says its version in the
+    // person's menu, from its own package.json (ADR 0011). A bump that misses
+    // it ships a binary whose two halves disagree about what release they are.
+    assert_eq!(
+        package_json_version("web/package.json"),
+        workspace_version(),
+        "web/package.json disagrees with Cargo.toml about the version"
+    );
+}
+
+#[test]
+fn the_web_interface_was_built_before_this_release() {
+    // `web/dist` is gitignored and the embed tolerates its absence, so a
+    // binary built without it compiles perfectly and answers every page with
+    // "no web interface was built into this binary". A release like that looks
+    // complete. The check is for the built document, not the directory.
+    let index = repo_root().join("web/dist/index.html");
+    assert!(
+        index.exists(),
+        "web/dist/index.html is missing; run `pnpm --dir web build` before testing, packaging or tagging"
+    );
+}
+
 #[test]
 fn readme_is_not_duplicated() {
     // One README for every storefront. A second copy is where descriptions

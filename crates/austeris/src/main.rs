@@ -12,6 +12,7 @@ mod migrate;
 mod openapi;
 mod ratelimit;
 mod service;
+mod web;
 
 use anyhow::{Context, Result};
 use austeris_common::{Config, db, telemetry};
