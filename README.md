@@ -18,6 +18,8 @@ so every figure it shows is derived rather than typed. No balance is stored: an
 account's balance is the sum of its lines, and a total across currencies names
 the money it could not convert instead of quietly leaving it out.
 
+<p align="center"><img src="https://github.com/lacodda/austeris/raw/main/assets/screenshot.png" alt="The entries of a made-up household in the austeris web interface" width="860"></p>
+
 ## What you get
 
 - **Double entry, enforced by the database.** The lines of an entry sum to zero
@@ -30,6 +32,9 @@ the money it could not convert instead of quietly leaving it out.
   are all the same shape underneath; nothing is converted behind your back.
 - **Your whole picture.** Accounts and entries, assets and liabilities, loans
   and deposits, and a portfolio of crypto and securities.
+- **A web interface inside the binary.** Accounts and their total, entries split
+  across categories, exchanges and held payments - in English or Russian, on a
+  desktop or a phone, served by the installation itself.
 - **A REST surface that describes itself** at `/docs`, so a script of yours is a
   first-class client.
 - **On your own machine.** `docker compose up` and it is running; no account
@@ -103,17 +108,13 @@ Every endpoint, with its shape: **[the ledger reference](https://lacodda.github.
 
 ## Status
 
-Early, and the books are open: entries, accounts, categories and balances work
-end to end, with the balance rule held by the database; money changes currency
-as an exchange with its fee on a line of its own, and the day's rates arrive
-from the central banks of Paraguay and Russia, each saying how old it is. An
-entry names who was paid, where and under which tags, card payments are held
-until the bank posts them, and totals gather spending by any of those. The
-whole thing installs as one container from a published image. A crypto-portfolio
-tracker lived in this repository through 2025 and is preserved at the tag
-[`legacy-2025`](https://github.com/lacodda/austeris/tree/legacy-2025) - it is
-the donor for `market`. What landed in each version:
-[CHANGELOG](https://github.com/lacodda/austeris/blob/main/CHANGELOG.md).
+Early, and the books are open: accounts, entries with who, where and which
+tags, held card payments, exchanges with their fee on a line of their own, and
+the day's rates from the central banks of Paraguay and Russia - from the
+command line, the API or the web interface. The portfolio, loans and the
+forecast come next. A 2025 crypto tracker, the donor for `market`, is kept at
+[`legacy-2025`](https://github.com/lacodda/austeris/tree/legacy-2025). Each
+version: [CHANGELOG](https://github.com/lacodda/austeris/blob/main/CHANGELOG.md).
 
 ## Documentation
 

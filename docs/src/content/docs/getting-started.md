@@ -67,6 +67,12 @@ $ docker compose up
 
 ## Sign in
 
+Open the installation in a browser - `http://127.0.0.1:8084` - and sign in
+with that email and password. The [web interface](/austeris/reference/web/)
+is served by the installation itself; there is nothing else to install.
+
+A script signs in the same way, through the API:
+
 ```console
 $ curl -c jar -X POST http://127.0.0.1:8084/api/v1/auth/login \
     -H 'Content-Type: application/json' \
