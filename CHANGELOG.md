@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.10.0] - 2026-10-08
+
+### Bug Fixes
+- Name the notifications region in the interface's language
+
+### CI
+- Build and check the web interface
+
+### Documentation
+- The web interface
+
+### Features
+- Accounts, entries, exchanges and held payments in the browser
+- Serve the web interface compiled into the binary
+
 ## [0.9.0] - 2026-10-02
 
 ### Breaking Changes

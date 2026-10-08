@@ -1,6 +1,6 @@
 {
   "name": "austeris-web",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "The web interface of austeris, compiled into its binary and served by its gateway",
   "license": "MIT",
   "private": true,
