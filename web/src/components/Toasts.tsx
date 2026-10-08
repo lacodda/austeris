@@ -6,7 +6,9 @@ export function Toasts() {
   const { t } = useTranslation()
   const { toasts } = useToastManager()
   return (
-    <ToastViewport>
+    // Named in the interface's language: Base UI calls the region
+    // "Notifications" otherwise, in English, whatever the screen is in.
+    <ToastViewport aria-label={t('common.notifications')}>
       {toasts.map((toast) => (
         <Toast key={toast.id} toast={toast}>
           <ToastTitle />
