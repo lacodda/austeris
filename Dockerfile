@@ -5,6 +5,19 @@
 # container per service (ADR 0005). The published image is built for amd64 and
 # arm64 - the stand is a Raspberry Pi.
 
+# The web interface first: it is compiled into the binary (ADR 0011), so the
+# Rust build needs `web/dist` to hold the real thing. Built on the build
+# platform - the bundle is the same bytes on every architecture, and Node under
+# emulation would only make it slower.
+FROM --platform=$BUILDPLATFORM node:22-slim AS web
+WORKDIR /web
+RUN corepack enable
+# Manifest and lockfile alone, so a source edit does not re-resolve the tree.
+COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY web/ ./
+RUN pnpm build
+
 FROM rust:1-slim-trixie AS chef
 WORKDIR /src
 # protoc compiles the service contracts (ADR 0003). The generated Rust is built
@@ -30,6 +43,7 @@ COPY --from=plan /src/recipe.json recipe.json
 COPY proto ./proto
 RUN cargo chef cook --release --recipe-path recipe.json
 COPY . .
+COPY --from=web /web/dist ./web/dist
 RUN cargo build --release --bin austeris
 
 FROM debian:trixie-slim

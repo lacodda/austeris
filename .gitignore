@@ -2,6 +2,11 @@
 /target/
 **/*.rs.bk
 
+# The web interface: its dependencies, and the build the binary embeds.
+/web/node_modules/
+/web/dist/
+/web/coverage/
+
 # Local service data
 /postgres-data/
 

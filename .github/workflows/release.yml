@@ -36,6 +36,19 @@ jobs:
       - uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+      # The binary embeds `web/dist` (ADR 0011), and release_consistency
+      # refuses a tree without it: a binary built around nothing would pass
+      # every test and serve no interface.
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Build the web interface
+        run: pnpm --dir web install --frozen-lockfile && pnpm --dir web build
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
       - name: Package (Windows)

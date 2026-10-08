@@ -1,4 +1,8 @@
 target/
+# The image builds the web interface in a stage of its own; a local build or
+# its dependencies must not reach the context and shadow it.
+web/node_modules/
+web/dist/
 .git/
 .github/
 docs/

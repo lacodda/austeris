@@ -28,6 +28,19 @@ jobs:
       - uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+      # The binary embeds `web/dist` (ADR 0011), and release_consistency
+      # refuses a tree without it: a binary built around nothing would pass
+      # every test and serve no interface.
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Build the web interface
+        run: pnpm --dir web install --frozen-lockfile && pnpm --dir web build
       - name: Format
         run: cargo fmt --check
       - name: Lint
@@ -67,6 +80,19 @@ jobs:
       - uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+      # The binary embeds `web/dist` (ADR 0011), and release_consistency
+      # refuses a tree without it: a binary built around nothing would pass
+      # every test and serve no interface.
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Build the web interface
+        run: pnpm --dir web install --frozen-lockfile && pnpm --dir web build
       # A skipped test also reports "ok", so the run is inspected rather than
       # trusted: if the database never reached the tests, this job must fail
       # instead of quietly passing on nothing. The whole suite, not a named
@@ -80,6 +106,34 @@ jobs:
             echo "::error::the database tests skipped themselves; AUSTERIS_DATABASE_URL did not reach them"
             exit 1
           fi
+
+  # The web interface has its own gate: lint, types, locales in step, dowel
+  # copies matching the registry, licenses, unit tests, and the build. Apart
+  # from the Rust matrix, so a broken screen is reported as a broken screen
+  # rather than as a failed binary.
+  web:
+    name: web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Install
+        run: pnpm --dir web install --frozen-lockfile
+      - name: Lint, typecheck and test
+        run: pnpm --dir web lint
+      # Stock shadcn names and colours written down - the vocabulary the line
+      # left behind. Its own step, so its report reads apart from the lint.
+      - name: Line vocabulary
+        run: pnpm --dir web exec dowel check
+      - name: Build
+        run: pnpm --dir web build
 
   # rust-version is a promise to anyone running `cargo install`. Without a job
   # that actually builds on it, the number silently rots the first time a new
