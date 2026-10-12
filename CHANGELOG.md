@@ -2,6 +2,22 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.11.0] - 2026-10-12
+
+### Bug Fixes
+- Record on this machine's day, not the server's
+- Give every button an entry on a stand seeded a day at a time
+
+### Documentation
+- Recording from a phone, templates and a second press
+
+### Features
+- Carry a code and its params in error bodies
+- Templates, entries again, previews and a second-press guard
+- Answer a second press with --again, and seed demo buttons
+- Code every refusal of a typed line
+- Record from a phone
+
 ## [0.10.0] - 2026-10-08
 
 ### Bug Fixes
