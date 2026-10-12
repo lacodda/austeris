@@ -196,7 +196,7 @@ async fn post_what_the_bank_has_taken(pool: &PgPool, owner: Uuid, today: NaiveDa
 }
 
 /// The household's buttons: what it pays most often, each made from its
-/// latest payment that was posted the day it was made.
+/// latest payment - one posted the day it was made, when there is one.
 ///
 /// Made when it has none, so the screen they sit on is not empty on a fresh
 /// stand - and only then: a person trying the demo who deletes or reorders
@@ -225,7 +225,14 @@ async fn buttons(pool: &PgPool, owner: Uuid, shops: &Shops) -> Result<()> {
             },
         )
         .await?;
-        if let Some(entry) = recent.iter().find(|entry| entry.cleared_on == Some(entry.occurred_on)) {
+        // One posted the day it was made, so the button records a posted
+        // payment; on a stand seeded a day at a time every card payment went
+        // through a hold, and then the latest is the one the button copies.
+        let chosen = recent
+            .iter()
+            .find(|entry| entry.cleared_on == Some(entry.occurred_on))
+            .or_else(|| recent.first());
+        if let Some(entry) = chosen {
             ledger::template_from_entry(pool, owner, entry.id, name, ask_amount)
                 .await
                 .with_context(|| format!("making the demo's `{name}` button"))?;
