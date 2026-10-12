@@ -26,3 +26,18 @@ body {
   background-color: var(--bg);
   color: var(--text);
 }
+
+/*
+ * On a touch screen a field is never under sixteen pixels of type. iOS zooms
+ * the page into any field smaller than that the moment it is focused, and
+ * leaves it zoomed - on the screen built for recording from a phone, every
+ * line typed would start with the page jumping sideways. Ordered from dowel,
+ * whose fields are 14 pixels at the base of its scale; held here until then.
+ */
+@media (pointer: coarse) {
+  input,
+  select,
+  textarea {
+    font-size: max(16px, 1em);
+  }
+}

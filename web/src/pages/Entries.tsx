@@ -50,7 +50,9 @@ export function Entries() {
           </>
         }
       >
-        <QuickLine />
+        {/* A list narrowed to one account records a line that names none
+            against that account. */}
+        <QuickLine accountId={filter.account} />
         <div className="hidden sm:block">
           <Filters filter={filter} onFilterChange={setFilter} />
         </div>

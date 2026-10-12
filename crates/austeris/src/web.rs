@@ -187,6 +187,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_phone_is_handed_the_manifest_it_installs_from_as_one() {
+        // Served as anything but a manifest, a phone does not offer to put
+        // the app on its home screen - and says nothing about why.
+        if !built() {
+            eprintln!("skipped: no web interface is embedded in this binary");
+            return;
+        }
+        let response = serve("/manifest.webmanifest".parse().unwrap()).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let content_type = header_of(&response, header::CONTENT_TYPE);
+        assert_eq!(content_type, "application/manifest+json", "the manifest is served as `{content_type}`");
+        for icon in ["/icon-192.png", "/icon-512.png", "/icon-maskable-512.png", "/apple-touch-icon.png"] {
+            let response = serve(icon.parse().unwrap()).await;
+            assert_eq!(header_of(&response, header::CONTENT_TYPE), "image/png", "{icon}");
+        }
+    }
+
+    #[tokio::test]
     async fn a_bundle_is_served_with_its_own_type_and_cached_hard() {
         // Skipped rather than faked when there is no build: asserting on an
         // asset that does not exist would test the fallback a second time.

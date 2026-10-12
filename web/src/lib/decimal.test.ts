@@ -61,4 +61,27 @@ describe('parseAmount', () => {
       expect(isDecimal(parseAmount(text, 'en') ?? '')).toBe(true)
     }
   })
+
+  it('reads a separator the currency has no digits for as a group, as the server reads a line', () => {
+    // A guaraní has no minor unit: 231.500 is a receipt in Asunción, in any
+    // language, never two hundred thirty-one and a half.
+    expect(parseAmount('231.500', 'en', 'PYG')).toBe('231500')
+    expect(parseAmount('231,500', 'ru', 'PYG')).toBe('231500')
+    // Three digits are more than a cent has, too.
+    expect(parseAmount('1.500', 'en', 'EUR')).toBe('1500')
+    // Within the currency's digits the language decides, as before.
+    expect(parseAmount('12.50', 'en', 'EUR')).toBe('12.50')
+    expect(parseAmount('12,50', 'ru', 'EUR')).toBe('12.50')
+  })
+
+  it('refuses digits the currency cannot hold rather than rounding them away', () => {
+    expect(parseAmount('231.5', 'en', 'PYG')).toBeNull()
+    expect(parseAmount('12.505', 'en', 'USD')).toBe('12505')
+    expect(parseAmount('12.5055', 'en', 'USD')).toBeNull()
+  })
+
+  it('keeps every digit of a coin no standard lists', () => {
+    expect(parseAmount('0.00012345', 'en', 'BTC')).toBe('0.00012345')
+    expect(parseAmount('0.500', 'en', 'BTC')).toBe('0.500')
+  })
 })

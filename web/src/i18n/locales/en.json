@@ -14,6 +14,7 @@
   },
   "nav": {
     "label": "Screens",
+    "record": "Record",
     "accounts": "Accounts",
     "entries": "Entries",
     "signOut": "Sign out"
@@ -109,7 +110,11 @@
     "record": "Record",
     "recorded": "Recorded: {{text}}",
     "newCounterparty": "New counterparty: {{name}}",
-    "newTags": "New tags: {{tags}}"
+    "newTags": "New tags: {{tags}}",
+    "previewLabel": "What this line records",
+    "from": "from {{account}}",
+    "into": "into {{account}}",
+    "new": "new"
   },
   "filters": {
     "title": "Filters",
@@ -189,7 +194,8 @@
     "delete": "Delete",
     "deleteTitle": "Delete this entry?",
     "deleteBody": "Its lines go with it, and the balances it moved move back. This cannot be undone.",
-    "deleted": "Entry deleted."
+    "deleted": "Entry deleted.",
+    "repeat": "Record again today"
   },
   "exchange": {
     "title": "Exchange money",
@@ -208,5 +214,77 @@
     "saved": "{{amount}} better than the day's rate",
     "noReference": "no day's rate to measure against",
     "staleNoFee": "the day's rate is too old to measure against"
+  },
+  "record": {
+    "title": "Record",
+    "description": "What was just spent, in a line or with a press.",
+    "account": "Account",
+    "day": "Day",
+    "today": "Today",
+    "yesterday": "Yesterday",
+    "otherDay": "Another day",
+    "buttons": "Buttons",
+    "manage": "Edit",
+    "noButtons": "No buttons yet. Open an entry below and make it a button: one press records it again.",
+    "asks": "asks how much",
+    "howMuch": "How much, in {{currency}}",
+    "pressed": "Recorded: {{name}}",
+    "undo": "Undo",
+    "undone": "Taken back.",
+    "nothingToday": "Nothing recorded today yet.",
+    "repeat": "Record “{{name}}” again",
+    "repeated": "Recorded again: {{name}}"
+  },
+  "secondPress": {
+    "title": "Record it again?",
+    "body": "Is this a second one?",
+    "keep": "No, it was one",
+    "again": "Record a second"
+  },
+  "template": {
+    "make": "Make a button",
+    "makeTitle": "A button for this entry",
+    "name": "On the button",
+    "askAmount": "Ask for the amount each time",
+    "made": "“{{name}}” is a button now.",
+    "up": "Move “{{name}}” up",
+    "down": "Move “{{name}}” down",
+    "edit": "Edit “{{name}}”",
+    "delete": "Delete “{{name}}”",
+    "deleteTitle": "Delete the “{{name}}” button?",
+    "deleteBody": "The entries it recorded stay.",
+    "deleted": "Button deleted.",
+    "amount": "Amount, in {{currency}}",
+    "amountHelp": "Left empty, the button asks each time."
+  },
+  "errors": {
+    "entry": {
+      "possible_duplicate": "The same entry was recorded {{seconds}} s ago."
+    },
+    "line": {
+      "empty": "There is nothing here to record.",
+      "no_amount": "“{{word}}” is not an amount; a line starts with one, as in 45000 food lunch.",
+      "zero_amount": "An entry of zero records nothing.",
+      "no_category": "What was {{amount}} for? Add a category, as in {{amount}} food, or who was paid, as in {{amount}} @shop.",
+      "dangling_account": "“{{word}}” names no account.",
+      "bad_rate": "“{{word}}” is not a rate; write it as @5965.",
+      "bare_at": "@ names nothing: @5965 is a rate, @shop is who was paid.",
+      "twice": "“{{word}}” says again what the line already said; one rate and one counterparty to a line.",
+      "income_category": "“{{category}}” is money coming in; write +{{amount}} for that.",
+      "expense_category": "“{{category}}” is money going out; leave the + off for money spent.",
+      "unknown_account": "You have no account called “{{name}}”.",
+      "no_open_account": "There is no open account to record this against; open one first.",
+      "which_account": "Which account? Choose one, or write from {{example}} - you have {{accounts}}.",
+      "no_usual_category": "“{{counterparty}}” has no usual category; say what this was for, as in {{amount}} food @{{key}}.",
+      "unknown_counterparty": "Nobody is called “{{name}}” yet; say what this was for, as in {{amount}} food @{{name}}, and it is created with that as its usual category.",
+      "unknown_category": "You have no category called “{{name}}”; create it first.",
+      "ambiguous_category": "“{{name}}” is more than one category ({{names}}); say which, as in living/{{name}}.",
+      "rate_without_currency": "A rate converts an amount in another currency; this one is already in {{currency}}.",
+      "no_rate": "No {{from}} to {{to}} rate is known on or before {{day}}; state the one you were charged, as in @5965.",
+      "worthless": "{{amount}} {{currency}} is worth nothing in {{account_currency}}."
+    },
+    "template": {
+      "name_taken": "There is already a button by that name."
+    }
   }
 }

@@ -1,6 +1,7 @@
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
+import { today } from '@/lib/dates'
 import { Entries } from '@/pages/Entries'
 import { app, failure, json, signedIn } from '@/test/server'
 
@@ -15,6 +16,8 @@ const LISTS = {
   '/api/v1/ledger/tags': json([{ id: 't1', name: 'trip' }]),
   '/api/v1/ledger/counterparties': json([{ id: 'p1', name: 'Casa Rica', key: 'casarica' }]),
   '/api/v1/ledger/places': json([]),
+  // Typing works the line out as it goes; these tests are about recording it.
+  'POST /api/v1/ledger/entries/quick/preview': failure(400, 'not yet'),
 }
 
 const HELD = {
@@ -70,9 +73,27 @@ describe('Entries', () => {
     render(app(<Entries />, '/entries'))
     const line = await screen.findByLabelText('Record an entry in one line')
     await userEvent.type(line, '45000 food lunch #trip{Enter}')
-    expect(requests.find((sent) => sent.method === 'POST')?.body).toEqual({ text: '45000 food lunch #trip', occurred_on: null, place: null })
+    // On the person's day, not the server's.
+    expect(requests.find((sent) => sent.path === '/api/v1/ledger/entries/quick')?.body).toEqual({
+      text: '45000 food lunch #trip',
+      occurred_on: today(),
+      account_id: null,
+      place: null,
+    })
     await screen.findByText('Recorded: Weekly shop')
     expect((line as HTMLInputElement).value).toBe('')
+  })
+
+  it('records a line that names no account against the account the list is narrowed to', async () => {
+    const requests = signedIn({
+      ...LISTS,
+      '/api/v1/ledger/entries': json([]),
+      'POST /api/v1/ledger/entries/quick': json({ entry: { ...HELD, status: 'cleared' } }, 201),
+    })
+    render(app(<Entries />, '/entries?account=a1'))
+    await userEvent.type(await screen.findByLabelText('Record an entry in one line'), '45000 food{Enter}')
+    await screen.findByText('Recorded: Weekly shop')
+    expect(requests.find((sent) => sent.path === '/api/v1/ledger/entries/quick')?.body).toMatchObject({ account_id: 'a1' })
   })
 
   it('keeps a refused line, with the server saying why', async () => {

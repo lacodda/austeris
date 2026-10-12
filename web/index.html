@@ -2,10 +2,22 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- `viewport-fit=cover` lets the page reach under a phone's rounded
+         corners and home bar, so the bottom navigation can pad itself by the
+         safe-area inset instead of floating above a strip of nothing. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>austeris</title>
     <meta name="description" content="Self-hosted home finance: accounts, entries, assets and liabilities in one place" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- Installed on a home screen it opens straight onto recording
+         (manifest `start_url`), full screen, with the theme's own colour in
+         the status bar. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-title" content="austeris" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f3ecf6" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#1c1720" />
   </head>
   <body>
     <div id="root"></div>

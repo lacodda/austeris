@@ -1,3 +1,4 @@
+import { isIsoCurrency } from '@/lib/money'
 import type { Decimal } from '@/lib/types'
 
 /*
@@ -81,11 +82,18 @@ export function decimalSeparator(locale: string): string {
  * other separator and the apostrophe some write thousands with are grouping and
  * dropped. A `.` is also accepted as the point where the language uses `,` and
  * the text has no comma - a keypad has only a dot, and `10.50` means one thing.
+ *
+ * With the currency known, its digits settle what the language cannot: a
+ * guaraní has none, so `231.500` is two hundred thirty-one thousand whatever
+ * the language - three digits after a lone separator, more than the currency
+ * has, are a group, as the server reads a typed line. Digits the currency
+ * cannot hold otherwise make it no amount of that currency at all.
  */
-export function parseAmount(text: string, locale: string): Decimal | null {
+export function parseAmount(text: string, locale: string, currency?: string): Decimal | null {
   const point = decimalSeparator(locale)
   let cleaned = text.trim().replace(/[\s']/g, '').replace(MINUS_SIGN, '-')
   if (cleaned === '') return null
+  const separators = (cleaned.match(/[.,]/g) ?? []).length
 
   if (point === ',' && !cleaned.includes(',')) {
     // A dot is the point only when it is clearly not grouping: one of them.
@@ -96,5 +104,22 @@ export function parseAmount(text: string, locale: string): Decimal | null {
   if (point !== '.') cleaned = cleaned.replace(point, '.')
 
   if (!CANONICAL.test(cleaned)) return null
+
+  const places = currency === undefined ? undefined : currencyDigits(currency)
+  const fraction = cleaned.split('.')[1]
+  if (places !== undefined && fraction !== undefined && fraction.length > places) {
+    if (separators === 1 && fraction.length === 3) return cleaned.replace('.', '')
+    return null
+  }
   return cleaned
+}
+
+/** How many digits after the point a currency has: none for PYG, two for
+ * USD - or `undefined` for a code `Intl` does not know (a coin), which keeps
+ * every digit it is given. */
+function currencyDigits(currency: string): number | undefined {
+  // Any three letters are a well-formed code to `Intl`, and an unknown one
+  // gets two digits - a coin's eight would be refused as too many.
+  if (!isIsoCurrency(currency)) return undefined
+  return new Intl.NumberFormat('en', { style: 'currency', currency }).resolvedOptions().maximumFractionDigits
 }

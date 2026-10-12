@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { sum } from '@/lib/decimal'
-import { categoriesOf, movements, splitLines, transferLines } from '@/lib/entries'
+import { categoriesOf, isExchange, isOnePayment, movements, splitLines, transferLines } from '@/lib/entries'
 import type { Entry, NewEntryLine } from '@/lib/types'
 
 /** What the ledger checks: every currency's lines add up to nothing. */
@@ -88,5 +88,43 @@ describe('movements', () => {
 describe('categoriesOf', () => {
   it('names each category once, and never a conversion', () => {
     expect(categoriesOf(exchange)).toEqual(['fees'])
+  })
+})
+
+describe('what an entry can be made into', () => {
+  const coffee: Entry = {
+    ...exchange,
+    description: 'Coffee',
+    lines: [
+      { id: '1', side: 'account', account_id: 'pyg', amount: '-15000', currency: 'PYG', note: '' },
+      { id: '2', side: 'category', category_id: 'food', amount: '15000', currency: 'PYG', note: '' },
+    ],
+  }
+
+  it('makes a button of one payment, and of nothing with two accounts in it', () => {
+    expect(isOnePayment(coffee)).toBe(true)
+    expect(isOnePayment(exchange, 'fees')).toBe(false)
+  })
+
+  it('reads a payment in another currency as one payment beside the ledger fee', () => {
+    const streaming: Entry = {
+      ...coffee,
+      lines: [
+        { id: '1', side: 'account', account_id: 'pyg', amount: '-60300', currency: 'PYG', note: '' },
+        { id: '2', side: 'category', category_id: 'fees', amount: '650', currency: 'PYG', note: '' },
+        { id: '3', side: 'conversion', amount: '59650', currency: 'PYG', note: '' },
+        { id: '4', side: 'conversion', amount: '-10', currency: 'USD', note: '' },
+        { id: '5', side: 'category', category_id: 'fun', amount: '10', currency: 'USD', note: '' },
+      ],
+    }
+    expect(isOnePayment(streaming, 'fees')).toBe(true)
+    // Without knowing which category holds fees, it is two categories.
+    expect(isOnePayment(streaming)).toBe(false)
+    expect(isExchange(streaming)).toBe(false)
+  })
+
+  it('knows an exchange, which is never recorded again', () => {
+    expect(isExchange(exchange)).toBe(true)
+    expect(isExchange(coffee)).toBe(false)
   })
 })

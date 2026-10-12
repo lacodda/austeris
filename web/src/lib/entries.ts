@@ -97,3 +97,24 @@ export function categoriesOf(entry: Entry): string[] {
 export function usable(account: Account, chosen?: string): boolean {
   return !account.closed_at || account.id === chosen
 }
+
+/**
+ * Whether an entry is one payment: one account, one category beside the
+ * ledger's own fee, and the conversion between them when there is one - what
+ * a button can be made of. The server holds the same rule; asking it here
+ * keeps the screen from offering what would be refused.
+ */
+export function isOnePayment(entry: Entry, feeCategory?: string): boolean {
+  const accounts = entry.lines.filter((line) => line.side === 'account')
+  const categories = entry.lines.filter((line) => line.side === 'category' && line.category_id !== feeCategory)
+  return accounts.length === 1 && categories.length === 1
+}
+
+/**
+ * Whether an entry is money changed between two of a person's accounts. It is
+ * the one kind that is not recorded again: what changes hands is the deal of
+ * its day, and the next one is not the same.
+ */
+export function isExchange(entry: Entry): boolean {
+  return entry.lines.some((line) => line.side === 'conversion') && entry.lines.filter((line) => line.side === 'account').length > 1
+}

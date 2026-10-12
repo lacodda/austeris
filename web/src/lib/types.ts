@@ -158,6 +158,7 @@ export interface NewEntry {
   place?: PlaceBody | null
   tags?: string[]
   pending?: boolean
+  allow_duplicate?: boolean
 }
 
 export interface EntryPatch {
@@ -178,6 +179,7 @@ export interface Exchange {
   counterparty_id?: string | null
   place?: PlaceBody | null
   tags?: string[]
+  allow_duplicate?: boolean
 }
 
 export interface Money {
@@ -199,6 +201,52 @@ export interface Recorded {
   conversion?: ConversionSummary | null
   new_counterparty?: Counterparty | null
   new_tags?: string[]
+}
+
+/** A typed line, and what is beside it rather than in it. */
+export interface QuickLine {
+  text: string
+  occurred_on?: IsoDate | null
+  place?: PlaceBody | null
+  /** The account when the line names none. */
+  account_id?: string | null
+  allow_duplicate?: boolean
+}
+
+/** What a typed line would record, worked out and not written. */
+export interface Preview {
+  occurred_on: IsoDate
+  flow: Flow
+  account: Account
+  category: Category
+  /** The amount as the line said it. */
+  amount: Money
+  /** What the account would move by, signed, in its currency. */
+  moves: Decimal
+  description: string
+  /** Who; without an `id` it is a name recording would create. */
+  counterparty?: { id?: string; name: string } | null
+  tags: string[]
+  new_tags: string[]
+  pending: boolean
+  conversion?: ConversionSummary | null
+}
+
+/** A button that records the same payment again. */
+export interface Template {
+  id: string
+  name: string
+  account_id: string
+  category_id: string
+  flow: Flow
+  /** Absent when it asks for the amount each time. */
+  amount?: Decimal | null
+  currency: string
+  description: string
+  counterparty?: { id: string; name: string } | null
+  place?: Place | null
+  tags: string[]
+  pending: boolean
 }
 
 /** What narrows the list of entries; every field optional. */

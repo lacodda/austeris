@@ -2,7 +2,7 @@ import { useMemo, useState, type FormEvent } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { useLocale } from 'dowel-ui'
-import { X } from 'lucide-react'
+import { Repeat, SquarePlus, X } from 'lucide-react'
 import { AmountInput } from '@/components/AmountInput'
 import { Money } from '@/components/Money'
 import type { Picked } from '@/components/Picker'
@@ -30,10 +30,14 @@ import { useToastManager } from '@/components/ui/toast'
 import { api } from '@/lib/api'
 import { formatDay, today } from '@/lib/dates'
 import { parseAmount, sign } from '@/lib/decimal'
+import { isExchange, isOnePayment } from '@/lib/entries'
 import { categoryLabels, placeLabel, useAccounts, useBooksChanged, useCategories } from '@/lib/ledger'
+import { problem } from '@/lib/problem'
+import { useRecordedToast, useSecondPress } from '@/lib/recording'
 import type { Entry, PlaceBody } from '@/lib/types'
 import { CounterpartyField, isTag, PlaceField, TagsField } from '@/pages/entries/fields'
 import { resolver } from '@/pages/entries/resolve'
+import { MakeButton } from '@/pages/record/MakeButton'
 
 type Mode = 'view' | 'edit' | 'post'
 
@@ -103,6 +107,23 @@ function ViewEntry({ entry, onEdit, onPost, onDeleted }: { entry: Entry; onEdit:
   const accountName = (accountId: string) => accounts.data?.find((account) => account.id === accountId)?.name ?? ''
   const changed = useBooksChanged()
   const toasts = useToastManager()
+  const recorded = useRecordedToast()
+  const secondPress = useSecondPress()
+  const [making, setMaking] = useState(false)
+  const feeCategory = categories.data?.find((category) => category.purpose === 'exchange_fees')?.id
+  const name = title(entry, t('entry.untitled'))
+
+  const repeat = useMutation({
+    mutationFn: (again: boolean) => api.repeat(entry.id, today(), again),
+    onSuccess: (done) => {
+      void changed()
+      recorded(done.entry, t('record.repeated', { name }))
+      onDeleted()
+    },
+    onError: (error: Error) => {
+      if (!secondPress.ask(error, () => repeat.mutate(true))) toasts.add({ type: 'error', title: problem(error, t) })
+    },
+  })
 
   const remove = useMutation({
     mutationFn: () => api.deleteEntry(entry.id),
@@ -143,6 +164,25 @@ function ViewEntry({ entry, onEdit, onPost, onDeleted }: { entry: Entry; onEdit:
           ) : null}
           {entry.source ? <KeyValueRow label={t('entry.source')}>{entry.source}</KeyValueRow> : null}
         </KeyValue>
+
+        {/* What can be made of the entry, apart from what changes it: the
+            footer keeps to the entry itself, and fits a phone's width. */}
+        {isExchange(entry) && !isOnePayment(entry, feeCategory) ? null : (
+          <div className="flex flex-wrap gap-2">
+            {isExchange(entry) ? null : (
+              <Button size="sm" onClick={() => repeat.mutate(false)} disabled={repeat.isPending}>
+                <Repeat aria-hidden />
+                {t('entry.repeat')}
+              </Button>
+            )}
+            {isOnePayment(entry, feeCategory) ? (
+              <Button size="sm" onClick={() => setMaking(true)}>
+                <SquarePlus aria-hidden />
+                {t('template.make')}
+              </Button>
+            ) : null}
+          </div>
+        )}
 
         <section className="flex flex-col gap-2">
           <h3 className="caption">{t('entry.lines')}</h3>
@@ -195,6 +235,8 @@ function ViewEntry({ entry, onEdit, onPost, onDeleted }: { entry: Entry; onEdit:
           </Button>
         ) : null}
       </DrawerActions>
+      {making ? <MakeButton entry={entry} suggested={name} open={making} onOpenChange={setMaking} /> : null}
+      {secondPress.dialog}
     </>
   )
 }
@@ -312,7 +354,8 @@ function PostEntry({ entry, onDone }: { entry: Entry; onDone: () => void }) {
       post.mutate(undefined)
       return
     }
-    const actual = parseAmount(amount, locale)
+    // In the currency of the account it was held on.
+    const actual = parseAmount(amount, locale, entry.lines.find((line) => line.side === 'account')?.currency)
     if (actual === null || sign(actual) <= 0) {
       setProblem(t('form.positiveAmounts'))
       return

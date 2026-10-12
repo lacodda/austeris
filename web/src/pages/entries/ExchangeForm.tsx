@@ -9,11 +9,12 @@ import { Button } from '@/components/ui/button'
 import { DatePicker } from '@/components/ui/date-picker'
 import { DialogActions, DialogBody, DialogClose, DialogHeader, DialogPopup, DialogTitle } from '@/components/ui/dialog'
 import { Field } from '@/components/ui/field'
-import { useToastManager } from '@/components/ui/toast'
 import { api } from '@/lib/api'
 import { formatDay, today } from '@/lib/dates'
 import { negate, parseAmount, sign, sum } from '@/lib/decimal'
 import { keys, openAccounts, useAccounts, useBooksChanged } from '@/lib/ledger'
+import { problem as problemOf } from '@/lib/problem'
+import { useRecordedToast, useSecondPress } from '@/lib/recording'
 import { formatMoney, formatRate } from '@/lib/money'
 import type { ConversionSummary, PlaceBody } from '@/lib/types'
 import { AccountSelect, CounterpartyField, PlaceField } from '@/pages/entries/fields'
@@ -32,7 +33,8 @@ import { resolver } from '@/pages/entries/resolve'
 export function ExchangeForm({ onDone }: { onDone: () => void }) {
   const { t } = useTranslation()
   const locale = useLocale()
-  const toasts = useToastManager()
+  const recorded = useRecordedToast()
+  const secondPress = useSecondPress()
   const changed = useBooksChanged()
   const accounts = useAccounts()
   const usable = useMemo(() => openAccounts(accounts.data), [accounts.data])
@@ -64,9 +66,9 @@ export function ExchangeForm({ onDone }: { onDone: () => void }) {
   })
 
   const record = useMutation({
-    mutationFn: async () => {
-      const givenAmount = parseAmount(given, locale)
-      const gotAmount = parseAmount(got, locale)
+    mutationFn: async (again: boolean) => {
+      const givenAmount = parseAmount(given, locale, from?.currency)
+      const gotAmount = parseAmount(got, locale, to?.currency)
       if (!from || !to || !givenAmount || !gotAmount) throw new Error(t('form.incomplete'))
       const counterpartyId = await resolver().counterparty(counterparty)
       return api.exchange({
@@ -77,27 +79,25 @@ export function ExchangeForm({ onDone }: { onDone: () => void }) {
         occurred_on: date,
         counterparty_id: counterpartyId,
         place: place && place.country ? place : null,
+        ...(again ? { allow_duplicate: true } : {}),
       })
     },
-    onSuccess: (recorded) => {
+    onSuccess: (done) => {
       void changed()
-      toasts.add({
-        type: 'success',
-        title: t('exchange.recorded'),
-        description: recorded.conversion ? describe(recorded.conversion, locale, t) : undefined,
-      })
+      recorded(done.entry, t('exchange.recorded'), done.conversion ? describe(done.conversion, locale, t) : undefined)
       onDone()
     },
     onError: (error: Error) => {
       void changed()
-      setProblem(error.message)
+      // Said to be one press, the entry is recorded already: the form is done.
+      if (!secondPress.ask(error, () => record.mutate(true), onDone)) setProblem(problemOf(error, t))
     },
   })
 
   function submit(event: FormEvent) {
     event.preventDefault()
     setProblem(null)
-    const amounts = [parseAmount(given, locale), parseAmount(got, locale)]
+    const amounts = [parseAmount(given, locale, from?.currency), parseAmount(got, locale, to?.currency)]
     if (amounts.some((value) => value === null || sign(value) <= 0)) {
       setProblem(t('form.positiveAmounts'))
       return
@@ -106,7 +106,7 @@ export function ExchangeForm({ onDone }: { onDone: () => void }) {
       setProblem(t('exchange.sameCurrency'))
       return
     }
-    record.mutate()
+    record.mutate(false)
   }
 
   return (
@@ -162,6 +162,7 @@ export function ExchangeForm({ onDone }: { onDone: () => void }) {
           </Button>
         </DialogActions>
       </form>
+      {secondPress.dialog}
     </DialogPopup>
   )
 }

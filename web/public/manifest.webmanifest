@@ -1,0 +1,21 @@
+{
+  "name": "austeris",
+  "short_name": "austeris",
+  "description": "Self-hosted home finance: record what was spent where it was spent",
+  "id": "/record",
+  "start_url": "/record",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#1c1720",
+  "theme_color": "#1c1720",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Entries", "url": "/entries", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Accounts", "url": "/accounts", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] }
+  ]
+}

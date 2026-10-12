@@ -1,6 +1,6 @@
 import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router'
 import { useTranslation } from 'react-i18next'
-import { ArrowLeftRight, ChevronDown, Wallet } from 'lucide-react'
+import { ArrowLeftRight, ChevronDown, PenLine, Wallet } from 'lucide-react'
 import { AppShell, Screen } from '@/components/ui/app-shell'
 import { Button } from '@/components/ui/button'
 import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from '@/components/ui/menu'
@@ -9,10 +9,12 @@ import { languageName, LANGUAGES, setLanguage } from '@/i18n'
 import { useSession } from '@/lib/session'
 import { Accounts } from '@/pages/Accounts'
 import { Entries } from '@/pages/Entries'
+import { Record } from '@/pages/Record'
 import { SignIn } from '@/pages/SignIn'
 
 /** The screens, in the order the navigation lists them. */
 const SCREENS = [
+  { id: 'record', path: '/record', icon: <PenLine aria-hidden /> },
   { id: 'accounts', path: '/accounts', icon: <Wallet aria-hidden /> },
   { id: 'entries', path: '/entries', icon: <ArrowLeftRight aria-hidden /> },
 ] as const
@@ -37,8 +39,11 @@ function Books() {
 
   return (
     <AppShell top={<Header items={items} active={active} link={link} />}>
-      <Screen>
+      {/* Sixteen pixels of margin on a phone rather than twenty-four: on a
+          screen 390 wide, the eight given back are the amount's. */}
+      <Screen className="px-4 sm:px-6">
         <Routes>
+          <Route path="/record" element={<Record />} />
           <Route path="/accounts" element={<Accounts />} />
           <Route path="/entries" element={<Entries />} />
           {/* An address nothing answers lands on the money rather than on a

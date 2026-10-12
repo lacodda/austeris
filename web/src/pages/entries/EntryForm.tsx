@@ -14,12 +14,13 @@ import { DrawerActions, DrawerBody, DrawerClose, DrawerHeader, DrawerPopup, Draw
 import { Field } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Segment, SegmentedControl } from '@/components/ui/segmented-control'
-import { useToastManager } from '@/components/ui/toast'
 import { api } from '@/lib/api'
 import { today } from '@/lib/dates'
 import { parseAmount, sign, sum } from '@/lib/decimal'
 import { splitLines, transferLines, type Direction } from '@/lib/entries'
 import { categoryLabels, openAccounts, useAccounts, useBooksChanged, useCategories, useCounterparties } from '@/lib/ledger'
+import { problem as problemOf } from '@/lib/problem'
+import { useRecordedToast, useSecondPress } from '@/lib/recording'
 import type { Flow, NewEntry, PlaceBody } from '@/lib/types'
 import { AccountSelect, CounterpartyField, isTag, PlaceField, TagsField } from '@/pages/entries/fields'
 import { resolver } from '@/pages/entries/resolve'
@@ -52,7 +53,8 @@ const blankLine = (): DraftLine => ({ key: nextKey++, category: null, amount: ''
 export function EntryForm({ onDone, defaultAccount }: { onDone: () => void; defaultAccount?: string }) {
   const { t } = useTranslation()
   const locale = useLocale()
-  const toasts = useToastManager()
+  const recorded = useRecordedToast()
+  const secondPress = useSecondPress()
   const changed = useBooksChanged()
   const accounts = useAccounts()
   const categories = useCategories()
@@ -85,7 +87,7 @@ export function EntryForm({ onDone, defaultAccount }: { onDone: () => void; defa
     [categories.data, flow, labels, locale],
   )
 
-  const parsed = lines.map((line) => (line.amount.trim() === '' ? null : parseAmount(line.amount, locale)))
+  const parsed = lines.map((line) => (line.amount.trim() === '' ? null : parseAmount(line.amount, locale, from?.currency)))
   const total = parsed.every((value) => value !== null) ? sum(parsed as string[]) : null
 
   const update = (key: number, change: Partial<DraftLine>) =>
@@ -105,7 +107,7 @@ export function EntryForm({ onDone, defaultAccount }: { onDone: () => void; defa
   }
 
   const record = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (again: boolean) => {
       const resolve = resolver()
       const shared = {
         description: description.trim(),
@@ -113,9 +115,10 @@ export function EntryForm({ onDone, defaultAccount }: { onDone: () => void; defa
         tags,
         place: place && place.country ? place : null,
         pending: held,
+        ...(again ? { allow_duplicate: true } : {}),
       }
       if (kind === 'transfer') {
-        const value = parseAmount(amount, locale)
+        const value = parseAmount(amount, locale, from?.currency)
         if (!from || !target || value === null) throw new Error(t('form.incomplete'))
         const entry: NewEntry = { ...shared, lines: transferLines(from.id, target.id, from.currency, value) }
         return api.createEntry(entry)
@@ -136,16 +139,17 @@ export function EntryForm({ onDone, defaultAccount }: { onDone: () => void; defa
       }
       return api.createEntry(entry)
     },
-    onSuccess: () => {
+    onSuccess: (entry) => {
       void changed()
-      toasts.add({ type: 'success', title: t('entry.recorded') })
+      recorded(entry, t('entry.recorded'))
       onDone()
     },
     // Whatever was created on the way - a category, a counterparty - is real
     // now, so the lists are refreshed even when the entry itself failed.
     onError: (error: Error) => {
       void changed()
-      setProblem(error.message)
+      // Said to be one press, the entry is recorded already: the form is done.
+      if (!secondPress.ask(error, () => record.mutate(true), onDone)) setProblem(problemOf(error, t))
     },
   })
 
@@ -153,7 +157,7 @@ export function EntryForm({ onDone, defaultAccount }: { onDone: () => void; defa
     event.preventDefault()
     setProblem(null)
     if (tags.some((tag) => !isTag(tag))) return
-    const amounts = kind === 'transfer' ? [parseAmount(amount, locale)] : parsed
+    const amounts = kind === 'transfer' ? [parseAmount(amount, locale, from?.currency)] : parsed
     if (amounts.some((value) => value === null || sign(value) <= 0)) {
       setProblem(t('form.positiveAmounts'))
       return
@@ -162,7 +166,7 @@ export function EntryForm({ onDone, defaultAccount }: { onDone: () => void; defa
       setProblem(t('entry.transferCurrencies'))
       return
     }
-    record.mutate()
+    record.mutate(false)
   }
 
   return (
@@ -303,6 +307,7 @@ export function EntryForm({ onDone, defaultAccount }: { onDone: () => void; defa
           </Button>
         </DrawerActions>
       </form>
+      {secondPress.dialog}
     </DrawerPopup>
   )
 }

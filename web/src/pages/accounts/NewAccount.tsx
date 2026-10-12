@@ -56,7 +56,7 @@ export function NewAccount() {
   })
 
   const code = currency.trim().toUpperCase()
-  const amount = opening.trim() === '' ? undefined : parseAmount(opening, locale)
+  const amount = opening.trim() === '' ? undefined : parseAmount(opening, locale, code.length === 3 ? code : undefined)
 
   function submit(event: FormEvent) {
     event.preventDefault()

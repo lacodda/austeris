@@ -19,7 +19,9 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-type Answer = (body: unknown) => Response | Promise<Response>
+/** What the server answers: given the body sent and the address asked, so
+ * one path can answer two queries differently. */
+type Answer = (body: unknown, url: URL) => Response | Promise<Response>
 
 export interface Sent {
   method: string
@@ -40,15 +42,15 @@ export function serve(routes: Record<string, Answer>): Sent[] {
       requests.push({ method, path: url.pathname + url.search, body })
       const answer = routes[`${method} ${url.pathname}`] ?? (method === 'GET' ? routes[url.pathname] : undefined)
       if (!answer) throw new TypeError(`the test server has no answer for ${method} ${url.pathname}`)
-      return answer(body)
+      return answer(body, url)
     }),
   )
   return requests
 }
 
 export const json = (value: unknown, status = 200): Answer => () => Response.json(value, { status })
-export const failure = (status: number, message: string): Answer => () =>
-  Response.json({ status, error: 'Error', message }, { status })
+export const failure = (status: number, message: string, code?: string, params?: Record<string, unknown>): Answer => () =>
+  Response.json({ status, error: 'Error', message, ...(code ? { code, params: params ?? {} } : {}) }, { status })
 
 export const ME = { id: 'u1', email: 'ada@example.com', display_name: 'Ada' }
 

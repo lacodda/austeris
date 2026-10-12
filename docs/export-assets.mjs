@@ -79,6 +79,26 @@ await png(levelFor(180), 180, path.join(ASSETS, "apple-touch-icon.png"));
 await png(levelFor(512), 512, path.join(ASSETS, "logo-512.png"));
 console.log("wrote pngs");
 
+// The web interface installed on a phone's home screen. The plain icons keep
+// the hexagon's own transparent corners; the maskable one and Apple's are a
+// full square, because the launcher cuts its own shape out of it (and iOS
+// paints transparent pixels black). The mark sits inside the maskable safe
+// zone - a circle of 80% of the side - with the plate's colour around it.
+const WEB = path.join(ASSETS, "..", "web", "public");
+const PLATE = "#1B2126";
+async function onPlate(size, share, out) {
+  const mark = await sharp(levelFor(size), { density: 384 }).resize(Math.round(size * share)).png().toBuffer();
+  await sharp({ create: { width: size, height: size, channels: 4, background: PLATE } })
+    .composite([{ input: mark, gravity: "centre" }])
+    .png()
+    .toFile(out);
+}
+await png(levelFor(192), 192, path.join(WEB, "icon-192.png"));
+await png(levelFor(512), 512, path.join(WEB, "icon-512.png"));
+await onPlate(512, 0.7, path.join(WEB, "icon-maskable-512.png"));
+await onPlate(180, 0.82, path.join(WEB, "apple-touch-icon.png"));
+console.log("wrote the web interface's icons");
+
 // GitHub social preview: 1280x640. Two adjustments to the banner: its plate
 // spans the full 720px while the artwork only fills the left ~570px (trim the
 // tail, or it lands off-centre), and the rounded plate over an identical

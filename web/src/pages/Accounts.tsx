@@ -103,8 +103,19 @@ export function Accounts() {
                     <TableRow>
                       <TableHeader>{t('accounts.account')}</TableHeader>
                       <TableHeader numeric>{t('accounts.balance')}</TableHeader>
-                      {anyHeld ? <TableHeader numeric>{t('accounts.available')}</TableHeader> : null}
-                      {currency ? <TableHeader numeric>{t('accounts.inCurrency', { currency })}</TableHeader> : null}
+                      {/* On a phone what is available and what it is in the
+                          total's currency go under the balance, so the row
+                          fits the screen and its menu is not pushed off it. */}
+                      {anyHeld ? (
+                        <TableHeader numeric className="hidden sm:table-cell">
+                          {t('accounts.available')}
+                        </TableHeader>
+                      ) : null}
+                      {currency ? (
+                        <TableHeader numeric className="hidden sm:table-cell">
+                          {t('accounts.inCurrency', { currency })}
+                        </TableHeader>
+                      ) : null}
                       <TableHeader>
                         <span className="sr-only">{t('common.actions')}</span>
                       </TableHeader>
@@ -205,16 +216,28 @@ function AccountRow({ account, balance, totalCurrency, showAvailable }: AccountR
         </Link>
         <div className="text-xs text-dim">{t(`accountKind.${account.kind}`)}</div>
       </TableCell>
-      <TableCell numeric>{balance ? <Money amount={balance.amount} currency={account.currency} /> : null}</TableCell>
+      <TableCell numeric>
+        {balance ? <Money amount={balance.amount} currency={account.currency} /> : null}
+        {balance && balance.available !== balance.amount ? (
+          <div className="text-xs text-dim sm:hidden">
+            {t('accounts.totalAvailable')} <Money amount={balance.available} currency={account.currency} />
+          </div>
+        ) : null}
+        {balance?.converted && totalCurrency && !sameCurrency ? (
+          <div className="text-xs text-dim sm:hidden">
+            <Money amount={balance.converted} currency={totalCurrency} />
+          </div>
+        ) : null}
+      </TableCell>
       {showAvailable ? (
-        <TableCell numeric className="text-dim">
+        <TableCell numeric className="hidden text-dim sm:table-cell">
           {balance && balance.available !== balance.amount ? (
             <Money amount={balance.available} currency={account.currency} />
           ) : null}
         </TableCell>
       ) : null}
       {totalCurrency ? (
-        <TableCell numeric className="text-dim">
+        <TableCell numeric className="hidden text-dim sm:table-cell">
           {balance && !sameCurrency ? (
             balance.converted ? (
               <span title={balance.rate_used?.stale ? t('accounts.staleRate', { date: balance.rate_used.on_date }) : undefined}>
