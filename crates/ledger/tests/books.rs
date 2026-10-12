@@ -1490,8 +1490,10 @@ async fn a_counterparty_is_found_however_its_name_is_typed() {
     .await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
 
+    // Three of the same payment in a row, said so: what is tested here is the
+    // name, not the guard against a second press.
     for typed in ["@casarica", "@Casa-Rica", "@casa_rica"] {
-        let (status, recorded) = quick(&pool, books.owner, &format!(r#"{{"text":"1000 {typed}"}}"#)).await;
+        let (status, recorded) = quick(&pool, books.owner, &format!(r#"{{"text":"1000 {typed}","allow_duplicate":true}}"#)).await;
         assert_eq!(status, StatusCode::CREATED, "{typed}: {recorded}");
         assert_eq!(recorded["entry"]["counterparty"]["name"], "Casa Rica", "{typed}");
     }
@@ -2087,4 +2089,563 @@ async fn a_schema_holding_a_hold_refuses_to_roll_back_past_it() {
         .await
         .expect_err("a schema with a held payment rolled back");
     assert!(format!("{error:#}").contains("still held"), "{error:#}");
+}
+
+/// Today, as the ledger reckons it when a request names no day.
+fn today() -> NaiveDate {
+    chrono::Utc::now().date_naive()
+}
+
+/// The number of rows a person has in a table of the ledger's.
+async fn count(pool: &PgPool, table: &str, owner: Uuid) -> i64 {
+    sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM {table} WHERE owner_id = $1")))
+        .bind(owner)
+        .fetch_one(pool)
+        .await
+        .expect("counting")
+}
+
+#[tokio::test]
+async fn the_same_entry_a_moment_later_is_refused_as_a_possible_duplicate() {
+    let Some(pool) = pool("test_ledger_duplicate").await else { return };
+    let books = books(&pool).await;
+    let line = r#"{"text":"45000 food lunch","occurred_on":"2026-10-11"}"#;
+
+    let (status, first) = quick(&pool, books.owner, line).await;
+    assert_eq!(status, StatusCode::CREATED, "{first}");
+
+    // A second press: refused, with what a screen needs to ask about it.
+    let (status, second) = quick(&pool, books.owner, line).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{second}");
+    assert_eq!(second["code"], "entry.possible_duplicate", "{second}");
+    assert_eq!(second["params"]["entry_id"], first["entry"]["id"], "{second}");
+    assert!(
+        second["params"]["seconds"].as_i64().is_some_and(|seconds| (0..60).contains(&seconds)),
+        "{second}"
+    );
+    assert_eq!(count(&pool, "entries", books.owner).await, 1);
+
+    // Said to be a second one, it is.
+    let (status, again) = quick(
+        &pool,
+        books.owner,
+        r#"{"text":"45000 food lunch","occurred_on":"2026-10-11","allow_duplicate":true}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{again}");
+
+    // A different note, a different day or a different amount is a different
+    // entry, not a second press.
+    for other in [
+        r#"{"text":"45000 food dinner","occurred_on":"2026-10-11"}"#,
+        r#"{"text":"45000 food lunch","occurred_on":"2026-10-10"}"#,
+        r#"{"text":"45001 food lunch","occurred_on":"2026-10-11"}"#,
+    ] {
+        let (status, body) = quick(&pool, books.owner, other).await;
+        assert_eq!(status, StatusCode::CREATED, "{other}: {body}");
+    }
+}
+
+#[tokio::test]
+async fn presses_arriving_at_once_record_one_entry() {
+    // Two taps on a phone are two requests in flight together. Looked for side
+    // by side, each would find no twin and both would be written.
+    let Some(pool) = pool("test_ledger_duplicate_race").await else { return };
+    let books = books(&pool).await;
+    let line = r#"{"text":"15000 food coffee","occurred_on":"2026-10-11"}"#;
+
+    let presses: Vec<_> = (0..6)
+        .map(|_| {
+            let pool = pool.clone();
+            tokio::spawn(async move { quick(&pool, books.owner, line).await })
+        })
+        .collect();
+    let mut answers = Vec::new();
+    for press in presses {
+        answers.push(press.await.expect("a press"));
+    }
+    let created = answers.iter().filter(|(status, _)| *status == StatusCode::CREATED).count();
+    let refused = answers.iter().filter(|(status, _)| *status == StatusCode::CONFLICT).count();
+    assert_eq!((created, refused), (1, 5), "{answers:?}");
+    assert_eq!(count(&pool, "entries", books.owner).await, 1);
+}
+
+#[tokio::test]
+async fn an_entry_from_more_than_a_minute_ago_is_not_a_second_press() {
+    let Some(pool) = pool("test_ledger_duplicate_window").await else { return };
+    let books = books(&pool).await;
+    let line = r#"{"text":"15000 food coffee","occurred_on":"2026-10-11"}"#;
+
+    let (status, body) = quick(&pool, books.owner, line).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    sqlx::query("UPDATE entries SET created_at = now() - interval '61 seconds' WHERE owner_id = $1")
+        .bind(books.owner)
+        .execute(&pool)
+        .await
+        .expect("ageing the entry");
+
+    let (status, body) = quick(&pool, books.owner, line).await;
+    assert_eq!(status, StatusCode::CREATED, "a coffee a minute later was taken for a second press: {body}");
+}
+
+#[tokio::test]
+async fn a_module_posting_the_same_movement_under_two_keys_is_not_asked_about_it() {
+    // A module's retries are settled by its keys; two keys are two movements -
+    // two identical subscription charges on one day are both real.
+    let Some(pool) = pool("test_ledger_duplicate_keys").await else { return };
+    let books = books(&pool).await;
+
+    for key in ["recurring:1", "recurring:2"] {
+        let mut entry = spend(&books, "45000", day(2026, 10, 11));
+        entry.idempotency_key = Some(key.to_owned());
+        assert!(repository::post_entry(&pool, books.owner, &entry).await.expect("posting").created);
+    }
+    assert_eq!(count(&pool, "entries", books.owner).await, 2);
+}
+
+#[tokio::test]
+async fn a_form_and_an_exchange_pressed_twice_are_asked_about_too() {
+    let Some(pool) = pool("test_ledger_duplicate_surfaces").await else { return };
+    let books = books(&pool).await;
+    let dollars = repository::create_account(&pool, books.owner, AccountKind::Cash, "Dollars", "USD", Decimal::ZERO)
+        .await
+        .expect("creating");
+
+    let entry = format!(
+        r#"{{"occurred_on":"2026-10-11","description":"lunch","lines":[
+            {{"account_id":"{}","amount":"-45000","currency":"PYG"}},
+            {{"category_id":"{}","amount":"45000","currency":"PYG"}}]}}"#,
+        books.account, books.food
+    );
+    let exchange = format!(
+        r#"{{"occurred_on":"2026-10-11","from_account":"{}","given":"60000","to_account":"{}","got":"10"}}"#,
+        books.account, dollars.id
+    );
+    for (uri, body) in [("/ledger/entries", entry), ("/ledger/exchanges", exchange)] {
+        let (status, answer) = call(&pool, books.owner, "POST", uri, Some(&body)).await;
+        assert_eq!(status, StatusCode::CREATED, "{uri}: {answer}");
+        let (status, answer) = call(&pool, books.owner, "POST", uri, Some(&body)).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{uri}: {answer}");
+        assert!(answer.contains("entry.possible_duplicate"), "{uri}: {answer}");
+    }
+}
+
+#[tokio::test]
+async fn a_line_is_previewed_without_anything_being_written() {
+    let Some(pool) = pool("test_ledger_preview").await else { return };
+    let books = books(&pool).await;
+    repository::record_rate(&pool, "USD", "PYG", day(2026, 10, 10), decimal("6000"), "bcp")
+        .await
+        .expect("recording a rate");
+
+    let (status, text) = call(
+        &pool,
+        books.owner,
+        "POST",
+        "/ledger/entries/quick/preview",
+        Some(r#"{"text":"45000 food @Casa-Rica #trip lunch","occurred_on":"2026-10-11"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let preview: serde_json::Value = serde_json::from_str(&text).expect("json");
+    assert_eq!(preview["flow"], "expense");
+    assert_eq!(preview["account"]["id"], books.account.to_string());
+    assert_eq!(preview["category"]["id"], books.food.to_string());
+    assert_eq!(decimal(preview["moves"].as_str().expect("a string")), decimal("-45000"));
+    assert_eq!(preview["description"], "lunch");
+    // A name used for the first time has no id yet: recording would create it.
+    assert_eq!(preview["counterparty"]["name"], "Casa-Rica");
+    assert!(preview["counterparty"].get("id").is_none(), "{preview}");
+    assert_eq!(preview["new_tags"], serde_json::json!(["trip"]));
+
+    // At a stated rate above the day's, a fee - which recording would file
+    // under a category of its own, created the first time.
+    let (status, text) = call(
+        &pool,
+        books.owner,
+        "POST",
+        "/ledger/entries/quick/preview",
+        Some(r#"{"text":"10 usd food @6100 streaming","occurred_on":"2026-10-11"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let preview: serde_json::Value = serde_json::from_str(&text).expect("json");
+    assert_eq!(decimal(preview["moves"].as_str().expect("a string")), decimal("-61000"));
+    assert_eq!(decimal(preview["conversion"]["fee"]["amount"].as_str().expect("a fee")), decimal("1000"));
+
+    // Nothing of either survived the asking.
+    for table in ["entries", "counterparties", "tags"] {
+        assert_eq!(count(&pool, table, books.owner).await, 0, "a preview wrote to {table}");
+    }
+    let categories = repository::categories(&pool, books.owner).await.expect("reading");
+    assert_eq!(categories.len(), 2, "a preview created the fee category: {categories:?}");
+
+    // And a line that cannot be recorded says why, as recording it would.
+    let (status, text) = call(&pool, books.owner, "POST", "/ledger/entries/quick/preview", Some(r#"{"text":"45000 yachts"}"#)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{text}");
+    assert!(text.contains("yachts"), "{text}");
+}
+
+/// The account line of an entry as the API answers it.
+fn account_of(entry: &serde_json::Value) -> serde_json::Value {
+    entry["lines"]
+        .as_array()
+        .expect("lines")
+        .iter()
+        .find(|line| line["side"] == "account")
+        .map(|line| line["account_id"].clone())
+        .expect("an account line")
+}
+
+#[tokio::test]
+async fn a_screen_with_an_account_chosen_records_a_line_that_names_none_against_it() {
+    let Some(pool) = pool("test_ledger_quick_account_id").await else { return };
+    let books = books(&pool).await;
+    let bank = repository::create_account(&pool, books.owner, AccountKind::Bank, "Bank", "PYG", Decimal::ZERO)
+        .await
+        .expect("creating");
+
+    let (status, recorded) = quick(&pool, books.owner, &format!(r#"{{"text":"45000 food","account_id":"{}"}}"#, bank.id)).await;
+    assert_eq!(status, StatusCode::CREATED, "{recorded}");
+    assert_eq!(account_of(&recorded["entry"]), bank.id.to_string());
+
+    // A line that says which is taken at its word.
+    let (status, recorded) = quick(
+        &pool,
+        books.owner,
+        &format!(r#"{{"text":"30000 food from wallet","account_id":"{}"}}"#, bank.id),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{recorded}");
+    assert_eq!(account_of(&recorded["entry"]), books.account.to_string());
+
+    // Someone else's account is no account at all.
+    let (status, body) = quick(&pool, books.owner, &format!(r#"{{"text":"1000 food","account_id":"{}"}}"#, Uuid::new_v4())).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+}
+
+/// Answers a call as JSON, or as the text it was when it was not.
+async fn call_json(pool: &PgPool, owner: Uuid, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    let (status, text) = call(pool, owner, method, uri, body).await;
+    (status, serde_json::from_str(&text).unwrap_or(serde_json::Value::String(text)))
+}
+
+/// Makes a template out of an entry as the person.
+async fn make_template(pool: &PgPool, owner: Uuid, entry: &serde_json::Value, name: &str, ask_amount: bool) -> (StatusCode, serde_json::Value) {
+    let body = serde_json::json!({ "entry_id": entry["id"], "name": name, "ask_amount": ask_amount }).to_string();
+    call_json(pool, owner, "POST", "/ledger/templates", Some(&body)).await
+}
+
+/// Presses a template's button as the person.
+async fn use_template(pool: &PgPool, owner: Uuid, template: &serde_json::Value, body: &str) -> (StatusCode, serde_json::Value) {
+    let uri = format!("/ledger/templates/{}/use", template["id"].as_str().expect("an id"));
+    call_json(pool, owner, "POST", &uri, Some(body)).await
+}
+
+#[tokio::test]
+async fn a_template_made_from_an_entry_records_it_again_with_one_press() {
+    let Some(pool) = pool("test_ledger_template").await else { return };
+    let books = books(&pool).await;
+    let (status, coffee) = quick(&pool, books.owner, r#"{"text":"15000 food coffee @cafe #work","occurred_on":"2026-10-10"}"#).await;
+    assert_eq!(status, StatusCode::CREATED, "{coffee}");
+
+    let (status, template) = make_template(&pool, books.owner, &coffee["entry"], "Coffee", false).await;
+    assert_eq!(status, StatusCode::CREATED, "{template}");
+    assert_eq!(template["name"], "Coffee");
+    assert_eq!(template["amount"], "15000");
+    assert_eq!(template["currency"], "PYG");
+    assert_eq!(template["flow"], "expense");
+    assert_eq!(template["description"], "coffee");
+    assert_eq!(template["counterparty"]["name"], "cafe");
+    assert_eq!(template["tags"], serde_json::json!(["work"]));
+    assert_eq!(template["pending"], false);
+
+    // Renamed since, the category is still the one the button means.
+    sqlx::query("UPDATE categories SET name = 'groceries' WHERE id = $1")
+        .bind(books.food)
+        .execute(&pool)
+        .await
+        .expect("renaming");
+
+    let (status, recorded) = use_template(&pool, books.owner, &template, r#"{"occurred_on":"2026-10-11"}"#).await;
+    assert_eq!(status, StatusCode::CREATED, "{recorded}");
+    let entry = &recorded["entry"];
+    assert_eq!(entry["occurred_on"], "2026-10-11");
+    assert_eq!(entry["description"], "coffee");
+    assert_eq!(entry["counterparty"]["name"], "cafe");
+    assert_eq!(entry["tags"], serde_json::json!(["work"]));
+    assert_eq!(amount_on(entry, "account"), decimal("-15000"));
+    assert_eq!(amount_on(entry, "category"), decimal("15000"));
+
+    // A second press is a second press, from a button as from a line.
+    let (status, again) = use_template(&pool, books.owner, &template, r#"{"occurred_on":"2026-10-11"}"#).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{again}");
+    let (status, again) = use_template(&pool, books.owner, &template, r#"{"occurred_on":"2026-10-11","allow_duplicate":true}"#).await;
+    assert_eq!(status, StatusCode::CREATED, "{again}");
+
+    // Another amount for this once, keeping the template's own.
+    let (status, bigger) = use_template(&pool, books.owner, &template, r#"{"amount":"18000","occurred_on":"2026-10-12"}"#).await;
+    assert_eq!(status, StatusCode::CREATED, "{bigger}");
+    assert_eq!(amount_on(&bigger["entry"], "account"), decimal("-18000"));
+    let (_, list) = call(&pool, books.owner, "GET", "/ledger/templates", None).await;
+    assert!(list.contains(r#""amount":"15000""#), "{list}");
+
+    // Another person's button is no button.
+    let (status, body) = use_template(&pool, Uuid::new_v4(), &template, "{}").await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+}
+
+#[tokio::test]
+async fn a_template_that_asks_for_the_amount_records_nothing_without_one() {
+    let Some(pool) = pool("test_ledger_template_ask").await else { return };
+    let books = books(&pool).await;
+    let (_, receipt) = quick(&pool, books.owner, r#"{"text":"231500 food @superseis","occurred_on":"2026-10-10"}"#).await;
+
+    let (status, template) = make_template(&pool, books.owner, &receipt["entry"], "Superseis", true).await;
+    assert_eq!(status, StatusCode::CREATED, "{template}");
+    assert!(template.get("amount").is_none(), "{template}");
+
+    let (status, body) = use_template(&pool, books.owner, &template, "{}").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(count(&pool, "entries", books.owner).await, 1);
+
+    let (status, recorded) = use_template(&pool, books.owner, &template, r#"{"amount":"52000"}"#).await;
+    assert_eq!(status, StatusCode::CREATED, "{recorded}");
+    assert_eq!(amount_on(&recorded["entry"], "account"), decimal("-52000"));
+    assert_eq!(recorded["entry"]["occurred_on"], today().to_string());
+
+    // An amount is kept from now on, and cleared again.
+    let uri = format!("/ledger/templates/{}", template["id"].as_str().expect("an id"));
+    let (status, changed) = call_json(&pool, books.owner, "PATCH", &uri, Some(r#"{"amount":"60000","name":"Super 6"}"#)).await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    assert_eq!((changed["amount"].as_str(), changed["name"].as_str()), (Some("60000"), Some("Super 6")));
+    let (status, changed) = call_json(&pool, books.owner, "PATCH", &uri, Some(r#"{"amount":null}"#)).await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    assert!(changed.get("amount").is_none(), "{changed}");
+    let (status, refused) = call(&pool, books.owner, "PATCH", &uri, Some(r#"{"amount":"-5"}"#)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+}
+
+#[tokio::test]
+async fn a_template_in_another_currency_is_converted_at_the_rate_of_the_day_it_is_used() {
+    let Some(pool) = pool("test_ledger_template_foreign").await else { return };
+    let books = books(&pool).await;
+    for (on, rate) in [(day(2026, 10, 1), "6000"), (day(2026, 10, 11), "6100")] {
+        repository::record_rate(&pool, "USD", "PYG", on, decimal(rate), "bcp").await.expect("recording a rate");
+    }
+    let (status, streaming) = quick(&pool, books.owner, r#"{"text":"10 usd food @6050 streaming","occurred_on":"2026-10-01"}"#).await;
+    assert_eq!(status, StatusCode::CREATED, "{streaming}");
+
+    let (status, template) = make_template(&pool, books.owner, &streaming["entry"], "Streaming", false).await;
+    assert_eq!(status, StatusCode::CREATED, "{template}");
+    assert_eq!((template["amount"].as_str(), template["currency"].as_str()), (Some("10"), Some("USD")));
+
+    let (status, recorded) = use_template(&pool, books.owner, &template, r#"{"occurred_on":"2026-10-11"}"#).await;
+    assert_eq!(status, StatusCode::CREATED, "{recorded}");
+    // Ten dollars on the category, and the wallet at the day's rate - not the
+    // rate stated ten days before.
+    let lines = recorded["entry"]["lines"].as_array().expect("lines");
+    assert!(
+        lines
+            .iter()
+            .any(|line| line["side"] == "category" && line["currency"] == "USD" && decimal(line["amount"].as_str().expect("an amount")) == decimal("10")),
+        "{lines:?}"
+    );
+    assert_eq!(amount_on(&recorded["entry"], "account"), decimal("-61000"));
+}
+
+#[tokio::test]
+async fn only_one_payment_makes_a_template_and_each_name_is_one_button() {
+    let Some(pool) = pool("test_ledger_template_shape").await else { return };
+    let books = books(&pool).await;
+    let fun = repository::create_category(&pool, books.owner, None, Flow::Expense, "fun").await.expect("creating");
+    let split = format!(
+        r#"{{"occurred_on":"2026-10-11","description":"market","lines":[
+            {{"account_id":"{}","amount":"-30000","currency":"PYG"}},
+            {{"category_id":"{}","amount":"20000","currency":"PYG"}},
+            {{"category_id":"{}","amount":"10000","currency":"PYG"}}]}}"#,
+        books.account, books.food, fun.id
+    );
+    let (status, split) = call_json(&pool, books.owner, "POST", "/ledger/entries", Some(&split)).await;
+    assert_eq!(status, StatusCode::CREATED, "{split}");
+    let (status, body) = make_template(&pool, books.owner, &split, "Market", false).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body["message"].as_str().is_some_and(|message| message.contains("split")), "{body}");
+
+    let (_, coffee) = quick(&pool, books.owner, r#"{"text":"15000 food coffee"}"#).await;
+    let (status, _) = make_template(&pool, books.owner, &coffee["entry"], "Coffee", false).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, body) = make_template(&pool, books.owner, &coffee["entry"], "coffee", false).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+
+    // Another person's entry is no entry to make one from.
+    let (status, body) = make_template(&pool, Uuid::new_v4(), &coffee["entry"], "Theirs", false).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+}
+
+#[tokio::test]
+async fn buttons_sit_in_the_order_given_and_deleting_one_keeps_its_entries() {
+    let Some(pool) = pool("test_ledger_template_order").await else { return };
+    let books = books(&pool).await;
+    let mut ids = Vec::new();
+    for (line, name) in [("15000 food coffee", "Coffee"), ("4000 food bus", "Bus"), ("9000 food bread", "Bread")] {
+        let (_, recorded) = quick(&pool, books.owner, &format!(r#"{{"text":"{line}"}}"#)).await;
+        let (status, template) = make_template(&pool, books.owner, &recorded["entry"], name, false).await;
+        assert_eq!(status, StatusCode::CREATED, "{template}");
+        ids.push(template["id"].as_str().expect("an id").to_owned());
+    }
+    let names = |list: &serde_json::Value| -> Vec<String> {
+        list.as_array()
+            .expect("a list")
+            .iter()
+            .map(|template| template["name"].as_str().expect("a name").to_owned())
+            .collect()
+    };
+    let (_, list) = call_json(&pool, books.owner, "GET", "/ledger/templates", None).await;
+    assert_eq!(names(&list), ["Coffee", "Bus", "Bread"]);
+
+    let reversed = serde_json::json!({ "ids": [ids[2], ids[1], ids[0]] }).to_string();
+    let (status, body) = call(&pool, books.owner, "PUT", "/ledger/templates/order", Some(&reversed)).await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    let (_, list) = call_json(&pool, books.owner, "GET", "/ledger/templates", None).await;
+    assert_eq!(names(&list), ["Bread", "Bus", "Coffee"]);
+
+    // An order that leaves one out has no place for it.
+    let partial = serde_json::json!({ "ids": [ids[0], ids[1]] }).to_string();
+    let (status, body) = call(&pool, books.owner, "PUT", "/ledger/templates/order", Some(&partial)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+
+    let (status, _) = call(&pool, books.owner, "DELETE", &format!("/ledger/templates/{}", ids[0]), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(count(&pool, "entries", books.owner).await, 3);
+    let (status, _) = call(&pool, Uuid::new_v4(), "DELETE", &format!("/ledger/templates/{}", ids[1]), None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "one person deleted another's template");
+}
+
+/// Records an entry again as the person.
+async fn repeat(pool: &PgPool, owner: Uuid, entry: &serde_json::Value, body: &str) -> (StatusCode, serde_json::Value) {
+    let uri = format!("/ledger/entries/{}/repeat", entry["id"].as_str().expect("an id"));
+    call_json(pool, owner, "POST", &uri, Some(body)).await
+}
+
+/// An entry's lines as what they move and say, in a fixed order.
+fn line_shape(entry: &serde_json::Value) -> Vec<(String, String, Decimal, String)> {
+    let mut lines: Vec<(String, String, Decimal, String)> = entry["lines"]
+        .as_array()
+        .expect("lines")
+        .iter()
+        .map(|line| {
+            (
+                line["side"].as_str().expect("a side").to_owned(),
+                line["category_id"].as_str().or_else(|| line["account_id"].as_str()).unwrap_or_default().to_owned(),
+                decimal(line["amount"].as_str().expect("an amount")),
+                line["note"].as_str().unwrap_or_default().to_owned(),
+            )
+        })
+        .collect();
+    lines.sort_by(|a, b| a.1.cmp(&b.1));
+    lines
+}
+
+#[tokio::test]
+async fn an_entry_recorded_again_says_what_it_said_on_another_day() {
+    let Some(pool) = pool("test_ledger_repeat").await else { return };
+    let books = books(&pool).await;
+    let fun = repository::create_category(&pool, books.owner, None, Flow::Expense, "fun").await.expect("creating");
+    let split = format!(
+        r#"{{"occurred_on":"2026-10-10","description":"market","tags":["home"],"place":{{"country":"PY","city":"Asunción"}},"lines":[
+            {{"account_id":"{}","amount":"-30000","currency":"PYG"}},
+            {{"category_id":"{}","amount":"20000","currency":"PYG","note":"bread"}},
+            {{"category_id":"{}","amount":"10000","currency":"PYG","note":"cards"}}]}}"#,
+        books.account, books.food, fun.id
+    );
+    let (status, yesterday) = call_json(&pool, books.owner, "POST", "/ledger/entries", Some(&split)).await;
+    assert_eq!(status, StatusCode::CREATED, "{yesterday}");
+
+    let (status, recorded) = repeat(&pool, books.owner, &yesterday, r#"{"occurred_on":"2026-10-11"}"#).await;
+    assert_eq!(status, StatusCode::CREATED, "{recorded}");
+    let again = &recorded["entry"];
+    assert_ne!(again["id"], yesterday["id"]);
+    assert_eq!(again["occurred_on"], "2026-10-11");
+    assert_eq!(again["status"], "cleared");
+    assert_eq!((&again["description"], &again["tags"]), (&yesterday["description"], &yesterday["tags"]));
+    assert_eq!(again["place"]["city"], "Asunción");
+    assert_eq!(line_shape(again), line_shape(&yesterday));
+
+    // Recording it again the same day a moment later is the second press the
+    // guard is for.
+    let (status, body) = repeat(&pool, books.owner, &yesterday, r#"{"occurred_on":"2026-10-11"}"#).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+
+    let (status, body) = repeat(&pool, Uuid::new_v4(), &yesterday, "{}").await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "one person repeated another's entry: {body}");
+}
+
+#[tokio::test]
+async fn a_held_payment_recorded_again_is_held_and_a_foreign_one_is_priced_anew() {
+    let Some(pool) = pool("test_ledger_repeat_kinds").await else { return };
+    let books = books(&pool).await;
+    repository::record_rate(&pool, "USD", "PYG", day(2026, 10, 1), decimal("6000"), "bcp").await.expect("rate");
+    repository::record_rate(&pool, "USD", "PYG", day(2026, 10, 11), decimal("6100"), "bcp").await.expect("rate");
+
+    let (_, fuel) = quick(&pool, books.owner, r#"{"text":"~120000 food fuel","occurred_on":"2026-10-01"}"#).await;
+    let (status, recorded) = repeat(&pool, books.owner, &fuel["entry"], r#"{"occurred_on":"2026-10-11"}"#).await;
+    assert_eq!(status, StatusCode::CREATED, "{recorded}");
+    assert_eq!(recorded["entry"]["status"], "pending", "{recorded}");
+
+    let (_, streaming) = quick(&pool, books.owner, r#"{"text":"10 usd food @6050 streaming","occurred_on":"2026-10-01"}"#).await;
+    let (status, recorded) = repeat(&pool, books.owner, &streaming["entry"], r#"{"occurred_on":"2026-10-11"}"#).await;
+    assert_eq!(status, StatusCode::CREATED, "{recorded}");
+    assert_eq!(amount_on(&recorded["entry"], "account"), decimal("-61000"), "{recorded}");
+    assert_eq!(recorded["entry"]["description"], "streaming");
+    assert!(recorded["conversion"]["reference"].is_object(), "{recorded}");
+
+    // An exchange is the deal of its day.
+    let dollars = repository::create_account(&pool, books.owner, AccountKind::Cash, "Dollars", "USD", Decimal::ZERO)
+        .await
+        .expect("creating");
+    let exchange = format!(
+        r#"{{"occurred_on":"2026-10-01","from_account":"{}","given":"60000","to_account":"{}","got":"10"}}"#,
+        books.account, dollars.id
+    );
+    let (_, exchanged) = call_json(&pool, books.owner, "POST", "/ledger/exchanges", Some(&exchange)).await;
+    let (status, body) = repeat(&pool, books.owner, &exchanged["entry"], "{}").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body["message"].as_str().is_some_and(|message| message.contains("exchange")), "{body}");
+}
+
+/// A schema as v0.10 left it, holding a person's entry.
+async fn books_from_before_templates(pool: &PgPool) -> Uuid {
+    austeris_common::migrate::undo(pool, &MIGRATOR, 20_261_002_100_001)
+        .await
+        .expect("rolling back to v0.10");
+    let books = books(pool).await;
+    repository::post_entry(pool, books.owner, &spend(&books, "45000", day(2026, 10, 1)))
+        .await
+        .expect("an entry");
+    books.owner
+}
+
+#[tokio::test]
+async fn an_installation_with_entries_migrates_to_templates() {
+    let Some(pool) = pool("test_ledger_migrate_templates").await else { return };
+    let owner = books_from_before_templates(&pool).await;
+
+    austeris_common::migrate::run(&pool, &MIGRATOR)
+        .await
+        .expect("migrating a schema that has entries");
+
+    // The entry can be made a template straight away.
+    let entries = repository::entries(&pool, owner, &repository::EntryFilter { limit: 1, ..Default::default() })
+        .await
+        .expect("reading entries");
+    let entry = serde_json::to_value(&entries[0]).expect("json");
+    let (status, template) = make_template(&pool, owner, &entry, "Lunch", false).await;
+    assert_eq!(status, StatusCode::CREATED, "{template}");
+
+    // And the schema will not roll back over it.
+    let error = austeris_common::migrate::undo(&pool, &MIGRATOR, 20_261_002_100_001)
+        .await
+        .expect_err("a schema with a template rolled back");
+    assert!(format!("{error:#}").contains("templates are recorded"), "{error:#}");
 }

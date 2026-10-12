@@ -436,6 +436,44 @@ pub struct Balance {
     pub rate_used: Option<RateInForce>,
 }
 
+/// A button that records the same payment again: from one account, on one
+/// category, usually for the same amount.
+///
+/// Kept by what it points at rather than as a typed line: a category or a
+/// counterparty renamed next month is still the one the button means, where a
+/// line saying `food` would stop working the day "food" became "groceries".
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct Template {
+    /// Stable identifier.
+    pub id: Uuid,
+    /// What the button says.
+    pub name: String,
+    /// The account the money leaves or arrives in.
+    pub account_id: Uuid,
+    /// What it is for.
+    pub category_id: Uuid,
+    /// Which way the money goes: the category's own.
+    pub flow: Flow,
+    /// How much, in `currency`. Absent when it is asked for each time - the
+    /// same shop, a different receipt.
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "converted")]
+    #[schema(value_type = Option<String>, example = "15000")]
+    pub amount: Option<Decimal>,
+    /// What the amount is in: the account's currency, or the one a payment
+    /// from it is charged in - converted at the day's rate when it is used.
+    pub currency: String,
+    /// What the entries it records are called.
+    pub description: String,
+    /// Who the money goes to or comes from.
+    pub counterparty: Option<CounterpartyRef>,
+    /// Where it happens.
+    pub place: Option<Place>,
+    /// The labels each entry carries, in alphabetical order.
+    pub tags: Vec<String>,
+    /// Each entry is held rather than posted: a fuel pump's pre-authorisation.
+    pub pending: bool,
+}
+
 /// `Option<Decimal>` as a string, or absent.
 ///
 /// `rust_decimal::serde::str` does not cover the `Option`, and the derive needs

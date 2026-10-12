@@ -4,10 +4,10 @@
 //! here (ADR 0001). Every handler is scoped by [`Caller`] - the person the
 //! gateway vouched for - and there is no path that reads across people.
 
-use austeris_common::{AppError, AppResult, Caller, health};
+use austeris_common::{AppError, AppResult, Caller, Code, health};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::routing::{get, patch, post};
+use axum::routing::{get, patch, post, put};
 use axum::{Json, Router};
 use chrono::{NaiveDate, Utc};
 use rust_decimal::Decimal;
@@ -18,13 +18,16 @@ use uuid::Uuid;
 use crate::exchange::{self, Money, Summary};
 use crate::model::{
     Account, AccountKind, Balance, Category, Counterparty, CounterpartyKind, CounterpartyRef, Entry, EntryStatus, ExchangeRate, Flow, Flowed, Group, GroupBy,
-    Line, LineSide, Place, Purpose, RateInForce, Tag,
+    Line, LineSide, Place, Purpose, RateInForce, Tag, Template,
 };
-use crate::repository::{CategoryMatch, CounterpartyChoice, EntryFilter, NewEntry, NewLine, NewPlace, Side};
-use crate::{MIGRATOR, balance, country, currency, parse, repository};
+use crate::repository::{CounterpartyChoice, EntryFilter, NewEntry, NewLine, NewPlace, PossibleDuplicate, Side};
+use crate::{MIGRATOR, balance, country, parse, repository};
 
 mod details;
 mod holds;
+mod payment;
+mod quick;
+mod templates;
 
 /// Builds the service's router.
 pub fn router(pool: PgPool) -> Router {
@@ -35,9 +38,18 @@ pub fn router(pool: PgPool) -> Router {
         .route("/ledger/accounts/{id}/close", post(close_account))
         .route("/ledger/categories", get(list_categories).post(create_category))
         .route("/ledger/entries", get(list_entries).post(create_entry))
-        .route("/ledger/entries/quick", post(quick_entry))
+        .route("/ledger/entries/quick", post(quick::quick_entry))
+        .route("/ledger/entries/quick/preview", post(quick::preview))
         .route("/ledger/entries/{id}", get(read_entry).patch(holds::change_entry).delete(delete_entry))
         .route("/ledger/entries/{id}/clear", post(holds::clear_entry))
+        .route("/ledger/entries/{id}/repeat", post(templates::repeat))
+        .route("/ledger/templates", get(templates::list_templates).post(templates::create_template))
+        .route("/ledger/templates/order", put(templates::order_templates))
+        .route(
+            "/ledger/templates/{id}",
+            patch(templates::change_template).delete(templates::delete_template),
+        )
+        .route("/ledger/templates/{id}/use", post(templates::use_template))
         .route("/ledger/exchanges", post(exchange))
         .route("/ledger/balances", get(balances))
         .route("/ledger/totals", get(details::totals))
@@ -259,6 +271,9 @@ pub struct NewEntryBody {
     /// The sides of the movement. At least two, summing to zero in every
     /// currency they touch.
     pub lines: Vec<NewEntryLine>,
+    /// Record it even when the same entry was recorded a moment ago.
+    #[serde(default)]
+    pub allow_duplicate: bool,
 }
 
 /// A place, as a client states it.
@@ -310,6 +325,7 @@ fn tag_names(names: &[String]) -> AppResult<Vec<String>> {
         (status = 201, description = "The entry, with its lines", body = Entry),
         (status = 400, description = "The entry does not balance, a line names neither an account nor a category, or a tag or a place is not one", body = austeris_common::error::ErrorBody),
         (status = 404, description = "A line or the counterparty is not yours", body = austeris_common::error::ErrorBody),
+        (status = 409, description = "The same entry was recorded a moment ago", body = austeris_common::error::ErrorBody),
     ),
 )]
 async fn create_entry(State(pool): State<PgPool>, caller: Caller, Json(new): Json<NewEntryBody>) -> AppResult<(StatusCode, Json<Entry>)> {
@@ -332,6 +348,7 @@ async fn create_entry(State(pool): State<PgPool>, caller: Caller, Json(new): Jso
             place,
             tags,
             lines,
+            allow_duplicate: new.allow_duplicate,
         },
     )
     .await
@@ -393,18 +410,6 @@ fn validate_lines(lines: Vec<NewEntryLine>) -> AppResult<Vec<NewLine>> {
     Ok(out)
 }
 
-/// What a one-line entry carries.
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
-pub struct QuickEntry {
-    /// The line, as a person would type it: `45000 food lunch`.
-    pub text: String,
-    /// The day the money moved. Today when omitted.
-    pub occurred_on: Option<NaiveDate>,
-    /// Where it happened. Beside the line rather than in it, like the day: it
-    /// is where the person is, not something they say about each purchase.
-    pub place: Option<PlaceBody>,
-}
-
 /// An entry as it was recorded, and what converting it did.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct Recorded {
@@ -422,350 +427,6 @@ pub struct Recorded {
     /// reason.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub new_tags: Vec<String>,
-}
-
-/// Records an entry from one typed line.
-///
-/// The same parser the CLI uses (`austeris add`), so a sentence means the same
-/// thing wherever it is typed. What the parser cannot know - which account,
-/// which category - is resolved here against this person's own.
-///
-/// An amount in a currency other than the account's is converted: at the rate
-/// the line states with `@`, or at the day's rate when it states none. The
-/// category keeps the amount as it was charged, the account gets it in its own
-/// currency, and `conversion` says which rate was used and how old it was.
-#[utoipa::path(
-    post,
-    path = "/api/v1/ledger/entries/quick",
-    tag = "ledger",
-    request_body = QuickEntry,
-    responses(
-        (status = 201, description = "The entry, with its lines, and the conversion when there was one", body = Recorded),
-        (status = 400, description = "The line could not be read, or it is in a currency no rate is known for", body = austeris_common::error::ErrorBody),
-        (status = 404, description = "It names a category or account you do not have", body = austeris_common::error::ErrorBody),
-        (status = 409, description = "The name means more than one category", body = austeris_common::error::ErrorBody),
-    ),
-)]
-async fn quick_entry(State(pool): State<PgPool>, caller: Caller, Json(quick): Json<QuickEntry>) -> AppResult<(StatusCode, Json<Recorded>)> {
-    let spoken = parse::line(&quick.text).map_err(AppError::bad_request)?;
-    let mut resolved = resolve(&pool, caller.id(), &spoken, quick.occurred_on.unwrap_or_else(today)).await?;
-    resolved.entry.place = quick.place.as_ref().map(PlaceBody::checked).transpose()?;
-    let posted = repository::post_entry(&pool, caller.id(), &resolved.entry).await.map_err(refused_or_missing)?;
-
-    // Read back as stored, so what is reported as new is the row itself.
-    let new_counterparty = match (&resolved.entry.counterparty, &posted.entry.counterparty) {
-        (Some(CounterpartyChoice::New { .. }), Some(stored)) => repository::counterparty(&pool, caller.id(), stored.id).await?,
-        _ => None,
-    };
-    Ok((
-        StatusCode::CREATED,
-        Json(Recorded {
-            entry: posted.entry,
-            conversion: resolved.conversion,
-            new_counterparty,
-            new_tags: resolved.new_tags,
-        }),
-    ))
-}
-
-/// A typed line, resolved against the person's own books.
-struct Resolved {
-    /// The entry to post.
-    entry: NewEntry,
-    /// What converting it did, when money changed currency.
-    conversion: Option<Summary>,
-    /// The tags it uses for the first time.
-    new_tags: Vec<String>,
-}
-
-/// The counterparty a typed line named, as the person's books know it.
-enum Named {
-    /// One they have.
-    Known(Counterparty),
-    /// A name they have never used, as it was typed.
-    Unknown(String),
-}
-
-/// Turns what a person said into an entry against their own accounts.
-///
-/// Its own function rather than part of the handler: the CLI resolves the same
-/// sentence through the API, and the phone screen will, so the rules for what
-/// `food` and `cash` mean live in one place. Two lines for a plain expense -
-/// the account and the category - and a conversion between them when the
-/// amount was in another currency.
-async fn resolve(pool: &PgPool, owner_id: Uuid, spoken: &parse::Spoken, occurred_on: NaiveDate) -> AppResult<Resolved> {
-    // `45000 pen office`: Peruvian soles on `office`, or 45 000 on `pen`? The
-    // person's own categories decide - a word they chose outranks a list of
-    // the world's currencies they may never use.
-    let is_their_category = match (&spoken.currency, &spoken.if_not_a_currency) {
-        (Some(code), Some(_)) => !matches!(repository::category_by_name(pool, owner_id, code).await?, CategoryMatch::None),
-        _ => false,
-    };
-    let spoken = match &spoken.if_not_a_currency {
-        Some(other) if is_their_category => other.as_ref(),
-        _ => spoken,
-    };
-
-    let counterparty = match &spoken.counterparty {
-        Some(typed) => Some(match repository::counterparty_by_name(pool, owner_id, typed).await? {
-            Some(found) => Named::Known(found),
-            None => Named::Unknown(typed.clone()),
-        }),
-        None => None,
-    };
-
-    let category = category_for(pool, owner_id, spoken, counterparty.as_ref()).await?;
-
-    let account = match &spoken.account {
-        Some(name) => repository::account_by_name(pool, owner_id, name)
-            .await?
-            .ok_or_else(|| AppError::not_found(anyhow::anyhow!("you have no account called `{name}`")))?,
-        None => default_account(pool, owner_id).await?,
-    };
-
-    // A line saying "spent" filed under an income category (or the reverse) is
-    // a person having typed the wrong word, and it would quietly make every
-    // income report wrong.
-    let expected = match spoken.flow {
-        parse::Flow::Expense => Flow::Expense,
-        parse::Flow::Income => Flow::Income,
-    };
-    if category.flow != expected {
-        return Err(AppError::bad_request(anyhow::anyhow!(
-            "`{}` is a category of {}; write `+{}` for money coming in",
-            category.name,
-            match category.flow {
-                Flow::Income => "money coming in",
-                Flow::Expense => "money going out",
-            },
-            spoken.amount
-        )));
-    }
-
-    // A rate only means something for an amount in another currency; stated
-    // on a plain line it would be silently ignored, and the person would think
-    // it had been applied.
-    let foreign = spoken.currency.as_deref().filter(|named| !named.eq_ignore_ascii_case(&account.currency));
-    if foreign.is_none() && spoken.rate.is_some() {
-        return Err(AppError::bad_request(anyhow::anyhow!(
-            "a rate converts an amount in another currency; this one is already in {}",
-            account.currency
-        )));
-    }
-
-    let (lines, conversion) = match foreign {
-        None => {
-            // The signs: money spent leaves the account and lands on the
-            // expense category, money earned arrives in the account from the
-            // income category.
-            let (on_account, on_category) = match spoken.flow {
-                parse::Flow::Expense => (-spoken.amount, spoken.amount),
-                parse::Flow::Income => (spoken.amount, -spoken.amount),
-            };
-            let lines = vec![
-                NewLine {
-                    side: Side::Account(account.id),
-                    amount: on_account,
-                    currency: account.currency.clone(),
-                    note: String::new(),
-                },
-                NewLine {
-                    side: Side::Category(category.id),
-                    amount: on_category,
-                    currency: account.currency.clone(),
-                    note: spoken.note.clone(),
-                },
-            ];
-            (lines, None)
-        }
-        Some(foreign) => {
-            let (lines, summary) = foreign_amount(pool, owner_id, spoken, &account, &category, foreign, occurred_on).await?;
-            (lines, Some(summary))
-        }
-    };
-
-    let new_tags = unknown_tags(pool, owner_id, &spoken.tags).await?;
-
-    Ok(Resolved {
-        entry: NewEntry {
-            occurred_on,
-            description: spoken.note.clone(),
-            idempotency_key: None,
-            source: None,
-            pending: spoken.pending,
-            // A counterparty named for the first time takes this line's
-            // category as its usual one, so the next line can leave it out.
-            counterparty: counterparty.map(|named| match named {
-                Named::Known(known) => CounterpartyChoice::Existing(known.id),
-                Named::Unknown(name) => CounterpartyChoice::New {
-                    name,
-                    usual_category: Some(category.id),
-                },
-            }),
-            place: None,
-            tags: spoken.tags.clone(),
-            lines,
-        },
-        conversion,
-        new_tags,
-    })
-}
-
-/// The tags of a typed line the person has never used.
-async fn unknown_tags(pool: &PgPool, owner_id: Uuid, typed: &[String]) -> AppResult<Vec<String>> {
-    if typed.is_empty() {
-        return Ok(Vec::new());
-    }
-    let known = repository::tags(pool, owner_id).await?;
-    Ok(typed
-        .iter()
-        .filter(|name| !known.iter().any(|tag| tag.name.to_lowercase() == name.to_lowercase()))
-        .cloned()
-        .collect())
-}
-
-/// The category a typed line is filed under: the one it names, or the usual
-/// one of the counterparty it names - "this shop is groceries".
-async fn category_for(pool: &PgPool, owner_id: Uuid, spoken: &parse::Spoken, counterparty: Option<&Named>) -> AppResult<Category> {
-    match (&spoken.category, counterparty) {
-        (Some(name), _) => category_named(pool, owner_id, name).await,
-        (None, Some(Named::Known(known))) => {
-            let usual = match known.default_category_id {
-                Some(id) => repository::categories(pool, owner_id).await?.into_iter().find(|category| category.id == id),
-                None => None,
-            };
-            usual.ok_or_else(|| {
-                AppError::bad_request(anyhow::anyhow!(
-                    "`{}` has no usual category; say what this was for, as in `{} food @{}`",
-                    known.name,
-                    spoken.amount,
-                    known.key
-                ))
-            })
-        }
-        (None, Some(Named::Unknown(typed))) => Err(AppError::not_found(anyhow::anyhow!(
-            "you have no counterparty called `{typed}`; say what this was for, as in `{} food @{typed}`, and it is created with that as its usual category",
-            spoken.amount
-        ))),
-        // The parser refuses a line that names neither.
-        (None, None) => Err(AppError::bad_request(anyhow::anyhow!("the line says nothing it was for"))),
-    }
-}
-
-/// The one category a typed name means.
-async fn category_named(pool: &PgPool, owner_id: Uuid, name: &str) -> AppResult<Category> {
-    match repository::category_by_name(pool, owner_id, name).await? {
-        CategoryMatch::One(category) => Ok(*category),
-        CategoryMatch::None => Err(AppError::not_found(anyhow::anyhow!("you have no category called `{name}`; create it first"))),
-        // Resolved by asking, not by guessing: filing money under the wrong
-        // one of two categories with the same name is a mistake nobody sees
-        // until a report is wrong.
-        CategoryMatch::Several(names) => Err(AppError::new(
-            StatusCode::CONFLICT,
-            anyhow::anyhow!("`{name}` means more than one category ({}); say which, as in `living/{name}`", names.join(", ")),
-        )),
-    }
-}
-
-/// The lines of an amount charged or paid in a currency the account is not in.
-///
-/// The category keeps the amount as it was charged - a 10 USD subscription is
-/// 10 USD in every report kept in dollars - and the account gets what it
-/// actually moved by, in its own currency, rounded to the places that currency
-/// has. The conversion between them is where each currency balances.
-async fn foreign_amount(
-    pool: &PgPool,
-    owner_id: Uuid,
-    spoken: &parse::Spoken,
-    account: &Account,
-    category: &Category,
-    foreign: &str,
-    occurred_on: NaiveDate,
-) -> AppResult<(Vec<NewLine>, Summary)> {
-    // How many of the account's currency one unit of the foreign one cost: as
-    // the line said, or the day's rate.
-    let rate = match spoken.rate {
-        Some(stated) => stated,
-        None => {
-            repository::rate_in_force(pool, foreign, &account.currency, occurred_on)
-                .await?
-                .ok_or_else(|| {
-                    AppError::bad_request(anyhow::anyhow!(
-                        "no {foreign}->{} rate is known on or before {occurred_on}; state the one you were charged, as in `@5965`",
-                        account.currency
-                    ))
-                })?
-                .rate
-        }
-    };
-    let in_account = currency::round(spoken.amount * rate, &account.currency);
-    if in_account.is_zero() {
-        return Err(AppError::bad_request(anyhow::anyhow!(
-            "{} {foreign} is worth nothing in {}",
-            spoken.amount,
-            account.currency
-        )));
-    }
-
-    // Spending gives the account's currency for the foreign one; earning gives
-    // the foreign one for the account's.
-    let (given, got, from, to) = match spoken.flow {
-        parse::Flow::Expense => (
-            Money {
-                amount: in_account,
-                currency: account.currency.clone(),
-            },
-            Money {
-                amount: spoken.amount,
-                currency: foreign.to_owned(),
-            },
-            Side::Account(account.id),
-            Side::Category(category.id),
-        ),
-        parse::Flow::Income => (
-            Money {
-                amount: spoken.amount,
-                currency: foreign.to_owned(),
-            },
-            Money {
-                amount: in_account,
-                currency: account.currency.clone(),
-            },
-            Side::Category(category.id),
-            Side::Account(account.id),
-        ),
-    };
-
-    let (mut lines, summary) = convert(pool, owner_id, given, got, from, to, occurred_on).await?;
-    for line in &mut lines {
-        if line.side == Side::Category(category.id) {
-            line.note.clone_from(&spoken.note);
-        }
-    }
-    Ok((lines, summary))
-}
-
-/// Plans a conversion against the day's rate and builds its lines, creating
-/// the fee category the first time a fee needs one.
-async fn convert(pool: &PgPool, owner_id: Uuid, given: Money, got: Money, from: Side, to: Side, occurred_on: NaiveDate) -> AppResult<(Vec<NewLine>, Summary)> {
-    // The reference prices what was got in what was given: how many of the
-    // given currency the received amount was worth that day.
-    let reference = repository::rate_in_force(pool, &got.currency, &given.currency, occurred_on).await?;
-    let plan = exchange::plan(given, got, reference).map_err(AppError::bad_request)?;
-
-    let fee_category = if plan.has_fee() {
-        Some(
-            repository::purpose_category(pool, owner_id, Purpose::ExchangeFees)
-                .await
-                .map_err(AppError::bad_request)?
-                .id,
-        )
-    } else {
-        None
-    };
-
-    let lines = plan.lines(from, to, fee_category).map_err(AppError::internal)?;
-    Ok((lines, plan.summary))
 }
 
 /// What exchanging money between two accounts carries.
@@ -795,6 +456,9 @@ pub struct ExchangeBody {
     /// Labels, by name.
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Record it even when the same exchange was recorded a moment ago.
+    #[serde(default)]
+    pub allow_duplicate: bool,
 }
 
 /// Records money changed from one currency into another.
@@ -814,6 +478,7 @@ pub struct ExchangeBody {
         (status = 201, description = "The entry, and what the exchange cost beyond the day's rate", body = Recorded),
         (status = 400, description = "The amounts are not positive, or both accounts are in one currency", body = austeris_common::error::ErrorBody),
         (status = 404, description = "An account is not yours", body = austeris_common::error::ErrorBody),
+        (status = 409, description = "The same exchange was recorded a moment ago", body = austeris_common::error::ErrorBody),
     ),
 )]
 async fn exchange(State(pool): State<PgPool>, caller: Caller, Json(body): Json<ExchangeBody>) -> AppResult<(StatusCode, Json<Recorded>)> {
@@ -828,9 +493,8 @@ async fn exchange(State(pool): State<PgPool>, caller: Caller, Json(body): Json<E
     let occurred_on = body.occurred_on.unwrap_or_else(today);
     let place = body.place.as_ref().map(PlaceBody::checked).transpose()?;
     let tags = tag_names(&body.tags)?;
-    let (lines, summary) = convert(
+    let plan = payment::plan(
         &pool,
-        owner_id,
         Money {
             amount: body.given,
             currency: from.currency.clone(),
@@ -839,11 +503,11 @@ async fn exchange(State(pool): State<PgPool>, caller: Caller, Json(body): Json<E
             amount: body.got,
             currency: to.currency.clone(),
         },
-        Side::Account(from.id),
-        Side::Account(to.id),
         occurred_on,
     )
     .await?;
+    let lines = payment::conversion_lines(&pool, owner_id, &plan, Side::Account(from.id), Side::Account(to.id)).await?;
+    let summary = plan.summary;
 
     let description = match body.description.trim() {
         "" => format!("{} -> {}", from.name, to.name),
@@ -859,6 +523,7 @@ async fn exchange(State(pool): State<PgPool>, caller: Caller, Json(body): Json<E
             place,
             tags,
             lines,
+            allow_duplicate: body.allow_duplicate,
             ..NewEntry::default()
         },
     )
@@ -874,31 +539,6 @@ async fn exchange(State(pool): State<PgPool>, caller: Caller, Json(body): Json<E
             new_tags: Vec::new(),
         }),
     ))
-}
-
-/// The account a line that names none is against.
-///
-/// The person's only open account. Deliberately not "the first one": with two
-/// open accounts there is no default anyone agreed on, and picking one would
-/// post money to the wrong place every time the person forgot to say.
-async fn default_account(pool: &PgPool, owner_id: Uuid) -> AppResult<Account> {
-    let open: Vec<Account> = repository::accounts(pool, owner_id)
-        .await?
-        .into_iter()
-        .filter(|account| account.closed_at.is_none())
-        .collect();
-
-    match <[Account; 1]>::try_from(open) {
-        Ok([only]) => Ok(only),
-        Err(rest) if rest.is_empty() => Err(AppError::not_found(anyhow::anyhow!(
-            "you have no open account to record this against; create one first"
-        ))),
-        Err(rest) => Err(AppError::bad_request(anyhow::anyhow!(
-            "say which account, as in `from {}` - you have {}",
-            rest[0].name,
-            rest.iter().map(|account| account.name.as_str()).collect::<Vec<_>>().join(", ")
-        ))),
-    }
 }
 
 /// Which entries to list.
@@ -1231,6 +871,12 @@ fn is_unique_violation(error: &anyhow::Error) -> bool {
 /// arithmetic. A rule is recognised by its SQLSTATE rather than its wording, so
 /// a rule added later is a 400 without anyone remembering to list it here.
 fn refused_or_missing(error: anyhow::Error) -> AppError {
+    if let Some(twin) = error.downcast_ref::<PossibleDuplicate>() {
+        return AppError::new(StatusCode::CONFLICT, anyhow::anyhow!("{twin}")).with_code(
+            Code::PossibleDuplicate,
+            serde_json::json!({ "entry_id": twin.entry_id, "seconds": twin.seconds }),
+        );
+    }
     let refused = error
         .chain()
         .filter_map(|cause| cause.downcast_ref::<sqlx::Error>())
@@ -1298,10 +944,18 @@ const RESTRICT_VIOLATION: &str = "23001";
         list_entries,
         read_entry,
         create_entry,
-        quick_entry,
+        quick::quick_entry,
+        quick::preview,
         delete_entry,
         holds::change_entry,
         holds::clear_entry,
+        templates::repeat,
+        templates::list_templates,
+        templates::create_template,
+        templates::change_template,
+        templates::order_templates,
+        templates::delete_template,
+        templates::use_template,
         exchange,
         balances,
         details::totals,
@@ -1351,7 +1005,15 @@ const RESTRICT_VIOLATION: &str = "23001";
         NewEntryBody,
         NewEntryLine,
         PlaceBody,
-        QuickEntry,
+        quick::QuickEntry,
+        quick::Preview,
+        quick::Named,
+        Template,
+        templates::NewTemplate,
+        templates::TemplatePatch,
+        templates::TemplateOrder,
+        templates::UseTemplate,
+        templates::Repeat,
         NewRate,
         holds::EntryPatch,
         holds::ClearBody,

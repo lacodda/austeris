@@ -13,9 +13,11 @@ use crate::model::{
 };
 
 mod details;
+mod templates;
 mod totals;
 
 pub use details::*;
+pub use templates::*;
 pub use totals::*;
 
 /// What an entry's header is read with: its own columns, who and where it was,
@@ -201,6 +203,23 @@ pub async fn category_by_name(pool: &PgPool, owner_id: Uuid, name: &str) -> Resu
     })
 }
 
+/// The category the ledger keeps for a purpose, when the person has it yet.
+///
+/// Read only: [`purpose_category`] creates it on first use, which is for a
+/// writer that is about to file something under it.
+///
+/// # Errors
+///
+/// Returns an error when the query fails.
+pub async fn category_for(pool: &PgPool, owner_id: Uuid, purpose: Purpose) -> Result<Option<Category>> {
+    sqlx::query_as("SELECT id, parent_id, flow, name, purpose FROM categories WHERE owner_id = $1 AND purpose = $2")
+        .bind(owner_id)
+        .bind(purpose)
+        .fetch_optional(pool)
+        .await
+        .context("finding the ledger's own category")
+}
+
 /// What looking a category up by name found.
 #[derive(Debug)]
 pub enum CategoryMatch {
@@ -380,6 +399,32 @@ pub struct NewEntry {
     pub tags: Vec<String>,
     /// The sides of the movement.
     pub lines: Vec<NewLine>,
+    /// Record it even when the same entry was recorded a moment ago: the
+    /// person was asked and said this is a second one. Ignored for an entry
+    /// with an idempotency key, which a retry finds by its key instead.
+    pub allow_duplicate: bool,
+}
+
+/// How long after an entry the same one is taken for a second press rather
+/// than a second purchase.
+///
+/// A minute: a double tap, a retried request and an impatient second press
+/// all land within seconds, while two of the same coffee a minute apart are
+/// rare enough that asking costs less than a doubled expense nobody notices.
+pub const DUPLICATE_WINDOW_SECONDS: i64 = 60;
+
+/// Refused: the same entry was recorded a moment ago.
+///
+/// "The same" is the same day, description, counterparty and lines - every
+/// account and category moved by the same amounts. A second press of a button
+/// sends exactly that; a second purchase almost never does.
+#[derive(Debug, thiserror::Error)]
+#[error("the same entry was recorded {seconds} seconds ago; if this is a second one, send it again with `allow_duplicate`")]
+pub struct PossibleDuplicate {
+    /// The entry recorded a moment ago.
+    pub entry_id: Uuid,
+    /// How long ago.
+    pub seconds: i64,
 }
 
 /// The counterparty an entry names.
@@ -434,6 +479,20 @@ pub async fn post_entry(pool: &PgPool, owner_id: Uuid, new: &NewEntry) -> Result
 
     let mut transaction = pool.begin().await.context("opening a transaction")?;
 
+    // An entry a person records is checked against what they recorded a
+    // moment ago, and the check has to see every entry committed before it:
+    // two presses arrive as two requests at once, and both would find nothing
+    // if they looked side by side. So a person's own typed entries take turns
+    // - a lock per person, held until this transaction ends.
+    let guarded = new.idempotency_key.is_none() && !new.allow_duplicate;
+    if guarded {
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtext('ledger.typed_entries'), hashtext($1::text))")
+            .bind(owner_id)
+            .execute(&mut *transaction)
+            .await
+            .context("waiting for this person's other entries")?;
+    }
+
     // Every account and category named has to be this person's. Checked here
     // rather than trusted from the caller: the gateway says who is calling, and
     // a module posting with a stale id must not reach into someone else's books.
@@ -445,6 +504,9 @@ pub async fn post_entry(pool: &PgPool, owner_id: Uuid, new: &NewEntry) -> Result
         Some(choice) => Some(details::choose_counterparty(&mut transaction, owner_id, choice).await?),
         None => None,
     };
+    if guarded && let Some(twin) = recent_twin(&mut transaction, owner_id, new, counterparty_id).await? {
+        return Err(twin.into());
+    }
     let place_id = match &new.place {
         Some(place) => Some(details::find_or_create_place(&mut transaction, owner_id, place).await?),
         None => None,
@@ -481,6 +543,76 @@ pub async fn post_entry(pool: &PgPool, owner_id: Uuid, new: &NewEntry) -> Result
 
     let entry = entry(pool, owner_id, entry_id).await?.context("the entry vanished after being written")?;
     Ok(Posted { entry, created: true })
+}
+
+/// The entry recorded within the last minute that is the same as this one, if
+/// there is one.
+async fn recent_twin(transaction: &mut Transaction<'_, Postgres>, owner_id: Uuid, new: &NewEntry, counterparty_id: Option<Uuid>) -> Result<Option<PossibleDuplicate>> {
+    let candidates: Vec<(Uuid, i64)> = sqlx::query_as(
+        "SELECT id, floor(extract(epoch FROM now() - created_at))::bigint
+           FROM entries
+          WHERE owner_id = $1 AND occurred_on = $2 AND description = $3
+            AND counterparty_id IS NOT DISTINCT FROM $4
+            AND idempotency_key IS NULL
+            AND created_at > now() - make_interval(secs => $5)
+          ORDER BY created_at DESC",
+    )
+    .bind(owner_id)
+    .bind(new.occurred_on)
+    .bind(&new.description)
+    .bind(counterparty_id)
+    .bind(DUPLICATE_WINDOW_SECONDS)
+    .fetch_all(&mut **transaction)
+    .await
+    .context("looking for the same entry a moment ago")?;
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+
+    let wanted = movement(new.lines.iter().map(|line| (line.side, line.amount, line.currency.clone())));
+    let ids: Vec<Uuid> = candidates.iter().map(|(id, _)| *id).collect();
+    let rows: Vec<LineRow> = sqlx::query_as(
+        "SELECT entry_id, id, side, account_id, category_id, amount, currency, note FROM entry_lines WHERE entry_id = ANY($1)",
+    )
+    .bind(&ids)
+    .fetch_all(&mut **transaction)
+    .await
+    .context("reading the lines of the entries a moment ago")?;
+
+    for (id, seconds) in candidates {
+        let theirs = movement(rows.iter().filter(|row| row.0 == id).filter_map(|row| {
+            let side = match (row.2, row.3, row.4) {
+                (LineSide::Account, Some(account), _) => Side::Account(account),
+                (LineSide::Category, _, Some(category)) => Side::Category(category),
+                (LineSide::Conversion, ..) => Side::Conversion,
+                _ => return None,
+            };
+            Some((side, row.5, row.6.clone()))
+        }));
+        if theirs == wanted {
+            return Ok(Some(PossibleDuplicate { entry_id: id, seconds }));
+        }
+    }
+    Ok(None)
+}
+
+/// An entry's lines as what they move, in an order that does not depend on
+/// how they were written: two entries moving the same money the same way
+/// compare equal whatever order their lines came in, and `45000` equals
+/// `45000.000000000000000000`.
+fn movement(lines: impl Iterator<Item = (Side, Decimal, String)>) -> Vec<(u8, Option<Uuid>, String, Decimal)> {
+    let mut out: Vec<_> = lines
+        .map(|(side, amount, currency)| {
+            let (rank, id) = match side {
+                Side::Account(id) => (0, Some(id)),
+                Side::Category(id) => (1, Some(id)),
+                Side::Conversion => (2, None),
+            };
+            (rank, id, currency, amount.normalize())
+        })
+        .collect();
+    out.sort();
+    out
 }
 
 /// Writes the lines of an entry.

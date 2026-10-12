@@ -19,6 +19,7 @@ pub mod currency;
 pub mod exchange;
 pub mod grpc;
 pub mod model;
+pub mod paid;
 pub mod parse;
 pub mod repository;
 pub mod routes;
