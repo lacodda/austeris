@@ -16,6 +16,7 @@
 //! every rule about whose account is whose.
 
 use anyhow::{Context, Result, bail};
+use austeris_common::Code;
 use std::path::PathBuf;
 
 /// Arguments to `austeris add`.
@@ -40,6 +41,11 @@ pub struct AddArgs {
     /// The city it happened in; needs `--country`.
     #[arg(long, value_name = "NAME", requires = "country")]
     pub city: Option<String>,
+
+    /// Record it even though the same entry was recorded a moment ago: this
+    /// is a second one, not the first typed twice.
+    #[arg(long)]
+    pub again: bool,
 }
 
 /// Arguments to `austeris clear`.
@@ -82,6 +88,10 @@ pub struct ExchangeArgs {
     /// What to call it: the exchange office, the bank.
     #[arg(long)]
     pub note: Option<String>,
+
+    /// Record it even though the same exchange was recorded a moment ago.
+    #[arg(long)]
+    pub again: bool,
 }
 
 /// Arguments to `austeris login`.
@@ -147,7 +157,7 @@ pub async fn add(args: &AddArgs) -> Result<()> {
     let session = read_session()?;
     let text = args.words.join(" ");
 
-    let mut body = serde_json::json!({ "text": text });
+    let mut body = serde_json::json!({ "text": text, "allow_duplicate": args.again });
     if let Some(on) = &args.on {
         body["occurred_on"] = serde_json::Value::String(on.clone());
     }
@@ -321,6 +331,7 @@ pub async fn exchange(args: &ExchangeArgs) -> Result<()> {
         "to_account": to.id,
         "got": got.to_string(),
         "description": args.note.clone().unwrap_or_default(),
+        "allow_duplicate": args.again,
     });
     if let Some(on) = &args.on {
         body["occurred_on"] = serde_json::Value::String(on.clone());
@@ -575,10 +586,24 @@ async fn message_from(response: reqwest::Response) -> String {
 
     // The shared error body carries a message meant for a person; anything else
     // is shown as it came, rather than swallowed.
-    serde_json::from_str::<serde_json::Value>(&body)
-        .ok()
-        .and_then(|json| json.get("message").and_then(|m| m.as_str().map(ToOwned::to_owned)))
-        .unwrap_or_else(|| format!("austeris answered {status}: {body}"))
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&body) else {
+        return format!("austeris answered {status}: {body}");
+    };
+    said_in_a_terminal(&json).unwrap_or_else(|| format!("austeris answered {status}: {body}"))
+}
+
+/// The error body's sentence, as a terminal says it.
+///
+/// The server's message names the API's field; here the answer is a flag, so
+/// an error that carries a code this command knows is said in its own words.
+fn said_in_a_terminal(json: &serde_json::Value) -> Option<String> {
+    if json["code"].as_str() == Some(Code::PossibleDuplicate.as_str()) {
+        let seconds = json["params"]["seconds"].as_i64().unwrap_or_default();
+        return Some(format!(
+            "the same entry was recorded {seconds} seconds ago - typed twice? If this is a second one, run it again with --again"
+        ));
+    }
+    json.get("message").and_then(|message| message.as_str().map(ToOwned::to_owned))
 }
 
 /// Where this installation is.
@@ -767,6 +792,23 @@ mod tests {
         assert!(held_by_prefix(&list, "3f2").is_err());
         assert!(held_by_prefix(&list, "9").is_err());
         assert!(held_by_prefix(&list, " ").is_err());
+    }
+
+    #[test]
+    fn a_second_press_is_answered_with_the_flag_that_records_it_anyway() {
+        let refused = serde_json::json!({
+            "status": 409,
+            "message": "send it again with `allow_duplicate`",
+            "code": "entry.possible_duplicate",
+            "params": { "entry_id": "3f2a", "seconds": 4 }
+        });
+        let said = super::said_in_a_terminal(&refused).expect("a sentence");
+        assert!(said.contains("4 seconds ago") && said.contains("--again"), "{said}");
+        assert!(!said.contains("allow_duplicate"), "the API's field reached a terminal: {said}");
+
+        // Any other error is the server's own sentence.
+        let other = serde_json::json!({ "message": "you have no category called `yachts`" });
+        assert_eq!(super::said_in_a_terminal(&other).as_deref(), Some("you have no category called `yachts`"));
     }
 
     #[test]

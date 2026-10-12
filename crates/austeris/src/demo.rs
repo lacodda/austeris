@@ -164,6 +164,7 @@ pub async fn seed(books: &Books) -> Result<Seeded> {
         }
     }
     post_what_the_bank_has_taken(&books.ledger, owner, today).await?;
+    buttons(&books.ledger, owner, &household.shops).await?;
 
     prices(&books.market, first, today).await?;
     Ok(Seeded { created, entries })
@@ -189,6 +190,45 @@ async fn post_what_the_bank_has_taken(pool: &PgPool, owner: Uuid, today: NaiveDa
         let posted_on = entry.occurred_on + Days::new(HELD_DAYS);
         if posted_on <= today {
             ledger::clear_entry(pool, owner, entry.id, posted_on, None).await?;
+        }
+    }
+    Ok(())
+}
+
+/// The household's buttons: what it pays most often, each made from its
+/// latest payment that was posted the day it was made.
+///
+/// Made when it has none, so the screen they sit on is not empty on a fresh
+/// stand - and only then: a person trying the demo who deletes or reorders
+/// them is not overruled by the next run.
+async fn buttons(pool: &PgPool, owner: Uuid, shops: &Shops) -> Result<()> {
+    if !ledger::templates(pool, owner).await?.is_empty() {
+        return Ok(());
+    }
+    // The amount is kept where the price is the price, and asked for where
+    // every receipt is another.
+    let wanted = [
+        (shops.grocer, "Groceries", true),
+        (shops.bistro, "Dinner out", true),
+        (shops.transit, "Metro", false),
+        (shops.landlord, "Rent", false),
+    ];
+    for (shop, name, ask_amount) in wanted {
+        let recent = ledger::entries(
+            pool,
+            owner,
+            &EntryFilter {
+                counterparty_id: Some(shop),
+                status: Some(EntryStatus::Cleared),
+                limit: 30,
+                ..EntryFilter::default()
+            },
+        )
+        .await?;
+        if let Some(entry) = recent.iter().find(|entry| entry.cleared_on == Some(entry.occurred_on)) {
+            ledger::template_from_entry(pool, owner, entry.id, name, ask_amount)
+                .await
+                .with_context(|| format!("making the demo's `{name}` button"))?;
         }
     }
     Ok(())
@@ -645,6 +685,16 @@ mod tests {
         assert!(counterparties.iter().all(|counterparty| counterparty.default_category_id.is_some()));
         let tags = austeris_ledger::repository::tags(&books.ledger, owner).await.expect("listing");
         assert!(!tags.is_empty() && tags.iter().all(|tag| tag.name.starts_with("trip-")), "{tags:?}");
+
+        // Its buttons, made once: a second run does not add a second set.
+        let templates = austeris_ledger::repository::templates(&books.ledger, owner).await.expect("listing");
+        let names: Vec<&str> = templates.iter().map(|template| template.name.as_str()).collect();
+        assert_eq!(names, ["Groceries", "Dinner out", "Metro", "Rent"]);
+        assert!(templates.iter().all(|template| !template.pending), "a demo button records held payments");
+        assert_eq!(
+            templates.iter().map(|template| template.amount.is_some()).collect::<Vec<_>>(),
+            [false, false, true, true]
+        );
         let held = austeris_ledger::repository::entries(
             &books.ledger,
             owner,
