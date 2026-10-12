@@ -15,6 +15,20 @@ reported rather than trimmed.
 Why an entry has sides, and what that buys, is in
 [Why an entry has sides](/austeris/concepts/double-entry/).
 
+A refusal is `{ "status", "error", "message" }`, the message written for a
+person. One a client is meant to act on also carries a `code` and the `params`
+the message was written from, so a screen can say it in its own language:
+
+```json
+{ "status": 404, "error": "Not Found",
+  "message": "you have no category called `yachts`; create it first",
+  "code": "line.unknown_category", "params": { "name": "yachts" } }
+```
+
+The codes so far are a [second press](#a-second-press) and everything a
+[typed line](#post-apiv1ledgerentriesquick) can be refused for (`line.*`).
+Fall back to `message` for a code you do not know.
+
 ## Accounts
 
 Where money sits. An account is in **one** currency; a second currency means a
@@ -124,6 +138,28 @@ Every entry comes back with all of it: `status` (`pending` or `cleared`),
 `cleared_on` (the day the bank posted it; absent while held), `counterparty`
 (`id` and `name`), `place`, and `tags` in alphabetical order.
 
+### A second press
+
+An entry you record is refused with `409` when the same one was recorded in the
+last minute: the same day, description and counterparty, and the same lines -
+every account and category moved by the same amounts. A button pressed twice, a
+request retried, a press again because nothing seemed to happen all send exactly
+that; a second purchase almost never does.
+
+```json
+{ "status": 409, "error": "Conflict",
+  "message": "the same entry was recorded 4 seconds ago; if this is a second one, send it again with `allow_duplicate`",
+  "code": "entry.possible_duplicate", "params": { "entry_id": "…", "seconds": 4 } }
+```
+
+Send it again with `"allow_duplicate": true` when it is a second one. Every way
+of recording takes it - an entry, a [typed line](#post-apiv1ledgerentriesquick),
+an [exchange](#exchanges), a [template](#templates), an entry
+[recorded again](#post-apiv1ledgerentriesidrepeat). Two presses that arrive at
+once are one entry and one refusal: a person's entries take turns being checked.
+A module's entries carry idempotency keys, and a retry of one is answered from
+its key instead.
+
 ### `POST /api/v1/ledger/entries/quick`
 
 One typed line, which is the fastest way there is to record an expense:
@@ -182,16 +218,25 @@ are, not something you say about each purchase:
 { "text": "45000 food lunch", "place": { "country": "BR", "city": "São Paulo" } }
 ```
 
+So does the account, for a screen where it is already chosen: `account_id` is
+the account a line that names none is recorded against. A line that says
+`from cash` is still taken at its word.
+
+```json
+{ "text": "45000 food lunch", "occurred_on": "2026-10-11", "account_id": "…" }
+```
+
 What the parser cannot know is resolved against your own books, and refused
 rather than guessed:
 
 - a category you do not have → `404`, naming it;
 - a name meaning two categories → `409`, listing them;
-- two open accounts and no `from` → `400`, listing them;
+- two open accounts and no `from` (and no `account_id`) → `400`, listing them;
 - `45000 salary`, an expense filed under an income category → `400`.
 
-The same parser serves `austeris add` and, later, the phone screen: a sentence
-means the same thing wherever it is typed.
+Each refusal carries a `line.*` code. The same parser serves `austeris add` and
+the [web interface](/austeris/reference/web/): a sentence means the same thing
+wherever it is typed.
 
 An amount in a currency other than the account's is **converted**. The category
 keeps the amount as it was charged — a 10 USD subscription is 10 USD in any
@@ -219,6 +264,35 @@ did:
 }
 ```
 
+### `POST /api/v1/ledger/entries/quick/preview`
+
+What a line would record, worked out exactly as recording it would be and
+written nowhere - not the entry, not a counterparty or a tag the line names for
+the first time, not the category a fee would go under. A screen asks it while the
+line is typed, so what the line means is seen before anything is pressed. Takes
+the same body as recording it:
+
+```json
+{
+  "occurred_on": "2026-10-11",
+  "flow": "expense",
+  "account": { "id": "…", "name": "Cash", "currency": "PYG", "…": "…" },
+  "category": { "id": "…", "name": "food", "flow": "expense" },
+  "amount": { "amount": "45000", "currency": "PYG" },
+  "moves": "-45000",
+  "description": "lunch",
+  "counterparty": { "name": "Casa-Rica" },
+  "tags": ["trip"],
+  "new_tags": ["trip"],
+  "pending": false
+}
+```
+
+`moves` is what the account would move by, signed, in its own currency;
+`amount` is what the line said. A counterparty without an `id` is a name
+recording would create. A line that would be refused is refused here, with the
+same status and code.
+
 ### `GET /api/v1/ledger/entries`
 
 Newest first. Takes `?from=`, `?to=`, `?account=`, `?category=`, `?tag=` (a
@@ -242,6 +316,95 @@ posted the day it happened moves its posting day with it.
 
 A whole entry with its lines, never one line: half an entry is money from
 nowhere.
+
+### `POST /api/v1/ledger/entries/{id}/repeat`
+
+Records an entry again - yesterday's bus fare, today:
+
+```json
+{ "occurred_on": "2026-10-12" }
+```
+
+The copy says what the entry says - its lines, description, counterparty, place
+and tags - on the day given, today when it is left out. It is held when the
+entry went through a hold: a payment that was held once is the kind that is.
+
+A payment charged in another currency keeps what it cost there and is converted
+again at the day's rate: the rate is a fact of its day, and the old one is a
+number nobody was charged. An exchange between two accounts is refused - what
+changes hands is the deal, and the next one is not the same. The answer is the
+new entry, and `conversion` when it was converted again.
+
+## Templates
+
+Buttons that record the same payment again: the coffee, the bus, the rent.
+
+A template is made **from an entry** rather than filled in: the entry already
+says which account, category, counterparty, place and tags. It is kept by what
+it points at, so a category or a counterparty renamed later is still the one it
+means. It is one payment - one account, one category, and the conversion between
+them when it was charged in another currency; a split receipt, a transfer or an
+exchange is [recorded again](#post-apiv1ledgerentriesidrepeat) instead.
+
+### `POST /api/v1/ledger/templates`
+
+```json
+{ "entry_id": "…", "name": "Coffee", "ask_amount": false }
+```
+
+`ask_amount: true` makes a template for a place where every receipt is different:
+it keeps everything but the amount, and asks for one each time. It is held when
+the entry was. The template comes back as the last button:
+
+```json
+{ "id": "…", "name": "Coffee", "account_id": "…", "category_id": "…",
+  "flow": "expense", "amount": "15000", "currency": "PYG", "description": "coffee",
+  "counterparty": { "id": "…", "name": "Cafe" }, "place": null, "tags": ["work"],
+  "pending": false }
+```
+
+`amount` is absent on one that asks. Each name is one button: a second
+`Coffee`, in any case, is `409` with the code `template.name_taken`.
+
+### `POST /api/v1/ledger/templates/{id}/use`
+
+```json
+{ "occurred_on": "2026-10-12", "amount": "18000" }
+```
+
+Records the template's payment on the day given, today when it is left out.
+`amount`, in the template's currency, is needed when it asks for one and
+replaces its own for this once otherwise. An amount in another currency than the
+account's is converted at the day's rate. The answer is the entry, as for a
+typed line. A second press within a minute is [refused](#a-second-press) like
+any other.
+
+### `GET /api/v1/ledger/templates`
+
+Every template, in the order the buttons sit.
+
+### `PATCH /api/v1/ledger/templates/{id}`
+
+```json
+{ "name": "Superseis", "amount": null }
+```
+
+Renames it, or gives it an amount - `null` makes it ask each time. What it
+records is the entry it was made from; to change that, make another.
+
+### `PUT /api/v1/ledger/templates/order`
+
+```json
+{ "ids": ["…", "…", "…"] }
+```
+
+Every template of yours, each once, first button first; an order that leaves one
+out is refused.
+
+### `DELETE /api/v1/ledger/templates/{id}`
+
+The entries it recorded stay: they are your money, and the button was only a
+way of writing them.
 
 ## Held payments
 
@@ -514,6 +677,19 @@ Recorded -45000 PYG on 2026-09-17 - lunch at the corner
 `austeris add` takes its words unquoted or quoted, and `--on YYYY-MM-DD` for a
 day other than today. It calls this API like any other client: the gateway is
 the only way in, and the line is parsed by the service, not by the CLI.
+
+The same line twice within a minute is taken for one typed twice:
+
+```console
+$ austeris add 15000 food coffee
+Recorded -15000 PYG on 2026-10-12 - coffee
+$ austeris add 15000 food coffee
+Error: the same entry was recorded 6 seconds ago - typed twice? If this is a second one, run it again with --again
+$ austeris add 15000 food coffee --again
+Recorded -15000 PYG on 2026-10-12 - coffee
+```
+
+`austeris exchange` takes `--again` the same way.
 
 A counterparty, tags and a hold are printed back the way the line said them,
 and anything named for the first time is pointed out:

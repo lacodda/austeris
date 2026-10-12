@@ -33,8 +33,10 @@ the money it could not convert instead of quietly leaving it out.
 - **Your whole picture.** Accounts and entries, assets and liabilities, loans
   and deposits, and a portfolio of crypto and securities.
 - **A web interface inside the binary.** Accounts and their total, entries split
-  across categories, exchanges and held payments - in English or Russian, on a
-  desktop or a phone, served by the installation itself.
+  across categories, exchanges and held payments - in English or Russian, served
+  by the installation itself. On a phone it installs to the home screen and
+  opens onto recording: a typed line shown for what it means before it is saved,
+  buttons for the coffee and the bus, yesterday's entry again with one press.
 - **A REST surface that describes itself** at `/docs`, so a script of yours is a
   first-class client.
 - **On your own machine.** `docker compose up` and it is running; no account
@@ -111,7 +113,8 @@ Every endpoint, with its shape: **[the ledger reference](https://lacodda.github.
 Early, and the books are open: accounts, entries with who, where and which
 tags, held card payments, exchanges with their fee on a line of their own, and
 the day's rates from the central banks of Paraguay and Russia - from the
-command line, the API or the web interface. The portfolio, loans and the
+command line, the API or the web interface, which a phone records into with one
+press and asks about a second. The portfolio, loans and the
 forecast come next. A 2025 crypto tracker, the donor for `market`, is kept at
 [`legacy-2025`](https://github.com/lacodda/austeris/tree/legacy-2025). Each
 version: [CHANGELOG](https://github.com/lacodda/austeris/blob/main/CHANGELOG.md).

@@ -1,6 +1,6 @@
 ---
 title: Web interface
-description: The screens served at the root of every installation - accounts, entries, exchanges and held payments.
+description: The screens served at the root of every installation - recording from a phone, accounts, entries, exchanges and held payments.
 ---
 
 Every installation serves its web interface at its own root: open
@@ -8,6 +8,46 @@ Every installation serves its web interface at its own root: open
 the same email and password the command line uses. The interface is compiled
 into the binary, so there is nothing else to install, and it can never be from
 another version than the server.
+
+## Record
+
+What was just spent, where it was spent - the screen built for a phone.
+
+**The account and the day** are chosen above the line and stay while several
+things are recorded: a line that names no account is recorded against the one
+chosen, on the day chosen. The account is remembered in this browser. With more
+than one open and none chosen yet, none is - a line without `from` is then
+asked about rather than posted somewhere nobody agreed on.
+
+**The line** is the [one-line entry](#one-line). While it is typed, the server
+works it out without recording it, and what it would record shows under the
+field: the amount with its sign, the category, the account, who, which tags, and
+which of them would be created - or why it cannot be recorded yet, in the
+interface's language.
+
+**Buttons** record a payment with one press. Make one from any entry: open it
+and choose **Make a button**, name it, and say whether it keeps the amount - the
+bus - or asks for it each time - the supermarket. One that asks opens a sheet
+with the number keypad and nothing else. **Edit** renames them, gives or takes
+away their amount, moves them up and down, and deletes them; the entries they
+recorded stay.
+
+**Today** lists what was recorded today, and below it **yesterday** - or the
+last day before today that has anything on it. Each entry opens from its row,
+and the arrows beside it record it again on the day chosen.
+
+Every recording says so in a note with **Undo**, which deletes the entry it
+just made. The same entry recorded twice within a minute - a double tap, a press
+again because nothing seemed to happen - is asked about: **record a second**, or
+keep the one already recorded.
+
+### On a phone's home screen
+
+Open the installation in the phone's browser and add it to the home screen
+(*Install app* on Android, *Share → Add to Home Screen* on iPhone). It then
+opens full screen, straight onto **Record**, with the theme's colour in the
+status bar. Over the network it needs the installation's address to be HTTPS,
+which a reverse proxy in front of the gateway gives it.
 
 ## Accounts
 
@@ -33,7 +73,8 @@ what it did to each account.
 ### One line
 
 The field at the top takes the same line as `austeris add`, read by the same
-parser on the server:
+parser on the server. On a list narrowed to one account, a line that names no
+account is recorded against that one:
 
 ```text
 45000 food lunch @casarica #trip from cash
@@ -74,6 +115,11 @@ counterparty, tags and place can be changed; its lines cannot - an amount that
 was wrong is an entry deleted and recorded again, which keeps every balance it
 ever produced explainable.
 
+**Record again today** copies it onto today; a payment in another currency is
+converted again at today's rate, and an exchange is not offered. **Make a
+button** turns a payment from one account on one category into a
+[button](#record).
+
 A held entry is **posted** with the day the bank posted it, and, when the bank
 took another amount than was held - a hotel's pre-authorisation, a charge in
 another currency at the bank's rate - with that amount. A split cannot post for
@@ -96,5 +142,11 @@ every digit it has.
 
 The theme follows the operating system: dark or light, with nothing to set.
 
-On a phone the screens are the same, the navigation moves to the bottom, and
-the filters open as a sheet.
+On a phone the screens are the same, the navigation moves to the bottom, the
+filters open as a sheet, and what a table has no room for - what is available,
+the total's currency - moves under the amount it belongs to. Every field is at
+least sixteen pixels high in type, so a phone does not zoom the page into it.
+
+An amount is read the way the interface's language writes one, and the
+currency's own digits settle the rest: guaraníes have none, so `231.500` is two
+hundred thirty-one thousand in any language, as it is in a typed line.
