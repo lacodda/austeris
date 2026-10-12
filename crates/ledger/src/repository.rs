@@ -547,7 +547,12 @@ pub async fn post_entry(pool: &PgPool, owner_id: Uuid, new: &NewEntry) -> Result
 
 /// The entry recorded within the last minute that is the same as this one, if
 /// there is one.
-async fn recent_twin(transaction: &mut Transaction<'_, Postgres>, owner_id: Uuid, new: &NewEntry, counterparty_id: Option<Uuid>) -> Result<Option<PossibleDuplicate>> {
+async fn recent_twin(
+    transaction: &mut Transaction<'_, Postgres>,
+    owner_id: Uuid,
+    new: &NewEntry,
+    counterparty_id: Option<Uuid>,
+) -> Result<Option<PossibleDuplicate>> {
     let candidates: Vec<(Uuid, i64)> = sqlx::query_as(
         "SELECT id, floor(extract(epoch FROM now() - created_at))::bigint
            FROM entries
@@ -571,13 +576,12 @@ async fn recent_twin(transaction: &mut Transaction<'_, Postgres>, owner_id: Uuid
 
     let wanted = movement(new.lines.iter().map(|line| (line.side, line.amount, line.currency.clone())));
     let ids: Vec<Uuid> = candidates.iter().map(|(id, _)| *id).collect();
-    let rows: Vec<LineRow> = sqlx::query_as(
-        "SELECT entry_id, id, side, account_id, category_id, amount, currency, note FROM entry_lines WHERE entry_id = ANY($1)",
-    )
-    .bind(&ids)
-    .fetch_all(&mut **transaction)
-    .await
-    .context("reading the lines of the entries a moment ago")?;
+    let rows: Vec<LineRow> =
+        sqlx::query_as("SELECT entry_id, id, side, account_id, category_id, amount, currency, note FROM entry_lines WHERE entry_id = ANY($1)")
+            .bind(&ids)
+            .fetch_all(&mut **transaction)
+            .await
+            .context("reading the lines of the entries a moment ago")?;
 
     for (id, seconds) in candidates {
         let theirs = movement(rows.iter().filter(|row| row.0 == id).filter_map(|row| {

@@ -7,7 +7,7 @@
 
 use std::str::FromStr;
 
-use austeris_common::{AppError, AppResult, Caller};
+use austeris_common::{AppError, AppResult, Caller, Code};
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -76,7 +76,7 @@ pub async fn create_template(State(pool): State<PgPool>, caller: Caller, Json(ne
         .map_err(|error| match error.downcast_ref::<NoTemplate>() {
             Some(NoTemplate::NoEntry) => AppError::not_found(anyhow::anyhow!("no such entry")),
             Some(not_one @ NoTemplate::NotOnePayment(_)) => AppError::bad_request(anyhow::anyhow!("{not_one}")),
-            None => conflict_or(error, "there is already a template by that name"),
+            None => name_taken_or(error),
         })?;
     Ok((StatusCode::CREATED, Json(template)))
 }
@@ -116,7 +116,7 @@ pub async fn change_template(State(pool): State<PgPool>, caller: Caller, Path(id
     };
     repository::change_template(&pool, caller.id(), id, &changes)
         .await
-        .map_err(|error| conflict_or(error, "there is already a template by that name"))?
+        .map_err(name_taken_or)?
         .map(Json)
         .ok_or_else(|| AppError::not_found(anyhow::anyhow!("no such template")))
 }
@@ -142,9 +142,7 @@ pub async fn order_templates(State(pool): State<PgPool>, caller: Caller, Json(or
     if repository::order_templates(&pool, caller.id(), &order.ids).await? {
         Ok(StatusCode::NO_CONTENT)
     } else {
-        Err(AppError::bad_request(anyhow::anyhow!(
-            "an order names every template of yours, each once"
-        )))
+        Err(AppError::bad_request(anyhow::anyhow!("an order names every template of yours, each once")))
     }
 }
 
@@ -201,7 +199,12 @@ pub struct UseTemplate {
         (status = 409, description = "The same entry was recorded a moment ago", body = austeris_common::error::ErrorBody),
     ),
 )]
-pub async fn use_template(State(pool): State<PgPool>, caller: Caller, Path(id): Path<Uuid>, Json(body): Json<UseTemplate>) -> AppResult<(StatusCode, Json<Recorded>)> {
+pub async fn use_template(
+    State(pool): State<PgPool>,
+    caller: Caller,
+    Path(id): Path<Uuid>,
+    Json(body): Json<UseTemplate>,
+) -> AppResult<(StatusCode, Json<Recorded>)> {
     let owner_id = caller.id();
     let template = repository::template(&pool, owner_id, id)
         .await?
@@ -306,11 +309,8 @@ pub async fn repeat(State(pool): State<PgPool>, caller: Caller, Path(id): Path<U
         let fee_category = repository::category_for(&pool, owner_id, Purpose::ExchangeFees)
             .await?
             .map(|category| category.id);
-        let paid = paid::of(&entry, fee_category).map_err(|why| {
-            AppError::bad_request(anyhow::anyhow!(
-                "{why}; an exchange is recorded anew with what changed hands"
-            ))
-        })?;
+        let paid = paid::of(&entry, fee_category)
+            .map_err(|why| AppError::bad_request(anyhow::anyhow!("{why}; an exchange is recorded anew with what changed hands")))?;
         let account = repository::account(&pool, owner_id, paid.account_id)
             .await?
             .ok_or_else(|| AppError::internal(anyhow::anyhow!("an entry's account vanished")))?;
@@ -381,6 +381,17 @@ fn recorded(entry: Entry, conversion: Option<crate::exchange::Summary>) -> Recor
         conversion,
         new_counterparty: None,
         new_tags: Vec::new(),
+    }
+}
+
+/// A name another of the person's buttons has, said with its code; any other
+/// failure as it is.
+fn name_taken_or(error: anyhow::Error) -> AppError {
+    let refused = conflict_or(error, "there is already a template by that name");
+    if refused.status() == StatusCode::CONFLICT {
+        refused.with_code(Code::TemplateNameTaken, serde_json::json!({}))
+    } else {
+        refused
     }
 }
 

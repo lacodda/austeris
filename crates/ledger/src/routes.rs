@@ -45,10 +45,7 @@ pub fn router(pool: PgPool) -> Router {
         .route("/ledger/entries/{id}/repeat", post(templates::repeat))
         .route("/ledger/templates", get(templates::list_templates).post(templates::create_template))
         .route("/ledger/templates/order", put(templates::order_templates))
-        .route(
-            "/ledger/templates/{id}",
-            patch(templates::change_template).delete(templates::delete_template),
-        )
+        .route("/ledger/templates/{id}", patch(templates::change_template).delete(templates::delete_template))
         .route("/ledger/templates/{id}/use", post(templates::use_template))
         .route("/ledger/exchanges", post(exchange))
         .route("/ledger/balances", get(balances))

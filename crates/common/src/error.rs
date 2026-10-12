@@ -183,6 +183,58 @@ codes! {
     /// An entry the same as this one was recorded a moment ago - a second
     /// press of the same button, most likely. Params: `entry_id`, `seconds`.
     PossibleDuplicate = "entry.possible_duplicate",
+
+    // A typed line that cannot be read. These are what a screen shows while
+    // the line is still being typed, so they are the ones most worth saying
+    // in the reader's language.
+    /// Nothing but spaces.
+    LineEmpty = "line.empty",
+    /// It does not start with an amount. Params: `word`.
+    LineNoAmount = "line.no_amount",
+    /// An amount of nothing.
+    LineZeroAmount = "line.zero_amount",
+    /// An amount and nothing it was for. Params: `amount`.
+    LineNoCategory = "line.no_category",
+    /// `from` or `to` with nothing after it. Params: `word`.
+    LineDanglingAccount = "line.dangling_account",
+    /// `@` followed by a number that is not one. Params: `word`.
+    LineBadRate = "line.bad_rate",
+    /// `@` followed by nothing.
+    LineBareAt = "line.bare_at",
+    /// A second rate or a second counterparty. Params: `word`.
+    LineTwice = "line.twice",
+    /// Spent on a category of money coming in. Params: `category`, `amount`.
+    LineIncomeCategory = "line.income_category",
+    /// Earned on a category of money going out. Params: `category`.
+    LineExpenseCategory = "line.expense_category",
+    /// No account by the name typed. Params: `name`.
+    LineUnknownAccount = "line.unknown_account",
+    /// No open account at all.
+    LineNoOpenAccount = "line.no_open_account",
+    /// Several open accounts and none named. Params: `example`, `accounts`.
+    LineWhichAccount = "line.which_account",
+    /// A counterparty named with no usual category, and no category typed.
+    /// Params: `counterparty`, `amount`, `key`.
+    LineNoUsualCategory = "line.no_usual_category",
+    /// A counterparty never named before, and no category to give it.
+    /// Params: `name`, `amount`.
+    LineUnknownCounterparty = "line.unknown_counterparty",
+    /// No category by the name typed. Params: `name`.
+    LineUnknownCategory = "line.unknown_category",
+    /// A name several categories have. Params: `name`, `names`.
+    LineAmbiguousCategory = "line.ambiguous_category",
+    /// A rate stated for an amount already in the account's currency.
+    /// Params: `currency`.
+    LineRateWithoutCurrency = "line.rate_without_currency",
+    /// An amount in a currency no rate is known for. Params: `from`, `to`,
+    /// `day`.
+    LineNoRate = "line.no_rate",
+    /// An amount too small to be worth a unit of the account's currency.
+    /// Params: `amount`, `currency`, `account_currency`.
+    LineWorthless = "line.worthless",
+
+    /// Another of the person's buttons says the same.
+    TemplateNameTaken = "template.name_taken",
 }
 
 #[cfg(test)]

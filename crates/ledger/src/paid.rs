@@ -155,7 +155,10 @@ mod tests {
     fn money_earned_is_an_income_and_its_amount_is_still_positive() {
         let (bank, salary) = (Uuid::new_v4(), Uuid::new_v4());
         let paid = of(
-            &entry(vec![line(LineSide::Account, bank, "2500000", "PYG"), line(LineSide::Category, salary, "-2500000", "PYG")]),
+            &entry(vec![
+                line(LineSide::Account, bank, "2500000", "PYG"),
+                line(LineSide::Category, salary, "-2500000", "PYG"),
+            ]),
             None,
         )
         .expect("one payment");
@@ -172,7 +175,10 @@ mod tests {
         ]);
         assert_eq!(of(&split, None), Err(NotOne::Split));
 
-        let transfer = entry(vec![line(LineSide::Account, cash, "-30000", "PYG"), line(LineSide::Account, card, "30000", "PYG")]);
+        let transfer = entry(vec![
+            line(LineSide::Account, cash, "-30000", "PYG"),
+            line(LineSide::Account, card, "30000", "PYG"),
+        ]);
         assert_eq!(of(&transfer, None), Err(NotOne::BetweenAccounts));
 
         let exchange = entry(vec![

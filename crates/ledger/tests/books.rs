@@ -2431,7 +2431,9 @@ async fn a_template_in_another_currency_is_converted_at_the_rate_of_the_day_it_i
     let Some(pool) = pool("test_ledger_template_foreign").await else { return };
     let books = books(&pool).await;
     for (on, rate) in [(day(2026, 10, 1), "6000"), (day(2026, 10, 11), "6100")] {
-        repository::record_rate(&pool, "USD", "PYG", on, decimal(rate), "bcp").await.expect("recording a rate");
+        repository::record_rate(&pool, "USD", "PYG", on, decimal(rate), "bcp")
+            .await
+            .expect("recording a rate");
     }
     let (status, streaming) = quick(&pool, books.owner, r#"{"text":"10 usd food @6050 streaming","occurred_on":"2026-10-01"}"#).await;
     assert_eq!(status, StatusCode::CREATED, "{streaming}");
@@ -2458,7 +2460,9 @@ async fn a_template_in_another_currency_is_converted_at_the_rate_of_the_day_it_i
 async fn only_one_payment_makes_a_template_and_each_name_is_one_button() {
     let Some(pool) = pool("test_ledger_template_shape").await else { return };
     let books = books(&pool).await;
-    let fun = repository::create_category(&pool, books.owner, None, Flow::Expense, "fun").await.expect("creating");
+    let fun = repository::create_category(&pool, books.owner, None, Flow::Expense, "fun")
+        .await
+        .expect("creating");
     let split = format!(
         r#"{{"occurred_on":"2026-10-11","description":"market","lines":[
             {{"account_id":"{}","amount":"-30000","currency":"PYG"}},
@@ -2537,7 +2541,11 @@ fn line_shape(entry: &serde_json::Value) -> Vec<(String, String, Decimal, String
         .map(|line| {
             (
                 line["side"].as_str().expect("a side").to_owned(),
-                line["category_id"].as_str().or_else(|| line["account_id"].as_str()).unwrap_or_default().to_owned(),
+                line["category_id"]
+                    .as_str()
+                    .or_else(|| line["account_id"].as_str())
+                    .unwrap_or_default()
+                    .to_owned(),
                 decimal(line["amount"].as_str().expect("an amount")),
                 line["note"].as_str().unwrap_or_default().to_owned(),
             )
@@ -2551,7 +2559,9 @@ fn line_shape(entry: &serde_json::Value) -> Vec<(String, String, Decimal, String
 async fn an_entry_recorded_again_says_what_it_said_on_another_day() {
     let Some(pool) = pool("test_ledger_repeat").await else { return };
     let books = books(&pool).await;
-    let fun = repository::create_category(&pool, books.owner, None, Flow::Expense, "fun").await.expect("creating");
+    let fun = repository::create_category(&pool, books.owner, None, Flow::Expense, "fun")
+        .await
+        .expect("creating");
     let split = format!(
         r#"{{"occurred_on":"2026-10-10","description":"market","tags":["home"],"place":{{"country":"PY","city":"Asunción"}},"lines":[
             {{"account_id":"{}","amount":"-30000","currency":"PYG"}},
@@ -2585,8 +2595,12 @@ async fn an_entry_recorded_again_says_what_it_said_on_another_day() {
 async fn a_held_payment_recorded_again_is_held_and_a_foreign_one_is_priced_anew() {
     let Some(pool) = pool("test_ledger_repeat_kinds").await else { return };
     let books = books(&pool).await;
-    repository::record_rate(&pool, "USD", "PYG", day(2026, 10, 1), decimal("6000"), "bcp").await.expect("rate");
-    repository::record_rate(&pool, "USD", "PYG", day(2026, 10, 11), decimal("6100"), "bcp").await.expect("rate");
+    repository::record_rate(&pool, "USD", "PYG", day(2026, 10, 1), decimal("6000"), "bcp")
+        .await
+        .expect("rate");
+    repository::record_rate(&pool, "USD", "PYG", day(2026, 10, 11), decimal("6100"), "bcp")
+        .await
+        .expect("rate");
 
     let (_, fuel) = quick(&pool, books.owner, r#"{"text":"~120000 food fuel","occurred_on":"2026-10-01"}"#).await;
     let (status, recorded) = repeat(&pool, books.owner, &fuel["entry"], r#"{"occurred_on":"2026-10-11"}"#).await;
@@ -2636,9 +2650,16 @@ async fn an_installation_with_entries_migrates_to_templates() {
         .expect("migrating a schema that has entries");
 
     // The entry can be made a template straight away.
-    let entries = repository::entries(&pool, owner, &repository::EntryFilter { limit: 1, ..Default::default() })
-        .await
-        .expect("reading entries");
+    let entries = repository::entries(
+        &pool,
+        owner,
+        &repository::EntryFilter {
+            limit: 1,
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("reading entries");
     let entry = serde_json::to_value(&entries[0]).expect("json");
     let (status, template) = make_template(&pool, owner, &entry, "Lunch", false).await;
     assert_eq!(status, StatusCode::CREATED, "{template}");
