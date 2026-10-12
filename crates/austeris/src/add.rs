@@ -157,10 +157,7 @@ pub async fn add(args: &AddArgs) -> Result<()> {
     let session = read_session()?;
     let text = args.words.join(" ");
 
-    let mut body = serde_json::json!({ "text": text, "allow_duplicate": args.again });
-    if let Some(on) = &args.on {
-        body["occurred_on"] = serde_json::Value::String(on.clone());
-    }
+    let mut body = serde_json::json!({ "text": text, "occurred_on": day(args.on.as_deref()), "allow_duplicate": args.again });
     if let Some(country) = &args.country {
         body["place"] = serde_json::json!({ "country": country, "city": args.city });
     }
@@ -228,9 +225,7 @@ pub async fn clear(args: &ClearArgs) -> Result<()> {
         let amount = austeris_ledger::parse::amount(amount).with_context(|| format!("`{amount}` is not an amount"))?;
         body["amount"] = serde_json::Value::String(amount.to_string());
     }
-    if let Some(on) = &args.on {
-        body["on"] = serde_json::Value::String(on.clone());
-    }
+    body["on"] = serde_json::Value::String(day(args.on.as_deref()));
 
     let response = austeris_common::http::client()
         .post(format!("{}/api/v1/ledger/entries/{}/clear", base_url(), entry.id))
@@ -325,17 +320,15 @@ pub async fn exchange(args: &ExchangeArgs) -> Result<()> {
     let accounts: Vec<Account> = response.json().await.context("reading the accounts")?;
     let (from, to) = (named(&accounts, &args.from)?, named(&accounts, &args.to)?);
 
-    let mut body = serde_json::json!({
+    let body = serde_json::json!({
         "from_account": from.id,
         "given": given.to_string(),
         "to_account": to.id,
         "got": got.to_string(),
         "description": args.note.clone().unwrap_or_default(),
+        "occurred_on": day(args.on.as_deref()),
         "allow_duplicate": args.again,
     });
-    if let Some(on) = &args.on {
-        body["occurred_on"] = serde_json::Value::String(on.clone());
-    }
 
     let response = client
         .post(format!("{}/api/v1/ledger/exchanges", base_url()))
@@ -604,6 +597,16 @@ fn said_in_a_terminal(json: &serde_json::Value) -> Option<String> {
         ));
     }
     json.get("message").and_then(|message| message.as_str().map(ToOwned::to_owned))
+}
+
+/// The day a command records on: the one it was given, else today on this
+/// machine.
+///
+/// The person's today rather than the server's: the server reckons days in
+/// UTC, and a lunch typed in Asunción after nine in the evening would land on
+/// tomorrow.
+fn day(given: Option<&str>) -> String {
+    given.map_or_else(|| chrono::Local::now().date_naive().to_string(), ToOwned::to_owned)
 }
 
 /// Where this installation is.
