@@ -17,4 +17,4 @@ pub mod telemetry;
 
 pub use caller::{Caller, USER_HEADER};
 pub use config::Config;
-pub use error::{AppError, AppResult};
+pub use error::{AppError, AppResult, Code};
