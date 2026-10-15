@@ -5,6 +5,7 @@
 //! another service's data asks that service over gRPC (ADR 0001); this crate
 //! only makes the asking possible.
 
+pub mod actor;
 pub mod caller;
 pub mod config;
 pub mod db;
@@ -15,6 +16,7 @@ pub mod http;
 pub mod migrate;
 pub mod telemetry;
 
+pub use actor::Actor;
 pub use caller::{Caller, USER_HEADER};
 pub use config::Config;
 pub use error::{AppError, AppResult, Code};

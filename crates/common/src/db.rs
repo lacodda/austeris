@@ -12,6 +12,15 @@ use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 
 use crate::config::Config;
 
+/// The name every austeris connection gives the database.
+///
+/// What the database knows the service by. The ledger's history of an entry
+/// records a write from any other connection as one from outside austeris,
+/// and refuses one from this name that does not say whose it is
+/// ([`crate::Actor`]) - a path of the service that forgot to is a fault, not
+/// an outside write.
+pub const APPLICATION_NAME: &str = "austeris";
+
 /// Opens a pool whose every connection resolves unqualified names in `schema`.
 ///
 /// The schema itself is created here, not by a migration: a migration runs
@@ -28,7 +37,8 @@ pub async fn connect(config: &Config, schema: &str) -> Result<PgPool> {
         .database_url()?
         .parse::<PgConnectOptions>()
         .with_context(|| "AUSTERIS_DATABASE_URL is not a valid PostgreSQL connection string")?
-        .options([("search_path", schema)]);
+        .options([("search_path", schema)])
+        .application_name(APPLICATION_NAME);
 
     let pool = PgPoolOptions::new()
         .max_connections(config.max_connections)
