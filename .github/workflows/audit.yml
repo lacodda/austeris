@@ -1,0 +1,77 @@
+name: Audit
+
+# Published advisories against every dependency, and licenses outside the
+# accepted list: the crates, the web interface's packages and the
+# documentation site's. On every push and pull request, and on Monday mornings
+# for what was published while nothing was pushed - a red run with no commit
+# behind it means the world moved, not the code.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # RustSec advisories, licenses, banned crates and unknown sources - all four
+  # read from deny.toml.
+  crates:
+    name: Crates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories bans licenses sources
+
+  # The interface compiled into the binary: every package it is built with,
+  # since what the build writes is what ships.
+  web:
+    name: Web interface
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: Advisories
+        run: pnpm audit
+
+  # The documentation site, all build tooling. Advisories answered on purpose
+  # are pinned, with the reason, in docs/pnpm-workspace.yaml.
+  docs:
+    name: Documentation site
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: docs
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: docs/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: Advisories
+        run: pnpm audit
