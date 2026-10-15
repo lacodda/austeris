@@ -4,8 +4,11 @@
 import sharp from "sharp";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const ASSETS = "C:/Projects/austeris/assets";
+// The masters, found from this script rather than from where a checkout
+// happens to live.
+const ASSETS = fileURLToPath(new URL("../assets/", import.meta.url));
 
 // The three levels of the mark. Which one a raster takes is decided by
 // `levelFor` below, never by habit — the comment that used to sit here said
