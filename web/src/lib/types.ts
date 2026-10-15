@@ -139,6 +139,69 @@ export interface Entry {
   place?: Place | null
   source?: string | null
   lines: Line[]
+  /** The files kept with it, in the order they were attached. */
+  attachments: Attachment[]
+}
+
+/** A file kept with an entry: what it is, without its bytes. */
+export interface Attachment {
+  id: string
+  name: string
+  /** What the server read the bytes as: `image/jpeg`, `application/pdf`. */
+  media_type: string
+  /** In bytes. */
+  size: number
+  created_at: string
+}
+
+/** Who changed an entry: a person, a module, or a write from outside austeris. */
+export interface Who {
+  kind: 'person' | 'module' | 'outside'
+  person_id?: string
+  module?: string
+}
+
+export type RevisionAction = 'created' | 'changed' | 'deleted' | 'restored'
+
+/** A part of an entry a change can touch, in the order an entry is read. */
+export type EntryField = 'occurred_on' | 'description' | 'status' | 'counterparty' | 'place' | 'tags' | 'lines' | 'attachments'
+
+/** One thing that happened to an entry. */
+export interface Revision {
+  id: number
+  at: string
+  action: RevisionAction
+  who: Who
+  /** What a change changed; empty for the other actions. */
+  changed: EntryField[]
+  /** Absent when it did not exist yet. */
+  before?: Entry | null
+  /** Absent once it was deleted. */
+  after?: Entry | null
+}
+
+export interface TrashedEntry {
+  entry: Entry
+  deleted_at: string
+  who: Who
+  /** When it is erased for good, with its history and its files. */
+  erased_after: string
+}
+
+export interface TrashedAttachment {
+  attachment: Attachment
+  entry_id: string
+  entry_title: string
+  entry_occurred_on: IsoDate
+  removed_at: string
+  erased_after: string
+}
+
+export interface Trash {
+  /** How many days it keeps what is put in it before erasing it. */
+  keep_days: number
+  entries: TrashedEntry[]
+  attachments: TrashedAttachment[]
 }
 
 export interface NewEntryLine {

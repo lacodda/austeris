@@ -35,14 +35,20 @@ import { categoryLabels, placeLabel, useAccounts, useBooksChanged, useCategories
 import { problem } from '@/lib/problem'
 import { useRecordedToast, useSecondPress } from '@/lib/recording'
 import type { Entry, PlaceBody } from '@/lib/types'
+import { Attachments } from '@/pages/entries/Attachments'
 import { CounterpartyField, isTag, PlaceField, TagsField } from '@/pages/entries/fields'
+import { History } from '@/pages/entries/History'
 import { resolver } from '@/pages/entries/resolve'
 import { MakeButton } from '@/pages/record/MakeButton'
 
 type Mode = 'view' | 'edit' | 'post'
 
-/** One entry, opened from the list: every line of it, and what can be done to
- * it - its details changed, a held payment posted, the entry deleted. */
+/** How long the toast that can bring a deleted entry back stays up. */
+const UNDO_MS = 10_000
+
+/** One entry, opened from the list: every line of it, the files kept with it,
+ * what happened to it, and what can be done to it - its details changed, a
+ * held payment posted, the entry deleted to the trash. */
 export function EntryDetail({ id, onDone }: { id: string; onDone: () => void }) {
   const { t } = useTranslation()
   const entry = useQuery({ queryKey: ['ledger', 'entry', id], queryFn: () => api.entry(id) })
@@ -129,10 +135,27 @@ function ViewEntry({ entry, onEdit, onPost, onDeleted }: { entry: Entry; onEdit:
     mutationFn: () => api.deleteEntry(entry.id),
     onSuccess: () => {
       void changed()
-      toasts.add({ type: 'success', title: t('entry.deleted') })
+      // The way back is on the toast as well as in the trash: a press that
+      // deleted the wrong entry is undone where it was made.
+      let id = ''
+      id = toasts.add({
+        type: 'success',
+        title: t('entry.deleted'),
+        timeout: UNDO_MS,
+        actionProps: {
+          children: t('record.undo'),
+          onClick: () => {
+            toasts.close(id)
+            api
+              .restoreEntry(entry.id)
+              .then(() => void changed())
+              .catch((error: Error) => toasts.add({ type: 'error', title: problem(error, t) }))
+          },
+        },
+      })
       onDeleted()
     },
-    onError: (error: Error) => toasts.add({ type: 'error', title: error.message }),
+    onError: (error: Error) => toasts.add({ type: 'error', title: problem(error, t) }),
   })
 
   return (
@@ -208,6 +231,9 @@ function ViewEntry({ entry, onEdit, onPost, onDeleted }: { entry: Entry; onEdit:
             </TableBody>
           </Table>
         </section>
+
+        <Attachments entry={entry} />
+        <History id={entry.id} />
       </DrawerBody>
       <DrawerActions
         start={

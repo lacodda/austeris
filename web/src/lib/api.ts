@@ -9,6 +9,7 @@
  */
 import type {
   Account,
+  Attachment,
   Balances,
   Category,
   Counterparty,
@@ -28,8 +29,10 @@ import type {
   QuickLine,
   RateInForce,
   Recorded,
+  Revision,
   Tag,
   Template,
+  Trash,
 } from '@/lib/types'
 
 /** A call the server answered with anything but success. */
@@ -60,7 +63,9 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(path, {
     ...init,
     credentials: 'same-origin',
-    headers: { ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...init.headers },
+    // A string body is JSON; a file is sent as it is, under the type its call
+    // gives it.
+    headers: { ...(typeof init.body === 'string' ? { 'Content-Type': 'application/json' } : {}), ...init.headers },
   })
   if (!response.ok) {
     const { message, code, params } = await reason(response)
@@ -110,6 +115,12 @@ export function query(params: Record<string, string | number | undefined>): stri
 
 const LEDGER = '/api/v1/ledger'
 
+/** Where a file's bytes are read from: an image's `src`, a link's `href`. The
+ * session cookie goes with it, as with every call. */
+export function attachmentUrl(id: string): string {
+  return `${LEDGER}/attachments/${id}/content`
+}
+
 export const api = {
   me: () => request<Identity>('/api/v1/auth/me'),
   signIn: (email: string, password: string) => request<void>('/api/v1/auth/login', json('POST', { email, password })),
@@ -143,7 +154,26 @@ export const api = {
   updateEntry: (id: string, patch: EntryPatch) => request<Entry>(`${LEDGER}/entries/${id}`, json('PATCH', patch)),
   clearEntry: (id: string, on?: IsoDate, amount?: string) =>
     request<Entry>(`${LEDGER}/entries/${id}/clear`, json('POST', { on: on ?? null, amount: amount ?? null })),
+  /** To the trash: `restoreEntry` brings it back for thirty days. */
   deleteEntry: (id: string) => request<void>(`${LEDGER}/entries/${id}`, { method: 'DELETE' }),
+  history: (id: string) => request<Revision[]>(`${LEDGER}/entries/${id}/history`),
+
+  /** The file goes as it is; the server reads what it is from its bytes. */
+  attach: (entryId: string, file: File) =>
+    request<Attachment>(`${LEDGER}/entries/${entryId}/attachments${query({ name: file.name })}`, {
+      method: 'POST',
+      body: file,
+      headers: { 'Content-Type': 'application/octet-stream' },
+    }),
+  /** To the trash, like an entry. */
+  removeAttachment: (id: string) => request<void>(`${LEDGER}/attachments/${id}`, { method: 'DELETE' }),
+
+  trash: () => request<Trash>(`${LEDGER}/trash`),
+  restoreEntry: (id: string) => request<Entry>(`${LEDGER}/trash/entries/${id}/restore`, { method: 'POST' }),
+  eraseEntry: (id: string) => request<void>(`${LEDGER}/trash/entries/${id}`, { method: 'DELETE' }),
+  restoreAttachment: (id: string) => request<Attachment>(`${LEDGER}/trash/attachments/${id}/restore`, { method: 'POST' }),
+  eraseAttachment: (id: string) => request<void>(`${LEDGER}/trash/attachments/${id}`, { method: 'DELETE' }),
+  emptyTrash: () => request<void>(`${LEDGER}/trash`, { method: 'DELETE' }),
   exchange: (exchange: Exchange) => request<Recorded>(`${LEDGER}/exchanges`, json('POST', exchange)),
 
   templates: () => request<Template[]>(`${LEDGER}/templates`),

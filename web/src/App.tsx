@@ -11,6 +11,7 @@ import { Accounts } from '@/pages/Accounts'
 import { Entries } from '@/pages/Entries'
 import { Record } from '@/pages/Record'
 import { SignIn } from '@/pages/SignIn'
+import { Trash } from '@/pages/Trash'
 
 /** The screens, in the order the navigation lists them. */
 const SCREENS = [
@@ -46,6 +47,9 @@ function Books() {
           <Route path="/record" element={<Record />} />
           <Route path="/accounts" element={<Accounts />} />
           <Route path="/entries" element={<Entries />} />
+          {/* Under the entries, so the navigation keeps them lit: the
+              trash is where an entry goes, not a place of its own. */}
+          <Route path="/entries/trash" element={<Trash />} />
           {/* An address nothing answers lands on the money rather than on a
               blank page. */}
           <Route path="*" element={<Navigate to="/accounts" replace />} />

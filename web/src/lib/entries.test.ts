@@ -70,6 +70,7 @@ const exchange: Entry = {
     { id: '5', side: 'account', account_id: 'pyg', amount: '-6500', currency: 'PYG', note: 'fee' },
     { id: '6', side: 'category', category_id: 'fees', amount: '6500', currency: 'PYG', note: 'fee' },
   ],
+  attachments: [],
 }
 
 describe('movements', () => {
@@ -99,6 +100,7 @@ describe('what an entry can be made into', () => {
       { id: '1', side: 'account', account_id: 'pyg', amount: '-15000', currency: 'PYG', note: '' },
       { id: '2', side: 'category', category_id: 'food', amount: '15000', currency: 'PYG', note: '' },
     ],
+    attachments: [],
   }
 
   it('makes a button of one payment, and of nothing with two accounts in it', () => {
@@ -116,6 +118,7 @@ describe('what an entry can be made into', () => {
         { id: '4', side: 'conversion', amount: '-10', currency: 'USD', note: '' },
         { id: '5', side: 'category', category_id: 'fun', amount: '10', currency: 'USD', note: '' },
       ],
+      attachments: [],
     }
     expect(isOnePayment(streaming, 'fees')).toBe(true)
     // Without knowing which category holds fees, it is two categories.

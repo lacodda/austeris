@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react'
-import { useSearchParams } from 'react-router'
+import { Link, useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { useLocale } from 'dowel-ui'
+import { Paperclip, Trash2 } from 'lucide-react'
 import { Money } from '@/components/Money'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -43,6 +44,9 @@ export function Entries() {
         description={t('entries.description')}
         actions={
           <>
+            <Button variant="icon" render={<Link to="/entries/trash" />} aria-label={t('trash.title')}>
+              <Trash2 aria-hidden />
+            </Button>
             <Button onClick={() => setExchanging(true)}>{t('entries.exchange')}</Button>
             <Button variant="primary" onClick={() => setAdding(true)}>
               {t('entries.new')}
@@ -154,6 +158,9 @@ function EntryTable({ rows, account, onOpen }: EntryTableProps) {
                     {title(entry, t('entry.untitled'))}
                   </Button>
                   {entry.status === 'pending' ? <Badge variant="warn">{t('entry.heldBadge')}</Badge> : null}
+                  {entry.attachments.length > 0 ? (
+                    <Paperclip className="size-3.5 shrink-0 text-dim" aria-label={t('files.count', { count: entry.attachments.length })} />
+                  ) : null}
                 </div>
                 {entry.description && entry.counterparty ? <div className="text-xs text-dim">{entry.counterparty.name}</div> : null}
                 {what.length > 0 ? <div className="text-xs text-faint">{what.join(' · ')}</div> : null}

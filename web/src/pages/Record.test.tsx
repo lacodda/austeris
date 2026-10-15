@@ -23,6 +23,7 @@ const entry = (id: string, description: string, on: string, amount = '15000'): E
     { id: `${id}a`, side: 'account', account_id: 'a1', amount: `-${amount}`, currency: 'PYG', note: '' },
     { id: `${id}c`, side: 'category', category_id: 'c1', amount, currency: 'PYG', note: '' },
   ],
+  attachments: [],
 })
 
 const BOOKS = {

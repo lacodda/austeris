@@ -23,6 +23,8 @@ export const keys = {
   tags: ['ledger', 'tags'] as const,
   templates: ['ledger', 'templates'] as const,
   entries: (filter: EntryFilter) => ['ledger', 'entries', filter] as const,
+  history: (id: string) => ['ledger', 'history', id] as const,
+  trash: ['ledger', 'trash'] as const,
   rate: (given: string, got: string, on: string) => ['ledger', 'rate', given, got, on] as const,
 }
 
@@ -40,6 +42,8 @@ export const useCounterparties = () => useQuery({ queryKey: keys.counterparties,
 export const usePlaces = () => useQuery({ queryKey: keys.places, queryFn: api.places })
 export const useTags = () => useQuery({ queryKey: keys.tags, queryFn: api.tags })
 export const useTemplates = () => useQuery({ queryKey: keys.templates, queryFn: api.templates })
+export const useHistory = (id: string) => useQuery({ queryKey: keys.history(id), queryFn: () => api.history(id) })
+export const useTrash = () => useQuery({ queryKey: keys.trash, queryFn: api.trash })
 
 /** How many entries a page of the list holds. */
 export const PAGE = 50

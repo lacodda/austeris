@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 import { today } from '@/lib/dates'
@@ -32,6 +32,7 @@ const HELD = {
     { id: 'l1', side: 'account', account_id: 'a1', amount: '-45000.000000000000000000', currency: 'PYG', note: '' },
     { id: 'l2', side: 'category', category_id: 'c2', amount: '45000.000000000000000000', currency: 'PYG', note: '' },
   ],
+  attachments: [],
 }
 
 describe('Entries', () => {
@@ -94,6 +95,109 @@ describe('Entries', () => {
     await userEvent.type(await screen.findByLabelText('Record an entry in one line'), '45000 food{Enter}')
     await screen.findByText('Recorded: Weekly shop')
     expect(requests.find((sent) => sent.path === '/api/v1/ledger/entries/quick')?.body).toMatchObject({ account_id: 'a1' })
+  })
+
+  it('shows on the card what happened to the entry and the files kept with it', async () => {
+    const posted = { ...HELD, status: 'cleared', cleared_on: '2026-10-09' }
+    signedIn({
+      ...LISTS,
+      '/api/v1/ledger/entries': json([HELD]),
+      '/api/v1/ledger/entries/e1': json({
+        ...posted,
+        attachments: [{ id: 'f1', name: 'receipt.jpg', media_type: 'image/jpeg', size: 2048, created_at: '2026-10-07T12:00:00Z' }],
+      }),
+      '/api/v1/ledger/entries/e1/history': json([
+        { id: 1, at: '2026-10-07T12:00:00Z', action: 'created', who: { kind: 'person', person_id: 'u1' }, changed: [], after: HELD },
+        {
+          id: 2,
+          at: '2026-10-09T12:00:00Z',
+          action: 'changed',
+          who: { kind: 'module', module: 'demo' },
+          changed: ['description', 'status'],
+          before: HELD,
+          after: { ...posted, description: 'Groceries' },
+        },
+      ]),
+    })
+    render(app(<Entries />, '/entries'))
+    await userEvent.click(await screen.findByRole('button', { name: 'Weekly shop' }))
+
+    const files = await screen.findByRole('region', { name: 'Files' })
+    expect(within(files).getByRole('link', { name: /receipt\.jpg/ }).getAttribute('href')).toBe('/api/v1/ledger/attachments/f1/content')
+    const history = await screen.findByRole('region', { name: 'History' })
+    expect(within(history).getByText('Recorded · you')).toBeTruthy()
+    expect(within(history).getByText('Changed · the demo module')).toBeTruthy()
+    expect(within(history).getByText('Description: "Weekly shop" → "Groceries"')).toBeTruthy()
+    expect(within(history).getByText('Status: held → Posted on Oct 9, 2026')).toBeTruthy()
+  })
+
+  it('deletes to the trash, and Undo on the toast brings the entry back', async () => {
+    const requests = signedIn({
+      ...LISTS,
+      '/api/v1/ledger/entries': json([HELD]),
+      '/api/v1/ledger/entries/e1': json(HELD),
+      '/api/v1/ledger/entries/e1/history': json([]),
+      'DELETE /api/v1/ledger/entries/e1': () => new Response(null, { status: 204 }),
+      'POST /api/v1/ledger/trash/entries/e1/restore': json(HELD),
+    })
+    render(app(<Entries />, '/entries'))
+    await userEvent.click(await screen.findByRole('button', { name: 'Weekly shop' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+    const dialog = await screen.findByRole('alertdialog')
+    expect(within(dialog).getByText('It goes to the trash with its files, and can be brought back from there as it was.')).toBeTruthy()
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
+
+    await screen.findByText('Moved to the trash.')
+    await userEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    await waitFor(() =>
+      expect(requests.filter((sent) => sent.method === 'POST' && sent.path === '/api/v1/ledger/trash/entries/e1/restore')).toHaveLength(1),
+    )
+  })
+
+  it('attaches a file under its own name, and takes one off to the trash', async () => {
+    const withFile = {
+      ...HELD,
+      attachments: [{ id: 'f1', name: 'old.pdf', media_type: 'application/pdf', size: 340 * 1024, created_at: '2026-10-07T12:00:00Z' }],
+    }
+    const requests = signedIn({
+      ...LISTS,
+      '/api/v1/ledger/entries': json([HELD]),
+      '/api/v1/ledger/entries/e1': json(withFile),
+      '/api/v1/ledger/entries/e1/history': json([]),
+      'POST /api/v1/ledger/entries/e1/attachments': json({ id: 'f2', name: 'чек.jpg', media_type: 'image/jpeg', size: 4, created_at: '2026-10-09T12:00:00Z' }, 201),
+      'DELETE /api/v1/ledger/attachments/f1': () => new Response(null, { status: 204 }),
+      'POST /api/v1/ledger/trash/attachments/f1/restore': json(withFile.attachments[0]),
+    })
+    render(app(<Entries />, '/entries'))
+    await userEvent.click(await screen.findByRole('button', { name: 'Weekly shop' }))
+    await screen.findByRole('region', { name: 'Files' })
+
+    await userEvent.upload(screen.getByTestId('attach-files'), new File(['\xFF\xD8\xFF\xE0'], 'чек.jpg', { type: 'image/jpeg' }))
+    await waitFor(() =>
+      expect(requests.some((sent) => sent.method === 'POST' && sent.path === `/api/v1/ledger/entries/e1/attachments?name=${encodeURIComponent('чек.jpg')}`)).toBe(
+        true,
+      ),
+    )
+
+    await userEvent.click(screen.getByRole('button', { name: 'Remove old.pdf' }))
+    await screen.findByText('old.pdf moved to the trash.')
+    await userEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    await waitFor(() => expect(requests.some((sent) => sent.path === '/api/v1/ledger/trash/attachments/f1/restore')).toBe(true))
+  })
+
+  it('says why a file was refused, in the reader\'s language', async () => {
+    signedIn({
+      ...LISTS,
+      '/api/v1/ledger/entries': json([HELD]),
+      '/api/v1/ledger/entries/e1': json(HELD),
+      '/api/v1/ledger/entries/e1/history': json([]),
+      'POST /api/v1/ledger/entries/e1/attachments': failure(413, 'a file can be 10 MB at most', 'attachment.too_large', { limit_mb: 10 }),
+    })
+    render(app(<Entries />, '/entries'))
+    await userEvent.click(await screen.findByRole('button', { name: 'Weekly shop' }))
+    await screen.findByRole('region', { name: 'Files' })
+    await userEvent.upload(screen.getByTestId('attach-files'), new File(['x'], 'huge.jpg', { type: 'image/jpeg' }))
+    expect(await screen.findByText('A file can be up to 10 MB.')).toBeTruthy()
   })
 
   it('keeps a refused line, with the server saying why', async () => {
