@@ -121,6 +121,7 @@ mod tests {
             place: None,
             tags: Vec::new(),
             lines,
+            attachments: Vec::new(),
         }
     }
 

@@ -5,9 +5,9 @@
 //! gateway vouched for - and there is no path that reads across people.
 
 use austeris_common::{AppError, AppResult, Caller, Code, health};
-use axum::extract::{Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::StatusCode;
-use axum::routing::{get, patch, post, put};
+use axum::routing::{delete, get, patch, post, put};
 use axum::{Json, Router};
 use chrono::{NaiveDate, Utc};
 use rust_decimal::Decimal;
@@ -17,13 +17,16 @@ use uuid::Uuid;
 
 use crate::exchange::{self, Money, Summary};
 use crate::model::{
-    Account, AccountKind, Balance, Category, Counterparty, CounterpartyKind, CounterpartyRef, Entry, EntryStatus, ExchangeRate, Flow, Flowed, Group, GroupBy,
-    Line, LineSide, Place, Purpose, RateInForce, Tag, Template,
+    Account, AccountKind, Attachment, Balance, Category, Counterparty, CounterpartyKind, CounterpartyRef, Entry, EntryField, EntryStatus, ExchangeRate, Flow,
+    Flowed, Group, GroupBy, Line, LineSide, Place, Purpose, RateInForce, Revision, RevisionAction, Tag, Template, Trash, TrashedAttachment, TrashedEntry, Who,
+    WhoKind,
 };
 use crate::repository::{CounterpartyChoice, EntryFilter, NewEntry, NewLine, NewPlace, PossibleDuplicate, Side};
-use crate::{MIGRATOR, balance, country, parse, repository};
+use crate::{MIGRATOR, attachment, balance, country, parse, repository};
 
+mod attachments;
 mod details;
+mod history;
 mod holds;
 mod payment;
 mod quick;
@@ -43,6 +46,18 @@ pub fn router(pool: PgPool) -> Router {
         .route("/ledger/entries/{id}", get(read_entry).patch(holds::change_entry).delete(delete_entry))
         .route("/ledger/entries/{id}/clear", post(holds::clear_entry))
         .route("/ledger/entries/{id}/repeat", post(templates::repeat))
+        .route("/ledger/entries/{id}/history", get(history::history))
+        .route(
+            "/ledger/entries/{id}/attachments",
+            post(attachments::attach).layer(DefaultBodyLimit::max(attachment::BODY_LIMIT)),
+        )
+        .route("/ledger/attachments/{id}", delete(attachments::remove))
+        .route("/ledger/attachments/{id}/content", get(attachments::content))
+        .route("/ledger/trash", get(history::trash).delete(history::empty))
+        .route("/ledger/trash/entries/{id}", delete(history::erase_entry))
+        .route("/ledger/trash/entries/{id}/restore", post(history::restore_entry))
+        .route("/ledger/trash/attachments/{id}", delete(history::erase_attachment))
+        .route("/ledger/trash/attachments/{id}/restore", post(history::restore_attachment))
         .route("/ledger/templates", get(templates::list_templates).post(templates::create_template))
         .route("/ledger/templates/order", put(templates::order_templates))
         .route("/ledger/templates/{id}", patch(templates::change_template).delete(templates::delete_template))
@@ -333,6 +348,7 @@ async fn create_entry(State(pool): State<PgPool>, caller: Caller, Json(new): Jso
     let posted = repository::post_entry(
         &pool,
         caller.id(),
+        &caller.into(),
         &NewEntry {
             occurred_on: new.occurred_on.unwrap_or_else(today),
             description: new.description.trim().to_owned(),
@@ -513,6 +529,7 @@ async fn exchange(State(pool): State<PgPool>, caller: Caller, Json(body): Json<E
     let posted = repository::post_entry(
         &pool,
         owner_id,
+        &caller.into(),
         &NewEntry {
             occurred_on,
             description,
@@ -615,7 +632,8 @@ async fn read_entry(State(pool): State<PgPool>, caller: Caller, Path(id): Path<U
         .ok_or_else(|| AppError::not_found(anyhow::anyhow!("no such entry")))
 }
 
-/// Deletes an entry and its lines.
+/// Deletes an entry and its lines, to the trash: for thirty days it can be
+/// restored as it was, with its files.
 ///
 /// A whole entry, never one line: half an entry is money from nowhere, and the
 /// balance rule would refuse it anyway.
@@ -625,12 +643,12 @@ async fn read_entry(State(pool): State<PgPool>, caller: Caller, Path(id): Path<U
     tag = "ledger",
     params(("id" = Uuid, Path, description = "The entry")),
     responses(
-        (status = 204, description = "Deleted"),
+        (status = 204, description = "In the trash"),
         (status = 404, description = "No such entry", body = austeris_common::error::ErrorBody),
     ),
 )]
 async fn delete_entry(State(pool): State<PgPool>, caller: Caller, Path(id): Path<Uuid>) -> AppResult<StatusCode> {
-    if repository::delete_entry(&pool, caller.id(), id).await? {
+    if repository::delete_entry(&pool, caller.id(), &caller.into(), id).await? {
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(AppError::not_found(anyhow::anyhow!("no such entry")))
@@ -947,6 +965,16 @@ const RESTRICT_VIOLATION: &str = "23001";
         holds::change_entry,
         holds::clear_entry,
         templates::repeat,
+        history::history,
+        attachments::attach,
+        attachments::content,
+        attachments::remove,
+        history::trash,
+        history::empty,
+        history::restore_entry,
+        history::erase_entry,
+        history::restore_attachment,
+        history::erase_attachment,
         templates::list_templates,
         templates::create_template,
         templates::change_template,
@@ -985,6 +1013,15 @@ const RESTRICT_VIOLATION: &str = "23001";
         Tag,
         Line,
         LineSide,
+        Attachment,
+        Revision,
+        RevisionAction,
+        EntryField,
+        Who,
+        WhoKind,
+        Trash,
+        TrashedEntry,
+        TrashedAttachment,
         Balance,
         Balances,
         Total,
@@ -1022,7 +1059,7 @@ const RESTRICT_VIOLATION: &str = "23001";
         Group,
         Flowed,
     )),
-    tags((name = "ledger", description = "Accounts, categories, the movements between them, and who, where and which labels each one was")),
+    tags((name = "ledger", description = "Accounts, categories, the movements between them, who, where and which labels each one was, the files kept with them, what happened to each, and the trash")),
 )]
 pub struct ApiDoc;
 

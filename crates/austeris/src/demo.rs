@@ -16,11 +16,13 @@
 //! run and duplicates nothing, and a run that died halfway is finished by the
 //! next one.
 
+use std::fmt::Write as _;
+
 use anyhow::{Context, Result, bail};
-use austeris_common::{Config, db};
+use austeris_common::{Actor, Config, db};
 use austeris_ledger::exchange::{self, Money};
 use austeris_ledger::model::{AccountKind, CounterpartyKind, EntryStatus, Flow, Purpose};
-use austeris_ledger::repository::{self as ledger, CounterpartyChoice, EntryFilter, NewEntry, NewLine, NewPlace, Side};
+use austeris_ledger::repository::{self as ledger, CounterpartyChoice, EntryChanges, EntryFilter, NewEntry, NewLine, NewPlace, Side};
 use austeris_market::model::Kind;
 use austeris_market::repository as market;
 use chrono::{Datelike, Days, NaiveDate, NaiveTime, Utc};
@@ -45,6 +47,12 @@ const SOURCE: &str = "demo";
 
 /// How many days a card payment stays held before the bank posts it.
 const HELD_DAYS: u64 = 2;
+
+/// Who the books say wrote what the demo seeds: the demo, under its own name,
+/// as every entry it posts says on itself.
+fn demo() -> Actor {
+    Actor::module(Some(SOURCE))
+}
 
 /// Whether `AUSTERIS_DEMO` asks `serve` to seed before it starts.
 #[must_use]
@@ -158,13 +166,14 @@ pub async fn seed(books: &Books) -> Result<Seeded> {
             day_entries.push(exchange);
         }
         for entry in day_entries {
-            if ledger::post_entry(&books.ledger, owner, &entry).await?.created {
+            if ledger::post_entry(&books.ledger, owner, &demo(), &entry).await?.created {
                 entries += 1;
             }
         }
     }
     post_what_the_bank_has_taken(&books.ledger, owner, today).await?;
     buttons(&books.ledger, owner, &household.shops).await?;
+    memory(&books.ledger, owner, household.shops.grocer, today).await?;
 
     prices(&books.market, first, today).await?;
     Ok(Seeded { created, entries })
@@ -189,10 +198,128 @@ async fn post_what_the_bank_has_taken(pool: &PgPool, owner: Uuid, today: NaiveDa
     for entry in held {
         let posted_on = entry.occurred_on + Days::new(HELD_DAYS);
         if posted_on <= today {
-            ledger::clear_entry(pool, owner, entry.id, posted_on, None).await?;
+            ledger::clear_entry(pool, owner, &demo(), entry.id, posted_on, None).await?;
         }
     }
     Ok(())
+}
+
+/// What the household's books remember beyond their entries: the receipt of
+/// the latest groceries kept with them, that entry's description put right,
+/// and a payment typed twice whose second copy was deleted - so the history,
+/// the files and the trash are not empty on a fresh stand.
+///
+/// Made when nothing of the kind is there yet, and only then, like the
+/// buttons: a person trying the demo who erases the trash is not overruled by
+/// the next run.
+async fn memory(pool: &PgPool, owner: Uuid, grocer: Uuid, today: NaiveDate) -> Result<()> {
+    if ledger::anything_remembered(pool, owner).await? {
+        return Ok(());
+    }
+    let latest = ledger::entries(
+        pool,
+        owner,
+        &EntryFilter {
+            counterparty_id: Some(grocer),
+            status: Some(EntryStatus::Cleared),
+            limit: 1,
+            ..EntryFilter::default()
+        },
+    )
+    .await?;
+    let Some(groceries) = latest.into_iter().next() else {
+        return Ok(());
+    };
+
+    let paid = groceries.lines.iter().find(|line| line.side == austeris_ledger::model::LineSide::Account);
+    if let Some(paid) = paid {
+        let pdf = receipt("Corner Grocer", groceries.occurred_on, -paid.amount, &paid.currency);
+        ledger::attach(pool, owner, &demo(), groceries.id, "receipt.pdf", "application/pdf", &pdf).await?;
+    }
+    let changes = EntryChanges {
+        description: Some("groceries for the week".to_owned()),
+        ..EntryChanges::default()
+    };
+    ledger::change_entry(pool, owner, &demo(), groceries.id, &changes).await?;
+
+    // The same payment typed a second time, and the second one deleted.
+    let twice = NewEntry {
+        occurred_on: groceries.occurred_on,
+        description: groceries.description.clone(),
+        idempotency_key: Some(format!("{SOURCE}:{today}:typed-twice")),
+        source: Some(SOURCE.to_owned()),
+        counterparty: Some(CounterpartyChoice::Existing(grocer)),
+        lines: groceries
+            .lines
+            .iter()
+            .filter_map(|line| {
+                let side = match (line.side, line.account_id, line.category_id) {
+                    (austeris_ledger::model::LineSide::Account, Some(account), _) => Side::Account(account),
+                    (austeris_ledger::model::LineSide::Category, _, Some(category)) => Side::Category(category),
+                    _ => return None,
+                };
+                Some(NewLine {
+                    side,
+                    amount: line.amount,
+                    currency: line.currency.clone(),
+                    note: line.note.clone(),
+                })
+            })
+            .collect(),
+        ..NewEntry::default()
+    };
+    let posted = ledger::post_entry(pool, owner, &demo(), &twice).await?;
+    ledger::delete_entry(pool, owner, &demo(), posted.entry.id).await?;
+    Ok(())
+}
+
+/// A shop's receipt as a one-page PDF: made up, like everything here.
+///
+/// Written by hand rather than with a library: a page of monospaced text is a
+/// few objects and a table of where each starts, and the table is the only
+/// part that has to be counted.
+fn receipt(shop: &str, day: NaiveDate, total: Decimal, currency: &str) -> Vec<u8> {
+    // A string, so the columns below pad it: a decimal's own formatting does
+    // not take a width.
+    let amount = total.round_dp(2).to_string();
+    let lines = [
+        shop.to_owned(),
+        day.format("%Y-%m-%d").to_string(),
+        String::new(),
+        format!("{:<16}{:>10}", "Groceries", amount),
+        format!("{:<16}{:>10}", format!("TOTAL {currency}"), amount),
+        String::new(),
+        "Thank you - this receipt is made up.".to_owned(),
+    ];
+    // Writing into a String cannot fail; the results say nothing.
+    let mut text = String::from("BT /F1 9 Tf 12 280 Td 12 TL\n");
+    for line in &lines {
+        let escaped = line.replace('\\', "\\\\").replace('(', "\\(").replace(')', "\\)");
+        let _ = writeln!(text, "({escaped}) Tj T*");
+    }
+    text.push_str("ET\n");
+
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 240 300] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>".to_owned(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>".to_owned(),
+        format!("<< /Length {} >>\nstream\n{text}endstream", text.len()),
+    ];
+    let mut pdf = String::from("%PDF-1.4\n");
+    let mut offsets = Vec::with_capacity(objects.len());
+    for (number, object) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        let _ = write!(pdf, "{} 0 obj\n{object}\nendobj\n", number + 1);
+    }
+    let xref = pdf.len();
+    let _ = write!(pdf, "xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1);
+    for offset in offsets {
+        // Twenty bytes to an entry, the trailing space included.
+        let _ = writeln!(pdf, "{offset:010} 00000 n ");
+    }
+    let _ = write!(pdf, "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1);
+    pdf.into_bytes()
 }
 
 /// The household's buttons: what it pays most often, each made from its
@@ -718,6 +845,60 @@ mod tests {
             held.iter().all(|entry| entry.occurred_on + chrono::Days::new(super::HELD_DAYS) > today),
             "a payment stayed held for longer than a bank takes"
         );
+
+        // What the books remember, made once: a receipt on the latest
+        // groceries, their description put right, a double in the trash.
+        let trash = austeris_ledger::repository::trash(&books.ledger, owner).await.expect("reading the trash");
+        assert_eq!(trash.entries.len(), 1, "a second run put a second double in the trash");
+        assert_eq!(trash.entries[0].who.module.as_deref(), Some("demo"));
+        let shopped = austeris_ledger::repository::entries(
+            &books.ledger,
+            owner,
+            &austeris_ledger::repository::EntryFilter {
+                limit: 200,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("listing entries");
+        let receipted: Vec<_> = shopped.iter().filter(|entry| !entry.attachments.is_empty()).collect();
+        assert_eq!(receipted.len(), 1);
+        assert_eq!(receipted[0].description, "groceries for the week");
+        let history = austeris_ledger::repository::history(&books.ledger, owner, receipted[0].id)
+            .await
+            .expect("reading a history")
+            .expect("a history");
+        assert_eq!(history.len(), 3, "recorded, the receipt kept, the description put right: {history:#?}");
+    }
+
+    #[test]
+    fn the_receipt_is_a_pdf_whose_table_points_at_its_objects() {
+        let pdf = super::receipt("Corner Grocer", day(7), Decimal::new(4520, 2), "EUR");
+        assert_eq!(austeris_ledger::attachment::media_type(&pdf), Some("application/pdf"));
+        let text = String::from_utf8(pdf).expect("ascii");
+        let table = &text[text.find("xref\n").expect("a table")..];
+        let offsets: Vec<usize> = table
+            .lines()
+            .skip(3)
+            .take_while(|line| line.ends_with(" n "))
+            .map(|line| line[..10].parse().expect("an offset"))
+            .collect();
+        assert_eq!(offsets.len(), 5);
+        for (number, offset) in offsets.into_iter().enumerate() {
+            assert!(
+                text[offset..].starts_with(&format!("{} 0 obj", number + 1)),
+                "object {} is not at {offset}",
+                number + 1
+            );
+        }
+        let start: usize = text
+            .rsplit("startxref\n")
+            .next()
+            .and_then(|tail| tail.lines().next())
+            .and_then(|line| line.parse().ok())
+            .expect("a start");
+        assert!(text[start..].starts_with("xref\n"));
+        assert!(text.contains("(TOTAL EUR            45.20) Tj"), "{text}");
     }
 
     #[tokio::test]

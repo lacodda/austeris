@@ -67,7 +67,9 @@ pub async fn quick_entry(State(pool): State<PgPool>, caller: Caller, Json(quick)
     let understood = understand(&pool, owner_id, &quick).await?;
     let new_tags = understood.new_tags;
     let (entry, conversion) = understood.priced.entry(&pool, owner_id, quick.allow_duplicate).await?;
-    let posted = repository::post_entry(&pool, owner_id, &entry).await.map_err(refused_or_missing)?;
+    let posted = repository::post_entry(&pool, owner_id, &caller.into(), &entry)
+        .await
+        .map_err(refused_or_missing)?;
 
     // Read back as stored, so what is reported as new is the row itself.
     let new_counterparty = match (&entry.counterparty, &posted.entry.counterparty) {

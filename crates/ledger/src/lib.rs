@@ -13,6 +13,7 @@
 //! currency exchange are one mechanism rather than four, and no balance is ever
 //! stored: an account's balance is the sum of its lines.
 
+pub mod attachment;
 pub mod balance;
 pub mod country;
 pub mod currency;
@@ -23,6 +24,7 @@ pub mod paid;
 pub mod parse;
 pub mod repository;
 pub mod routes;
+pub mod trash;
 
 use sqlx::migrate::Migrator;
 

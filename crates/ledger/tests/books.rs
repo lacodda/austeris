@@ -12,7 +12,7 @@
 use std::str::FromStr;
 use std::time::Duration;
 
-use austeris_common::{Config, USER_HEADER, db};
+use austeris_common::{Actor, Config, USER_HEADER, db};
 // The gRPC surface is exercised through its own trait rather than over a
 // socket: what is worth testing is the contract's answers, not tonic's
 // transport.
@@ -147,7 +147,7 @@ async fn an_entry_that_does_not_balance_is_refused_at_commit() {
     // category: five hundred guaranies from nowhere.
     lopsided.lines[1].amount = decimal("44500");
 
-    let error = repository::post_entry(&pool, books.owner, &lopsided)
+    let error = repository::post_entry(&pool, books.owner, &Actor::Person(books.owner), &lopsided)
         .await
         .expect_err("an unbalanced entry was stored");
     let message = format!("{error:#}");
@@ -172,7 +172,7 @@ async fn a_two_sided_entry_commits_although_its_first_line_is_unbalanced() {
     let Some(pool) = pool("test_ledger_deferred").await else { return };
     let books = books(&pool).await;
 
-    let posted = repository::post_entry(&pool, books.owner, &spend(&books, "45000", day(2026, 9, 17)))
+    let posted = repository::post_entry(&pool, books.owner, &Actor::Person(books.owner), &spend(&books, "45000", day(2026, 9, 17)))
         .await
         .expect("a balanced entry was refused");
 
@@ -186,10 +186,10 @@ async fn a_balance_is_the_sum_of_the_lines_and_the_opening_amount() {
     let Some(pool) = pool("test_ledger_balances").await else { return };
     let books = books(&pool).await;
 
-    repository::post_entry(&pool, books.owner, &spend(&books, "45000", day(2026, 9, 10)))
+    repository::post_entry(&pool, books.owner, &Actor::Person(books.owner), &spend(&books, "45000", day(2026, 9, 10)))
         .await
         .expect("posting");
-    repository::post_entry(&pool, books.owner, &spend(&books, "5000", day(2026, 9, 12)))
+    repository::post_entry(&pool, books.owner, &Actor::Person(books.owner), &spend(&books, "5000", day(2026, 9, 12)))
         .await
         .expect("posting");
 
@@ -205,10 +205,10 @@ async fn a_balance_as_of_a_day_ignores_what_happened_after_it() {
     let Some(pool) = pool("test_ledger_as_of").await else { return };
     let books = books(&pool).await;
 
-    repository::post_entry(&pool, books.owner, &spend(&books, "45000", day(2026, 9, 10)))
+    repository::post_entry(&pool, books.owner, &Actor::Person(books.owner), &spend(&books, "45000", day(2026, 9, 10)))
         .await
         .expect("posting");
-    repository::post_entry(&pool, books.owner, &spend(&books, "30000", day(2026, 9, 20)))
+    repository::post_entry(&pool, books.owner, &Actor::Person(books.owner), &spend(&books, "30000", day(2026, 9, 20)))
         .await
         .expect("posting");
 
@@ -234,6 +234,7 @@ async fn a_split_receipt_is_one_entry_with_one_payment() {
     let posted = repository::post_entry(
         &pool,
         books.owner,
+        &Actor::Person(books.owner),
         &NewEntry {
             occurred_on: day(2026, 9, 17),
             description: "supermarket".to_owned(),
@@ -284,6 +285,7 @@ async fn a_transfer_between_accounts_touches_no_category() {
     repository::post_entry(
         &pool,
         books.owner,
+        &Actor::Person(books.owner),
         &NewEntry {
             occurred_on: day(2026, 9, 17),
             description: "to the bank".to_owned(),
@@ -403,6 +405,7 @@ async fn a_line_in_a_currency_other_than_its_accounts_is_refused() {
     let error = repository::post_entry(
         &pool,
         books.owner,
+        &Actor::Person(books.owner),
         &NewEntry {
             occurred_on: day(2026, 9, 17),
             description: "changed money".to_owned(),
@@ -446,6 +449,7 @@ async fn a_conversion_that_does_not_convert_is_refused() {
     let error = repository::post_entry(
         &pool,
         books.owner,
+        &Actor::Person(books.owner),
         &NewEntry {
             occurred_on: day(2026, 9, 17),
             description: "vanished".to_owned(),
@@ -477,7 +481,7 @@ async fn a_conversion_that_does_not_convert_is_refused() {
 async fn an_accounts_currency_does_not_change_under_its_lines() {
     let Some(pool) = pool("test_ledger_currency_fixed").await else { return };
     let books = books(&pool).await;
-    repository::post_entry(&pool, books.owner, &spend(&books, "1000", day(2026, 9, 17)))
+    repository::post_entry(&pool, books.owner, &Actor::Person(books.owner), &spend(&books, "1000", day(2026, 9, 17)))
         .await
         .expect("posting");
 
@@ -749,8 +753,12 @@ async fn posting_the_same_key_twice_books_once() {
     salary.idempotency_key = Some("salary-2026-09".to_owned());
     salary.source = Some("recurring".to_owned());
 
-    let first = repository::post_entry(&pool, books.owner, &salary).await.expect("posting");
-    let second = repository::post_entry(&pool, books.owner, &salary).await.expect("posting again");
+    let first = repository::post_entry(&pool, books.owner, &Actor::Person(books.owner), &salary)
+        .await
+        .expect("posting");
+    let second = repository::post_entry(&pool, books.owner, &Actor::Person(books.owner), &salary)
+        .await
+        .expect("posting again");
 
     assert!(first.created, "the first post did not create the entry");
     assert!(!second.created, "the second post claimed to create a second entry");
@@ -777,9 +785,17 @@ async fn two_people_with_the_same_key_are_two_entries() {
     let mut yours = spend(&theirs, "1000", day(2026, 9, 1));
     yours.idempotency_key = Some("salary-2026-09".to_owned());
 
-    assert!(repository::post_entry(&pool, mine.owner, &ours).await.expect("posting").created);
     assert!(
-        repository::post_entry(&pool, theirs.owner, &yours).await.expect("posting").created,
+        repository::post_entry(&pool, mine.owner, &Actor::Person(mine.owner), &ours)
+            .await
+            .expect("posting")
+            .created
+    );
+    assert!(
+        repository::post_entry(&pool, theirs.owner, &Actor::Person(theirs.owner), &yours)
+            .await
+            .expect("posting")
+            .created,
         "one person's idempotency key blocked another person's entry"
     );
 }
@@ -796,7 +812,7 @@ async fn an_entry_cannot_name_somebody_elses_account() {
     let mut trespass = spend(&mine, "1000", day(2026, 9, 17));
     trespass.lines[0].side = Side::Account(theirs.account);
 
-    let error = repository::post_entry(&pool, mine.owner, &trespass)
+    let error = repository::post_entry(&pool, mine.owner, &Actor::Person(mine.owner), &trespass)
         .await
         .expect_err("an entry reached another person's account");
     assert!(format!("{error:#}").contains("does not exist"), "{error:#}");
@@ -808,7 +824,7 @@ async fn one_persons_entries_are_not_readable_from_anothers_session() {
     let mine = books(&pool).await;
     let theirs = books(&pool).await;
 
-    let posted = repository::post_entry(&pool, mine.owner, &spend(&mine, "45000", day(2026, 9, 17)))
+    let posted = repository::post_entry(&pool, mine.owner, &Actor::Person(mine.owner), &spend(&mine, "45000", day(2026, 9, 17)))
         .await
         .expect("posting");
 
@@ -988,7 +1004,7 @@ async fn an_entry_is_deleted_whole_or_not_at_all() {
     let Some(pool) = pool("test_ledger_delete").await else { return };
     let books = books(&pool).await;
 
-    let posted = repository::post_entry(&pool, books.owner, &spend(&books, "45000", day(2026, 9, 17)))
+    let posted = repository::post_entry(&pool, books.owner, &Actor::Person(books.owner), &spend(&books, "45000", day(2026, 9, 17)))
         .await
         .expect("posting");
 
@@ -1012,7 +1028,7 @@ async fn an_entry_is_deleted_whole_or_not_at_all() {
 async fn an_account_with_entries_cannot_be_deleted_out_from_under_them() {
     let Some(pool) = pool("test_ledger_account_restrict").await else { return };
     let books = books(&pool).await;
-    repository::post_entry(&pool, books.owner, &spend(&books, "45000", day(2026, 9, 17)))
+    repository::post_entry(&pool, books.owner, &Actor::Person(books.owner), &spend(&books, "45000", day(2026, 9, 17)))
         .await
         .expect("posting");
 
@@ -1295,6 +1311,7 @@ async fn an_amount_survives_storage_with_every_digit() {
     repository::post_entry(
         &pool,
         books.owner,
+        &Actor::Person(books.owner),
         &NewEntry {
             occurred_on: day(2026, 9, 17),
             description: "a fee".to_owned(),
@@ -1639,6 +1656,7 @@ async fn totals_gather_what_money_went_on_by_tag_counterparty_and_category() {
     repository::post_entry(
         &pool,
         books.owner,
+        &Actor::Person(books.owner),
         &NewEntry {
             occurred_on: day(2026, 9, 20),
             tags: vec!["holiday".to_owned()],
@@ -1903,6 +1921,7 @@ async fn a_split_hold_does_not_guess_which_part_posted_for_another_amount() {
     let posted = repository::post_entry(
         &pool,
         books.owner,
+        &Actor::Person(books.owner),
         &NewEntry {
             occurred_on: day(2026, 9, 10),
             pending: true,
@@ -2178,11 +2197,12 @@ async fn an_entry_from_more_than_a_minute_ago_is_not_a_second_press() {
 
     let (status, body) = quick(&pool, books.owner, line).await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
-    sqlx::query("UPDATE entries SET created_at = now() - interval '61 seconds' WHERE owner_id = $1")
-        .bind(books.owner)
-        .execute(&pool)
-        .await
-        .expect("ageing the entry");
+    outside(
+        &pool,
+        "UPDATE entries SET created_at = now() - interval '61 seconds' WHERE owner_id = $1",
+        books.owner,
+    )
+    .await;
 
     let (status, body) = quick(&pool, books.owner, line).await;
     assert_eq!(status, StatusCode::CREATED, "a coffee a minute later was taken for a second press: {body}");
@@ -2198,7 +2218,12 @@ async fn a_module_posting_the_same_movement_under_two_keys_is_not_asked_about_it
     for key in ["recurring:1", "recurring:2"] {
         let mut entry = spend(&books, "45000", day(2026, 10, 11));
         entry.idempotency_key = Some(key.to_owned());
-        assert!(repository::post_entry(&pool, books.owner, &entry).await.expect("posting").created);
+        assert!(
+            repository::post_entry(&pool, books.owner, &Actor::Person(books.owner), &entry)
+                .await
+                .expect("posting")
+                .created
+        );
     }
     assert_eq!(count(&pool, "entries", books.owner).await, 2);
 }
@@ -2634,10 +2659,47 @@ async fn books_from_before_templates(pool: &PgPool) -> Uuid {
         .await
         .expect("rolling back to v0.10");
     let books = books(pool).await;
-    repository::post_entry(pool, books.owner, &spend(&books, "45000", day(2026, 10, 1)))
-        .await
-        .expect("an entry");
+    // Written as v0.10 wrote it: today's repository reads parts of an entry
+    // that schema has no table for.
+    entry_as_written_before(pool, &books, "45000").await;
     books.owner
+}
+
+/// A two-line spend written straight into the tables, as a schema older than
+/// today's repository holds it.
+async fn entry_as_written_before(pool: &PgPool, books: &Books, amount: &str) -> Uuid {
+    let entry: Uuid = sqlx::query_scalar(
+        "INSERT INTO entries (owner_id, occurred_on, cleared_on, description) VALUES ($1, '2026-10-01', '2026-10-01', 'lunch') RETURNING id",
+    )
+    .bind(books.owner)
+    .fetch_one(pool)
+    .await
+    .expect("an entry");
+    sqlx::query(
+        "INSERT INTO entry_lines (entry_id, side, account_id, category_id, amount, currency)
+         VALUES ($1, 'account', $2, NULL, -($4::numeric), 'PYG'), ($1, 'category', NULL, $3, $4::numeric, 'PYG')",
+    )
+    .bind(entry)
+    .bind(books.account)
+    .bind(books.food)
+    .bind(amount)
+    .execute(pool)
+    .await
+    .expect("the lines");
+    entry
+}
+
+/// Runs a statement the way a repair script or psql would: from outside
+/// austeris, which the books' history records as such. Through the service's
+/// own connection name it would be refused for naming nobody.
+async fn outside(pool: &PgPool, sql: &'static str, owner: Uuid) {
+    let mut transaction = pool.begin().await.expect("a transaction");
+    sqlx::query("SELECT set_config('application_name', 'repair-script', true)")
+        .execute(&mut *transaction)
+        .await
+        .expect("naming the connection");
+    sqlx::query(sql).bind(owner).execute(&mut *transaction).await.expect("writing from outside");
+    transaction.commit().await.expect("committing");
 }
 
 #[tokio::test]

@@ -56,7 +56,7 @@ prost = "0.14.2"
 rust-embed = { version = "8.13.0", features = ["mime-guess"] }
 rust_decimal = { version = "1.39.0", features = ["db-postgres", "serde-with-str", "serde-with-arbitrary-precision"] }
 sha2 = "0.11.0"
-sqlx = { version = "0.9", features = ["runtime-tokio", "tls-rustls", "postgres", "migrate", "chrono", "uuid", "rust_decimal"] }
+sqlx = { version = "0.9", features = ["runtime-tokio", "tls-rustls", "postgres", "migrate", "chrono", "uuid", "rust_decimal", "json"] }
 thiserror = "2.0.19"
 tokio = { version = "1.53.1", features = ["full"] }
 # gRPC between services (ADR 0003). tonic 0.14 keeps the prost codec in its own

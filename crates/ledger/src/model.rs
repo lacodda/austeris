@@ -215,6 +215,9 @@ pub struct Entry {
     pub tags: Vec<String>,
     /// The sides of the movement. They sum to zero in every currency.
     pub lines: Vec<Line>,
+    /// The files kept with it - a photo of the receipt, the bank's PDF - in
+    /// the order they were attached. What each is, not the file itself.
+    pub attachments: Vec<Attachment>,
 }
 
 impl Entry {
@@ -474,6 +477,151 @@ pub struct Template {
     pub pending: bool,
 }
 
+/// A file kept with an entry: what it is, without its bytes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, sqlx::FromRow, utoipa::ToSchema)]
+pub struct Attachment {
+    /// Stable identifier; its content is read by it.
+    pub id: Uuid,
+    /// The file's name, as it was uploaded.
+    pub name: String,
+    /// What the file is, as read from its bytes: `image/jpeg`,
+    /// `application/pdf`.
+    pub media_type: String,
+    /// How large it is, in bytes.
+    pub size: i64,
+    /// When it was attached.
+    pub created_at: DateTime<Utc>,
+}
+
+/// Who changed an entry, as its history recorded it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct Who {
+    /// A person, a module, or something outside austeris.
+    pub kind: WhoKind,
+    /// The person, when it was one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub person_id: Option<Uuid>,
+    /// The module's name, when it was one and it gave its name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub module: Option<String>,
+}
+
+/// What kind of writer changed an entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type, utoipa::ToSchema)]
+#[sqlx(type_name = "revision_actor", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum WhoKind {
+    /// A person, through austeris.
+    Person,
+    /// A module, posting for a person.
+    Module,
+    /// A write to the database that did not come through austeris: psql, a
+    /// script. Recorded all the same - an entry changed that way is changed.
+    Outside,
+}
+
+/// What happened to an entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type, utoipa::ToSchema)]
+#[sqlx(type_name = "revision_action", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum RevisionAction {
+    /// It was recorded.
+    Created,
+    /// Something about it changed; `changed` says what.
+    Changed,
+    /// It was deleted, and went to the trash.
+    Deleted,
+    /// It came back from the trash.
+    Restored,
+}
+
+/// A part of an entry a change can touch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum EntryField {
+    /// The day the money moved.
+    OccurredOn,
+    /// What it is called.
+    Description,
+    /// Whether, and when, the bank posted it.
+    Status,
+    /// Who the money went to or came from.
+    Counterparty,
+    /// Where it happened.
+    Place,
+    /// Its labels.
+    Tags,
+    /// Its sides: the money itself.
+    Lines,
+    /// The files kept with it.
+    Attachments,
+}
+
+/// One thing that happened to an entry: when, by whom, and what it was before
+/// and after.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct Revision {
+    /// The revision's place in the order things happened.
+    pub id: i64,
+    /// When.
+    pub at: DateTime<Utc>,
+    /// What happened.
+    pub action: RevisionAction,
+    /// Who did it.
+    pub who: Who,
+    /// What a change changed, in the order an entry is read. Empty for the
+    /// other actions, which are about the whole entry.
+    pub changed: Vec<EntryField>,
+    /// The entry as it was; absent when it did not exist yet.
+    pub before: Option<Entry>,
+    /// The entry as it became; absent when it was deleted.
+    pub after: Option<Entry>,
+}
+
+/// An entry in the trash.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct TrashedEntry {
+    /// The entry as it was when it was deleted, with the files that go back
+    /// with it.
+    pub entry: Entry,
+    /// When it was deleted.
+    pub deleted_at: DateTime<Utc>,
+    /// Who deleted it.
+    pub who: Who,
+    /// When it is erased for good, with its history and its files, unless it
+    /// is restored first.
+    pub erased_after: DateTime<Utc>,
+}
+
+/// A file taken off an entry that is still in the books.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct TrashedAttachment {
+    /// The file.
+    pub attachment: Attachment,
+    /// The entry it was taken off, which it goes back to.
+    pub entry_id: Uuid,
+    /// What that entry is called: its description, or who it was with.
+    pub entry_title: String,
+    /// The day that entry's money moved.
+    pub entry_occurred_on: NaiveDate,
+    /// When it was taken off.
+    pub removed_at: DateTime<Utc>,
+    /// When it is erased for good, unless it is restored first.
+    pub erased_after: DateTime<Utc>,
+}
+
+/// What is in the trash: deleted entries, and files taken off entries.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct Trash {
+    /// How many days the trash keeps what is put in it before erasing it.
+    pub keep_days: i32,
+    /// Deleted entries, the most recently deleted first.
+    pub entries: Vec<TrashedEntry>,
+    /// Files taken off entries still in the books, the most recently taken
+    /// off first. A deleted entry's files are with the entry instead.
+    pub attachments: Vec<TrashedAttachment>,
+}
+
 /// `Option<Decimal>` as a string, or absent.
 ///
 /// `rust_decimal::serde::str` does not cover the `Option`, and the derive needs
@@ -532,6 +680,7 @@ mod tests {
             place: None,
             tags: Vec::new(),
             lines,
+            attachments: Vec::new(),
         }
     }
 

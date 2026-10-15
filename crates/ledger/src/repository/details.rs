@@ -6,6 +6,7 @@
 //! after the fact; a write naming another person's row fails at the foreign key.
 
 use anyhow::{Context, Result};
+use austeris_common::Actor;
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
@@ -270,13 +271,17 @@ pub async fn rename_tag(pool: &PgPool, owner_id: Uuid, id: Uuid, name: &str) -> 
 /// # Errors
 ///
 /// Returns an error when the delete fails.
-pub async fn delete_tag(pool: &PgPool, owner_id: Uuid, id: Uuid) -> Result<bool> {
+pub async fn delete_tag(pool: &PgPool, owner_id: Uuid, by: &Actor, id: Uuid) -> Result<bool> {
+    // As `by`'s: taking the tag off every entry carrying it is a change to
+    // each of them, and their histories say who made it.
+    let mut transaction = by.begin(pool).await?;
     let deleted = sqlx::query("DELETE FROM tags WHERE owner_id = $1 AND id = $2")
         .bind(owner_id)
         .bind(id)
-        .execute(pool)
+        .execute(&mut *transaction)
         .await
         .context("deleting a tag")?;
+    transaction.commit().await.context("deleting a tag")?;
     Ok(deleted.rows_affected() > 0)
 }
 

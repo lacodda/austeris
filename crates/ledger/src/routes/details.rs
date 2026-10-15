@@ -267,7 +267,7 @@ pub async fn rename_tag(State(pool): State<PgPool>, caller: Caller, Path(id): Pa
     ),
 )]
 pub async fn delete_tag(State(pool): State<PgPool>, caller: Caller, Path(id): Path<Uuid>) -> AppResult<StatusCode> {
-    if repository::delete_tag(&pool, caller.id(), id).await? {
+    if repository::delete_tag(&pool, caller.id(), &caller.into(), id).await? {
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(AppError::not_found(anyhow::anyhow!("no such tag")))

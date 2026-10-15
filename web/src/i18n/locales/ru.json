@@ -193,8 +193,8 @@
     "postedToast": "Проведено.",
     "delete": "Удалить",
     "deleteTitle": "Удалить эту проводку?",
-    "deleteBody": "Её строки уйдут вместе с ней, и остатки, которые она сдвинула, вернутся. Отменить нельзя.",
-    "deleted": "Проводка удалена.",
+    "deleteBody": "Она уйдёт в корзину вместе с файлами, и оттуда её можно вернуть как была.",
+    "deleted": "Проводка в корзине.",
     "repeat": "Повторить сегодня"
   },
   "exchange": {
@@ -285,6 +285,81 @@
     },
     "template": {
       "name_taken": "Кнопка с такой надписью уже есть."
+    },
+    "attachment": {
+      "too_large": "Файл может быть не больше {{limit_mb}} МБ.",
+      "unsupported": "Сохраняются только картинка (JPEG, PNG, WebP, HEIC), PDF или XML-чек.",
+      "already_attached": "Этот файл уже приложен к проводке."
+    },
+    "request": {
+      "too_large": "Это больше {{limit_mb}} МБ - слишком много, чтобы отправить."
     }
+  },
+  "files": {
+    "title": "Файлы",
+    "attach": "Приложить файл",
+    "attaching": "Прикладываю...",
+    "none": "Файлов пока нет: фото чека, выписка банка в PDF.",
+    "remove": "Убрать {{name}}",
+    "removed": "{{name}} в корзине.",
+    "count_one": "{{count}} файл",
+    "count_few": "{{count}} файла",
+    "count_many": "{{count}} файлов",
+    "count_other": "{{count}} файла"
+  },
+  "history": {
+    "title": "История",
+    "created": "Записана",
+    "changed": "Изменена",
+    "deleted": "Удалена",
+    "restored": "Возвращена из корзины",
+    "you": "вы",
+    "someone": "другой человек",
+    "module": "модуль {{module}}",
+    "aModule": "модуль",
+    "outside": "не через austeris, прямо в базе",
+    "quoted": "«{{text}}»",
+    "nothing": "пусто",
+    "noOne": "никто",
+    "held": "в холде",
+    "posted": "проведена",
+    "dayChanged": "Дата: {{from}} → {{to}}",
+    "descriptionChanged": "Описание: {{from}} → {{to}}",
+    "statusChanged": "Состояние: {{from}} → {{to}}",
+    "counterpartyChanged": "Контрагент: {{from}} → {{to}}",
+    "placeChanged": "Место: {{from}} → {{to}}",
+    "amountChanged": "Сумма:",
+    "linesChanged": "Строки записаны заново.",
+    "attached": "Приложен {{name}}",
+    "removed": "Убран {{name}}"
+  },
+  "trash": {
+    "title": "Корзина",
+    "description": "Удалённые проводки и файлы ждут здесь {{days}} дней, потом стираются насовсем.",
+    "entries": "Проводки",
+    "files": "Файлы",
+    "emptyState": "Корзина пуста",
+    "emptyStateBody": "Удалённая проводка или файл ждёт здесь {{days}} дней, прежде чем стереться.",
+    "restore": "Вернуть",
+    "restoreNamed": "Вернуть {{name}}",
+    "erase": "Стереть",
+    "eraseNamed": "Стереть {{name}}",
+    "eraseTitle": "Стереть насовсем?",
+    "eraseEntryBody": "Проводка уйдёт вместе с историей и файлами, и вернуть её будет нечем.",
+    "eraseFileBody": "Вернуть файл потом будет нечем.",
+    "emptyAll": "Очистить корзину",
+    "emptyTitle": "Очистить корзину?",
+    "emptyBody": "Всё в ней сотрётся насовсем: проводки с историей и файлами и файлы, снятые с проводок.",
+    "withFiles_one": "{{count}} файл",
+    "withFiles_few": "{{count}} файла",
+    "withFiles_many": "{{count}} файлов",
+    "withFiles_other": "{{count}} файла",
+    "deletedAt": "Удалена {{when}}",
+    "removedAt": "Убран {{when}}",
+    "erasedOn": "сотрётся {{date}}",
+    "fromEntry": "С проводки {{title}}, {{date}}",
+    "restored": "Возвращено.",
+    "erased": "Стёрто.",
+    "emptied": "Корзина пуста."
   }
 }

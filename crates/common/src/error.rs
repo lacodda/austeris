@@ -235,6 +235,17 @@ codes! {
 
     /// Another of the person's buttons says the same.
     TemplateNameTaken = "template.name_taken",
+
+    /// A file larger than a file kept with an entry can be. Params:
+    /// `limit_mb`.
+    AttachmentTooLarge = "attachment.too_large",
+    /// A file that is not a picture, a PDF or an XML document.
+    AttachmentUnsupported = "attachment.unsupported",
+    /// The same file is on the entry already. Params: `name`, the name it is
+    /// on there under, when it is known.
+    AttachmentAlready = "attachment.already_attached",
+    /// A request larger than the gateway carries. Params: `limit_mb`.
+    RequestTooLarge = "request.too_large",
 }
 
 #[cfg(test)]

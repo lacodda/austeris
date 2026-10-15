@@ -212,6 +212,12 @@ fn start(service: Service, pool: sqlx::PgPool, grpc: TcpIncoming, peers: &Peers,
                 .add_service(austeris_ledger::grpc::Service::new(pool.clone()))
                 .serve_with_incoming(grpc);
             tasks.spawn(async move { server.await.context("the ledger gRPC listener stopped") });
+            // Never returns, as the price refresher does not.
+            let sweeper = austeris_ledger::trash::every_hour(pool.clone());
+            tasks.spawn(async move {
+                sweeper.await;
+                anyhow::bail!("the trash sweeper stopped")
+            });
             Ok(austeris_ledger::routes::router(pool))
         }
         Service::Market => {

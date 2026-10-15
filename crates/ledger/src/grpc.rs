@@ -10,6 +10,7 @@
 
 use std::str::FromStr;
 
+use austeris_common::Actor;
 use austeris_proto::ledger::v1::ledger_service_server::{LedgerService, LedgerServiceServer};
 use austeris_proto::ledger::v1::{
     Balance, GetBalancesRequest, GetBalancesResponse, PostEntryRequest, PostEntryResponse, RecordRatesRequest, RecordRatesResponse, line::Side as ProtoSide,
@@ -96,9 +97,12 @@ impl LedgerService for Service {
             });
         }
 
+        // The module is who writes: the entry's history says so, by the name
+        // it signs the entry with.
         let posted = repository::post_entry(
             &self.pool,
             owner_id,
+            &Actor::module(Some(&request.source)),
             &NewEntry {
                 occurred_on,
                 description: request.description.trim().to_owned(),

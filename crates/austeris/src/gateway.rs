@@ -8,7 +8,7 @@
 // `USER_HEADER` is defined in `common`, beside the extractor that reads it:
 // this is the only writer and every service is a reader, and the two agreeing
 // by coincidence is a bug waiting for someone to edit one of them.
-use austeris_common::{AppError, AppResult, USER_HEADER, health};
+use austeris_common::{AppError, AppResult, Code, USER_HEADER, health};
 use axum::Router;
 use axum::body::Body;
 use axum::extract::{Request, State};
@@ -86,9 +86,10 @@ async fn forward(State(upstream): State<Upstream>, request: Request) -> AppResul
         .parse()
         .map_err(|error| AppError::internal(anyhow::anyhow!("{} has an unusable address: {error}", upstream.service)))?;
 
-    let body = axum::body::to_bytes(body, MAX_BODY_BYTES)
-        .await
-        .map_err(|_| AppError::new(StatusCode::PAYLOAD_TOO_LARGE, anyhow::anyhow!("the request body is too large")))?;
+    let body = axum::body::to_bytes(body, MAX_BODY_BYTES).await.map_err(|_| {
+        AppError::new(StatusCode::PAYLOAD_TOO_LARGE, anyhow::anyhow!("the request body is too large"))
+            .with_code(Code::RequestTooLarge, serde_json::json!({ "limit_mb": MAX_BODY_BYTES / (1024 * 1024) }))
+    })?;
 
     let mut outgoing = upstream.client.request(parts.method.clone(), url).body(body);
     for (name, value) in &parts.headers {
@@ -174,11 +175,13 @@ fn session_cookie(parts: &axum::http::request::Parts) -> Option<String> {
     })
 }
 
-/// The largest request the gateway will carry.
+/// The largest request the gateway will carry: a file being attached to an
+/// entry, the largest thing anyone sends.
 ///
-/// Generous for JSON, and a bound rather than none: an unbounded body is a way
-/// to exhaust a Raspberry Pi's memory from outside.
-const MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
+/// A bound rather than none: an unbounded body is a way to exhaust a Raspberry
+/// Pi's memory from outside. The ledger's own, so the two cannot drift apart
+/// and leave a file the ledger would keep refused on the way to it.
+const MAX_BODY_BYTES: usize = austeris_ledger::attachment::BODY_LIMIT;
 
 /// Whether a header describes the connection rather than the request.
 ///

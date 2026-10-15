@@ -193,8 +193,8 @@
     "postedToast": "Posted.",
     "delete": "Delete",
     "deleteTitle": "Delete this entry?",
-    "deleteBody": "Its lines go with it, and the balances it moved move back. This cannot be undone.",
-    "deleted": "Entry deleted.",
+    "deleteBody": "It goes to the trash with its files, and can be brought back from there as it was.",
+    "deleted": "Moved to the trash.",
     "repeat": "Record again today"
   },
   "exchange": {
@@ -285,6 +285,77 @@
     },
     "template": {
       "name_taken": "There is already a button by that name."
+    },
+    "attachment": {
+      "too_large": "A file can be up to {{limit_mb}} MB.",
+      "unsupported": "Only a picture (JPEG, PNG, WebP, HEIC), a PDF or an XML receipt can be kept.",
+      "already_attached": "This file is on the entry already."
+    },
+    "request": {
+      "too_large": "That is more than {{limit_mb}} MB - too large to send."
     }
+  },
+  "files": {
+    "title": "Files",
+    "attach": "Attach a file",
+    "attaching": "Attaching...",
+    "none": "No files yet: a photo of the receipt, the bank's PDF.",
+    "remove": "Remove {{name}}",
+    "removed": "{{name}} moved to the trash.",
+    "count_one": "{{count}} file",
+    "count_other": "{{count}} files"
+  },
+  "history": {
+    "title": "History",
+    "created": "Recorded",
+    "changed": "Changed",
+    "deleted": "Deleted",
+    "restored": "Restored from the trash",
+    "you": "you",
+    "someone": "another person",
+    "module": "the {{module}} module",
+    "aModule": "a module",
+    "outside": "outside austeris, straight in the database",
+    "quoted": "\"{{text}}\"",
+    "nothing": "nothing",
+    "noOne": "no one",
+    "held": "held",
+    "posted": "posted",
+    "dayChanged": "Date: {{from}} → {{to}}",
+    "descriptionChanged": "Description: {{from}} → {{to}}",
+    "statusChanged": "Status: {{from}} → {{to}}",
+    "counterpartyChanged": "Counterparty: {{from}} → {{to}}",
+    "placeChanged": "Place: {{from}} → {{to}}",
+    "amountChanged": "Amount:",
+    "linesChanged": "Its lines were written again.",
+    "attached": "Attached {{name}}",
+    "removed": "Removed {{name}}"
+  },
+  "trash": {
+    "title": "Trash",
+    "description": "Deleted entries and files wait here for {{days}} days, then they are erased for good.",
+    "entries": "Entries",
+    "files": "Files",
+    "emptyState": "The trash is empty",
+    "emptyStateBody": "A deleted entry or file waits here for {{days}} days before it is erased.",
+    "restore": "Restore",
+    "restoreNamed": "Restore {{name}}",
+    "erase": "Erase",
+    "eraseNamed": "Erase {{name}}",
+    "eraseTitle": "Erase this for good?",
+    "eraseEntryBody": "The entry goes with its history and its files, and nothing brings it back.",
+    "eraseFileBody": "Nothing brings the file back afterwards.",
+    "emptyAll": "Empty the trash",
+    "emptyTitle": "Empty the trash?",
+    "emptyBody": "Everything in it is erased for good: the entries with their history and files, and the files taken off entries.",
+    "withFiles_one": "{{count}} file",
+    "withFiles_other": "{{count}} files",
+    "deletedAt": "Deleted {{when}}",
+    "removedAt": "Removed {{when}}",
+    "erasedOn": "erased {{date}}",
+    "fromEntry": "From {{title}}, {{date}}",
+    "restored": "Restored.",
+    "erased": "Erased.",
+    "emptied": "The trash is empty."
   }
 }

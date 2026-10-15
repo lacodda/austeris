@@ -63,7 +63,7 @@ pub async fn change_entry(State(pool): State<PgPool>, caller: Caller, Path(id): 
         tags: patch.tags.as_deref().map(tag_names).transpose()?,
     };
 
-    repository::change_entry(&pool, caller.id(), id, &changes)
+    repository::change_entry(&pool, caller.id(), &caller.into(), id, &changes)
         .await
         .map_err(refused_or_missing)?
         .map(Json)
@@ -129,7 +129,7 @@ pub async fn clear_entry(State(pool): State<PgPool>, caller: Caller, Path(id): P
         }
     };
 
-    match repository::clear_entry(&pool, owner_id, id, on, lines.as_deref())
+    match repository::clear_entry(&pool, owner_id, &caller.into(), id, on, lines.as_deref())
         .await
         .map_err(refused_or_missing)?
     {

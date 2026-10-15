@@ -3,32 +3,45 @@
 use std::collections::HashMap;
 
 use anyhow::{Context, Result};
+use austeris_common::Actor;
 use chrono::NaiveDate;
 use rust_decimal::Decimal;
+use sqlx::types::Json;
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::model::{
-    Account, AccountKind, Balance, Category, CounterpartyRef, Entry, EntryStatus, ExchangeRate, Flow, Line, LineSide, Place, Purpose, RateInForce,
+    Account, AccountKind, Attachment, Balance, Category, CounterpartyRef, Entry, EntryStatus, ExchangeRate, Flow, Line, LineSide, Place, Purpose, RateInForce,
 };
 
+mod attachments;
 mod details;
+mod history;
 mod templates;
 mod totals;
+mod trash;
 
+pub use attachments::*;
 pub use details::*;
+pub use history::*;
 pub use templates::*;
 pub use totals::*;
+pub use trash::*;
 
 /// What an entry's header is read with: its own columns, who and where it was,
-/// and its tags - everything but the lines, which come in a query of their own.
+/// its tags and what is attached to it - everything but the lines, which come
+/// in a query of their own.
 macro_rules! header_select {
     () => {
         "SELECT e.id, e.occurred_on, e.status, e.cleared_on, e.description, e.source,
                 cp.id AS counterparty_id, cp.name AS counterparty_name,
                 p.id AS place_id, p.country::text AS country, p.city,
                 ARRAY(SELECT t.name FROM entry_tags et JOIN tags t ON t.id = et.tag_id
-                       WHERE et.entry_id = e.id ORDER BY lower(t.name)) AS tags
+                       WHERE et.entry_id = e.id ORDER BY lower(t.name)) AS tags,
+                COALESCE((SELECT jsonb_agg(jsonb_build_object('id', a.id, 'name', a.name, 'media_type', a.media_type,
+                                                              'size', a.size, 'created_at', a.created_at)
+                                           ORDER BY a.created_at, a.id)
+                            FROM attachments a WHERE a.entry_id = e.id AND a.removed_at IS NULL), '[]'::jsonb) AS attachments
            FROM entries e
            LEFT JOIN counterparties cp ON cp.id = e.counterparty_id
            LEFT JOIN places p ON p.id = e.place_id"
@@ -453,7 +466,7 @@ pub struct Posted {
     pub created: bool,
 }
 
-/// Records a movement.
+/// Records a movement, as `by`'s.
 ///
 /// Header and lines go in one transaction, and the balance rule is checked at
 /// its commit - the constraint trigger is deferred, so the first line of a
@@ -465,7 +478,7 @@ pub struct Posted {
 ///
 /// Returns an error when the entry does not balance, when it references
 /// something that is not this person's, or when the write fails.
-pub async fn post_entry(pool: &PgPool, owner_id: Uuid, new: &NewEntry) -> Result<Posted> {
+pub async fn post_entry(pool: &PgPool, owner_id: Uuid, by: &Actor, new: &NewEntry) -> Result<Posted> {
     // An idempotency key that has already been used is answered from the
     // existing entry without opening a transaction that would only roll back.
     if let Some(key) = &new.idempotency_key
@@ -477,7 +490,7 @@ pub async fn post_entry(pool: &PgPool, owner_id: Uuid, new: &NewEntry) -> Result
         });
     }
 
-    let mut transaction = pool.begin().await.context("opening a transaction")?;
+    let mut transaction = by.begin(pool).await?;
 
     // An entry a person records is checked against what they recorded a
     // moment ago, and the check has to see every entry committed before it:
@@ -722,8 +735,8 @@ pub struct EntryChanges {
 ///
 /// Returns an error when a change breaks a rule of the schema - a day moved to
 /// after the one the bank posted it on - or when a write fails.
-pub async fn change_entry(pool: &PgPool, owner_id: Uuid, id: Uuid, changes: &EntryChanges) -> Result<Option<Entry>> {
-    let mut transaction = pool.begin().await.context("opening a transaction")?;
+pub async fn change_entry(pool: &PgPool, owner_id: Uuid, by: &Actor, id: Uuid, changes: &EntryChanges) -> Result<Option<Entry>> {
+    let mut transaction = by.begin(pool).await?;
 
     let exists: Option<Uuid> = sqlx::query_scalar("SELECT id FROM entries WHERE owner_id = $1 AND id = $2 FOR UPDATE")
         .bind(owner_id)
@@ -820,8 +833,8 @@ pub enum Cleared {
 /// Returns an error when the new lines do not balance or name something that
 /// is not this person's, when `on` is before the day it happened, or when a
 /// write fails.
-pub async fn clear_entry(pool: &PgPool, owner_id: Uuid, id: Uuid, on: NaiveDate, lines: Option<&[NewLine]>) -> Result<Cleared> {
-    let mut transaction = pool.begin().await.context("opening a transaction")?;
+pub async fn clear_entry(pool: &PgPool, owner_id: Uuid, by: &Actor, id: Uuid, on: NaiveDate, lines: Option<&[NewLine]>) -> Result<Cleared> {
+    let mut transaction = by.begin(pool).await?;
 
     let found: Option<(EntryStatus, Option<NaiveDate>)> = sqlx::query_as("SELECT status, cleared_on FROM entries WHERE owner_id = $1 AND id = $2 FOR UPDATE")
         .bind(owner_id)
@@ -858,7 +871,7 @@ pub async fn clear_entry(pool: &PgPool, owner_id: Uuid, id: Uuid, on: NaiveDate,
 }
 
 /// Refuses lines pointing at something that is not this person's.
-async fn ensure_sides_belong_to(transaction: &mut Transaction<'_, Postgres>, owner_id: Uuid, lines: &[NewLine]) -> Result<()> {
+pub(crate) async fn ensure_sides_belong_to(transaction: &mut Transaction<'_, Postgres>, owner_id: Uuid, lines: &[NewLine]) -> Result<()> {
     let accounts: Vec<Uuid> = lines.iter().filter_map(|line| line.side.account()).collect();
     let categories: Vec<Uuid> = lines.iter().filter_map(|line| line.side.category()).collect();
 
@@ -935,6 +948,7 @@ struct Header {
     country: Option<String>,
     city: Option<String>,
     tags: Vec<String>,
+    attachments: Json<Vec<Attachment>>,
 }
 
 impl Header {
@@ -951,6 +965,7 @@ impl Header {
             place: self.place_id.zip(self.country).map(|(id, country)| Place { id, country, city: self.city }),
             tags: self.tags,
             lines: lines.remove(&self.id).unwrap_or_default(),
+            attachments: self.attachments.0,
         }
     }
 }
@@ -1082,18 +1097,25 @@ async fn lines_of(pool: &PgPool, entry_ids: &[Uuid]) -> Result<HashMap<Uuid, Vec
     Ok(grouped)
 }
 
-/// Deletes an entry and its lines.
+/// Deletes an entry and its lines, to the trash.
+///
+/// Really deleted: its lines leave every balance, total and list at once, and
+/// none of them needs to know there is a trash. What it was is the last thing
+/// its history remembers, and [`restore_entry`] writes that back - with its
+/// files, which wait for it.
 ///
 /// # Errors
 ///
 /// Returns an error when the delete fails.
-pub async fn delete_entry(pool: &PgPool, owner_id: Uuid, id: Uuid) -> Result<bool> {
+pub async fn delete_entry(pool: &PgPool, owner_id: Uuid, by: &Actor, id: Uuid) -> Result<bool> {
+    let mut transaction = by.begin(pool).await?;
     let deleted = sqlx::query("DELETE FROM entries WHERE owner_id = $1 AND id = $2")
         .bind(owner_id)
         .bind(id)
-        .execute(pool)
+        .execute(&mut *transaction)
         .await
         .context("deleting an entry")?;
+    transaction.commit().await.context("deleting an entry")?;
     Ok(deleted.rows_affected() > 0)
 }
 

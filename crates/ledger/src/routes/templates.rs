@@ -253,7 +253,9 @@ pub async fn use_template(
         category,
     };
     let (entry, conversion) = payment.priced(&pool).await?.entry(&pool, owner_id, body.allow_duplicate).await?;
-    let posted = repository::post_entry(&pool, owner_id, &entry).await.map_err(refused_or_missing)?;
+    let posted = repository::post_entry(&pool, owner_id, &caller.into(), &entry)
+        .await
+        .map_err(refused_or_missing)?;
     Ok((StatusCode::CREATED, Json(recorded(posted.entry, conversion))))
 }
 
@@ -370,7 +372,9 @@ pub async fn repeat(State(pool): State<PgPool>, caller: Caller, Path(id): Path<U
         (new, None)
     };
 
-    let posted = repository::post_entry(&pool, owner_id, &new).await.map_err(refused_or_missing)?;
+    let posted = repository::post_entry(&pool, owner_id, &caller.into(), &new)
+        .await
+        .map_err(refused_or_missing)?;
     Ok((StatusCode::CREATED, Json(recorded(posted.entry, conversion))))
 }
 
