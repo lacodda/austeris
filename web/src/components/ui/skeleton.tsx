@@ -36,7 +36,9 @@ export function Skeleton({ className, ...props }: SkeletonProps) {
   return (
     <div
       aria-hidden
-      className={cn('animate-pulse rounded-md bg-soft', className)}
+      // Still under reduced motion: a placeholder that does not breathe is
+      // still the right placeholder.
+      className={cn('animate-pulse motion-reduce:animate-none rounded-md bg-soft', className)}
       {...props}
     />
   )

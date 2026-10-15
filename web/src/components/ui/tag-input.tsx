@@ -67,7 +67,8 @@ export const tagInputVariants = cva(
  * to be declared together.
  */
 const tagInputBoxVariants = cva(
-  'w-auto min-w-24 flex-1 bg-transparent px-1 text-text outline-none placeholder:text-faint',
+  // 16px under a finger, for the reason `fieldClasses` gives.
+  'w-auto min-w-24 flex-1 bg-transparent px-1 pointer-coarse:text-lg text-text outline-none placeholder:text-faint',
   {
     variants: {
       size: {

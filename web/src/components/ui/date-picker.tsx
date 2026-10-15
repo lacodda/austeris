@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useId, useMemo, useState } from 'react'
 import { cn, useLocale } from 'dowel-ui'
 import { fieldClasses } from './input'
 import { Popover, PopoverPopup, PopoverTrigger } from './popover'
@@ -22,6 +22,12 @@ import { isIsoDate, type IsoDate } from './calendar-math'
  * What is shown is `Intl`'s own long form - "2 September 2026" here, "September
  * 2, 2026" in the United States - because a date written the reader's way is
  * one they do not have to decode.
+ *
+ * Inside a `Field` the label names the trigger: the id and the two `aria-`
+ * references Base UI hands a control are put on the button. Without them the
+ * label's `for` pointed at nothing and the button was named by whatever date
+ * it showed - kilna's own picker had grown the same three props for the same
+ * reason.
  */
 
 export interface DatePickerProps {
@@ -42,7 +48,12 @@ export interface DatePickerProps {
   locale?: string
   disabled?: boolean
   name?: string
+  /** Put on the trigger, so a `Field` label can point at it. */
+  id?: string
   'aria-label'?: string
+  'aria-labelledby'?: string
+  'aria-describedby'?: string
+  'aria-invalid'?: boolean | 'true' | 'false'
   className?: string
 }
 
@@ -59,9 +70,23 @@ export function DatePicker({
   name,
   className,
   'aria-label': ariaLabel,
+  id,
+  'aria-labelledby': labelledBy,
+  'aria-describedby': describedBy,
+  'aria-invalid': invalid,
 }: DatePickerProps) {
   const [open, setOpen] = useState(false)
   const language = useLocale(locale)
+  // Named by its label and then by the date it shows. A label alone would be
+  // announced without the value on the button, and a name that does not hold
+  // the words on the button fails WCAG 2.5.3: someone saying what they see to
+  // voice control says words the name does not have. With an `aria-label` the
+  // trigger names itself - an element listed in its own `aria-labelledby` is
+  // read by its `aria-label`.
+  const ownId = useId()
+  const triggerId = id ?? ownId
+  const shownId = useId()
+  const naming = labelledBy ?? (ariaLabel === undefined ? undefined : triggerId)
 
   const shown = useMemo(() => {
     if (value === undefined || !isIsoDate(value)) return undefined
@@ -76,6 +101,10 @@ export function DatePicker({
       <PopoverTrigger
         disabled={disabled}
         aria-label={ariaLabel}
+        id={triggerId}
+        aria-labelledby={naming === undefined ? undefined : `${naming} ${shownId}`}
+        aria-describedby={describedBy}
+        aria-invalid={invalid}
         className={cn(
           fieldClasses,
           'flex h-control cursor-pointer items-center gap-2 text-left',
@@ -87,7 +116,8 @@ export function DatePicker({
           <rect x="2" y="3" width="12" height="11" rx="2" stroke="currentColor" strokeWidth="1.3" />
           <path d="M2 6.5h12M5.5 2v2M10.5 2v2" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
         </svg>
-        <span className={cn('truncate', shown === undefined && 'text-faint')}>
+        {/* The empty face in `dim`: `faint` at this size measured 3.2:1. */}
+        <span id={shownId} className={cn('truncate', shown === undefined && 'text-dim')}>
           {shown ?? placeholder}
         </span>
       </PopoverTrigger>
