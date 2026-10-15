@@ -38,7 +38,8 @@ backup: kept ./backups/austeris-2026-09-23.dump (84 kB)
 ```
 
 The dumps `update.sh` takes stay on the stand, which covers a bad migration and
-nothing else. This one is carried here and read back by `pg_restore` before it
+nothing else. Both carry everything: the files kept with entries, their
+history and the trash live in the database with the entries themselves. This one is carried here and read back by `pg_restore` before it
 is kept; the newest fourteen are kept (`AUSTERIS_BACKUP_KEEP`,
 `AUSTERIS_BACKUP_TO`).
 
@@ -53,3 +54,10 @@ and austeris must not have started on it yet - it would migrate the database
 and create an account, and the dump would collide with both. The script starts
 the database alone, checks the dump, refuses a database that already holds
 books, restores, and then starts austeris.
+
+## A repair by hand
+
+A change made straight in the database - `psql` on the stand - is recorded in
+the history of every entry it touches, as a write from outside austeris: the
+history is kept by the database, not by the service, so a repair is never
+invisible.

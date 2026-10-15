@@ -113,9 +113,9 @@ Every endpoint, with its shape: **[the ledger reference](https://lacodda.github.
 Early, and the books are open: accounts, entries with who, where and which
 tags, held card payments, exchanges with their fee on a line of their own, and
 the day's rates from the central banks of Paraguay and Russia - from the
-command line, the API or the web interface, which a phone records into with one
-press and asks about a second. The portfolio, loans and the
-forecast come next. A 2025 crypto tracker, the donor for `market`, is kept at
+command line, the API or a phone. Every entry keeps its receipts and its
+history, and a deletion waits thirty days in the trash. The portfolio, loans
+and the forecast come next. A 2025 crypto tracker, the donor for `market`, is kept at
 [`legacy-2025`](https://github.com/lacodda/austeris/tree/legacy-2025). Each
 version: [CHANGELOG](https://github.com/lacodda/austeris/blob/main/CHANGELOG.md).
 

@@ -25,9 +25,11 @@ the message was written from, so a screen can say it in its own language:
   "code": "line.unknown_category", "params": { "name": "yachts" } }
 ```
 
-The codes so far are a [second press](#a-second-press) and everything a
-[typed line](#post-apiv1ledgerentriesquick) can be refused for (`line.*`).
-Fall back to `message` for a code you do not know.
+The codes so far are a [second press](#a-second-press), everything a
+[typed line](#post-apiv1ledgerentriesquick) can be refused for (`line.*`), a
+[file](#files) that is too large, not one that is kept, or there already
+(`attachment.*`), and a request larger than the gateway carries
+(`request.too_large`). Fall back to `message` for a code you do not know.
 
 ## Accounts
 
@@ -315,7 +317,8 @@ posted the day it happened moves its posting day with it.
 ### `DELETE /api/v1/ledger/entries/{id}`
 
 A whole entry with its lines, never one line: half an entry is money from
-nowhere.
+nowhere. It goes to [the trash](#the-trash) with its files: gone from every
+balance, total and list at once, and back as it was if it is restored.
 
 ### `POST /api/v1/ledger/entries/{id}/repeat`
 
@@ -437,6 +440,132 @@ when it was posted already.
 A balance as of a past day reads the same before and after a payment posts: the
 day it posted is kept, so a payment posted on the 12th was held on the 11th.
 
+## History
+
+### `GET /api/v1/ledger/entries/{id}/history`
+
+Everything that happened to an entry, oldest first - for an entry in the books
+and for one in the trash alike:
+
+```json
+[
+  { "id": 41, "at": "2026-10-12T14:03:11Z", "action": "created",
+    "who": { "kind": "person", "person_id": "…" }, "changed": [],
+    "before": null, "after": { "description": "lunch", … } },
+  { "id": 57, "at": "2026-10-14T09:20:45Z", "action": "changed",
+    "who": { "kind": "person", "person_id": "…" },
+    "changed": ["status", "lines"],
+    "before": { "status": "pending", "lines": [ … ] },
+    "after": { "status": "cleared", "cleared_on": "2026-10-14", "lines": [ … ] } }
+]
+```
+
+`action` is `created`, `changed`, `deleted` or `restored`; `before` and `after`
+are the entry as [an entry](#get-apiv1ledgerentries) is shown, absent where it
+did not exist yet or no longer did. `changed` names the parts a change touched,
+in the order an entry is read: `occurred_on`, `description`, `status`,
+`counterparty`, `place`, `tags`, `lines`, `attachments`. A part is compared by
+what it is, not by how it reads: a tag renamed since is the same tag.
+
+`who` is a `person`, a `module` (with the `module` name it signed with) or
+`outside` - a write to the database that did not come through austeris, psql or
+a repair script. The history is kept by the database itself, so such a write is
+recorded like any other, and one request is one revision however many rows it
+touched. A save that changed nothing is not one.
+
+The history begins with 0.12: an entry recorded before then begins with its
+being recorded, by the person or the module that did.
+
+## Files
+
+A photo of the receipt, the bank's PDF, the receipt's XML - kept with the entry
+they prove. An entry lists what it has in `attachments`, without the bytes:
+
+```json
+"attachments": [
+  { "id": "…", "name": "receipt.jpg", "media_type": "image/jpeg", "size": 2482113,
+    "created_at": "2026-10-12T14:05:02Z" }
+]
+```
+
+### `POST /api/v1/ledger/entries/{id}/attachments?name=receipt.jpg`
+
+The body is the file as it is. What it is is read from its bytes - a JPEG, PNG,
+WebP or HEIC picture, a PDF, an XML document - whatever it is called or sent
+as, and anything else is refused with `415` and `attachment.unsupported`. Ten
+megabytes at most (`413`, `attachment.too_large`, with `limit_mb`); the same
+file on the same entry twice is refused with `409` and
+`attachment.already_attached`, naming the copy already there.
+
+```console
+$ curl --cookie "$SESSION" --data-binary @receipt.jpg \
+    "https://austeris.example/api/v1/ledger/entries/$ENTRY/attachments?name=receipt.jpg"
+```
+
+### `GET /api/v1/ledger/attachments/{id}/content`
+
+The file, under its own name. A picture or a PDF opens in place; an XML
+document is only ever saved - one in the XHTML namespace is a page, and a page
+from this address would run with the session that fetched it. Readable while
+the file is on an entry or waiting in the trash.
+
+### `DELETE /api/v1/ledger/attachments/{id}`
+
+Takes a file off its entry, to [the trash](#the-trash). A file of an entry that
+is in the trash is not taken off on its own: it goes back with the entry, or is
+erased with it.
+
+## The trash
+
+Deleted entries, and files taken off entries, wait thirty days; then they are
+erased for good - an entry with its history and its files. Erasing runs every
+hour in the ledger's own process, so a trash nobody opens does not keep a
+season of receipts.
+
+### `GET /api/v1/ledger/trash`
+
+```json
+{ "keep_days": 30,
+  "entries": [
+    { "entry": { "id": "…", "description": "lunch", "attachments": [ … ], … },
+      "deleted_at": "2026-10-14T18:02:10Z", "who": { "kind": "person", "person_id": "…" },
+      "erased_after": "2026-11-13T18:02:10Z" } ],
+  "attachments": [
+    { "attachment": { "id": "…", "name": "scan.pdf", … }, "entry_id": "…",
+      "entry_title": "Pharmacy", "entry_occurred_on": "2026-10-02",
+      "removed_at": "2026-10-14T18:05:44Z", "erased_after": "2026-11-13T18:05:44Z" } ] }
+```
+
+The most recently deleted first. `attachments` holds the files taken off
+entries still in the books; a deleted entry's files are on the entry.
+
+### `POST /api/v1/ledger/trash/entries/{id}/restore`
+
+Writes the entry back as it was deleted: the same id, the same lines under the
+same ids, its first day of being recorded, its files. Its counterparty, place
+and tags are the ones it had - found again by name, the way typing them would,
+when one was deleted while the entry waited. Refused with `409` when it moved
+money on an account or under a category that no longer exists, or when the
+module that posted it has posted it again since.
+
+### `DELETE /api/v1/ledger/trash/entries/{id}`
+
+Erases a deleted entry now, with its history and its files.
+
+### `POST /api/v1/ledger/trash/attachments/{id}/restore`
+
+Puts a file back on its entry. Refused with `409` when the entry is in the trash
+too - restore the entry, and its files come with it - or when the same file has
+been attached to it again since (`attachment.already_attached`).
+
+### `DELETE /api/v1/ledger/trash/attachments/{id}`
+
+Erases a file taken off an entry, now.
+
+### `DELETE /api/v1/ledger/trash`
+
+Erases everything in the trash.
+
 ## Counterparties
 
 Who money goes to or comes from: a shop, a service, a person, an employer.
@@ -510,7 +639,8 @@ Every tag, by name.
 
 ### `DELETE /api/v1/ledger/tags/{id}`
 
-Takes the tag off every entry that carried it. The entries stay.
+Takes the tag off every entry that carried it. The entries stay, and each one's
+history says the tag came off.
 
 ## Totals
 

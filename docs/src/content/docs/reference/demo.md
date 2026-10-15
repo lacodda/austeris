@@ -51,6 +51,11 @@ Either way it prints how to sign in:
 - **Held card payments** for the last two days, which the next run posts once a
   bank would have.
 - **A dollar rate for every day**, so balances in two currencies add up.
+- **Something to remember:** the latest groceries keep a made-up receipt as a
+  PDF and have their description put right, and the same payment typed a second
+  time is deleted - so the files, the history and the trash are not empty. Made
+  once: a run that finds any of it, or anything a person deleted or changed,
+  leaves it be.
 - **Two instruments nobody trades**, `DMC` and `DWLD`, with a price a day. Their
   names are invented on purpose: a demo price can never be mistaken for a real
   one.

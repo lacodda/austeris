@@ -1,6 +1,6 @@
 ---
 title: Web interface
-description: The screens served at the root of every installation - recording from a phone, accounts, entries, exchanges and held payments.
+description: The screens served at the root of every installation - recording from a phone, accounts, entries, exchanges, held payments, receipts, history and the trash.
 ---
 
 Every installation serves its web interface at its own root: open
@@ -36,8 +36,8 @@ recorded stay.
 last day before today that has anything on it. Each entry opens from its row,
 and the arrows beside it record it again on the day chosen.
 
-Every recording says so in a note with **Undo**, which deletes the entry it
-just made. The same entry recorded twice within a minute - a double tap, a press
+Every recording says so in a note with **Undo**, which takes the entry it just
+made back - to [the trash](#the-trash), like any deletion. The same entry recorded twice within a minute - a double tap, a press
 again because nothing seemed to happen - is asked about: **record a second**, or
 keep the one already recorded.
 
@@ -110,10 +110,25 @@ category.
 
 ### An entry
 
-Opening an entry shows every line of it. From there its description, day,
-counterparty, tags and place can be changed; its lines cannot - an amount that
-was wrong is an entry deleted and recorded again, which keeps every balance it
-ever produced explainable.
+Opening an entry shows every line of it, the files kept with it and its
+history. From there its description, day, counterparty, tags and place can be
+changed; its lines cannot - an amount that was wrong is an entry deleted and
+recorded again, which keeps every balance it ever produced explainable.
+
+**Files** are what proves the entry: **Attach a file** takes a photo - on a
+phone the camera is offered - a PDF or a receipt's XML, ten megabytes each at
+most. A picture shows as a thumbnail, and every file opens in a tab of its own.
+The cross beside one takes it off, to the trash, with **Undo** on the note that
+says so.
+
+**History** lists what happened to the entry, oldest first: who recorded it -
+you, a module, or something that wrote to the database outside austeris - and
+every change after, with what it was before and what it became: the old day and
+the new, the tags put on and taken off, the amount a hold was posted for, the
+files attached and removed.
+
+**Delete** sends the entry to the trash with its files, and the note that says
+so carries **Undo**.
 
 **Record again today** copies it onto today; a payment in another currency is
 converted again at today's rate, and an exchange is not offered. **Make a
@@ -124,6 +139,14 @@ A held entry is **posted** with the day the bank posted it, and, when the bank
 took another amount than was held - a hotel's pre-authorisation, a charge in
 another currency at the bank's rate - with that amount. A split cannot post for
 another amount: there is no saying which of its parts changed.
+
+### The trash
+
+Behind the bin beside **Exchange**: the entries deleted and the files taken off
+entries, each with the day it is erased for good - thirty days after it went
+in. **Restore** puts it back as it was: an entry under its own id, with its
+lines, its files and its history; a file on its entry. **Erase** and **Empty the
+trash** are asked about first, because nothing brings back what they erase.
 
 ### Filters
 
