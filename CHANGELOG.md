@@ -2,6 +2,25 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.12.0] - 2026-10-15
+
+### Bug Fixes
+- Stack trash rows on a phone and say a posting in lower case
+
+### CI
+- Audit the crates, the web interface and the documentation site
+
+### Dependencies
+- Update the toolchain and dependencies
+
+### Documentation
+- An entry's history, its files and the trash
+
+### Features
+- Say on whose behalf a transaction writes
+- Keep each entry's history, its files and a trash
+- Show an entry's files and history, and the trash
+
 ## [0.11.0] - 2026-10-12
 
 ### Bug Fixes
