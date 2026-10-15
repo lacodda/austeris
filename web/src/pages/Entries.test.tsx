@@ -128,7 +128,7 @@ describe('Entries', () => {
     expect(within(history).getByText('Recorded · you')).toBeTruthy()
     expect(within(history).getByText('Changed · the demo module')).toBeTruthy()
     expect(within(history).getByText('Description: "Weekly shop" → "Groceries"')).toBeTruthy()
-    expect(within(history).getByText('Status: held → Posted on Oct 9, 2026')).toBeTruthy()
+    expect(within(history).getByText('Status: held → posted on Oct 9, 2026')).toBeTruthy()
   })
 
   it('deletes to the trash, and Undo on the toast brings the entry back', async () => {

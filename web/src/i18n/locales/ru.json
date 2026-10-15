@@ -323,6 +323,7 @@
     "noOne": "никто",
     "held": "в холде",
     "posted": "проведена",
+    "postedOn": "проведена {{date}}",
     "dayChanged": "Дата: {{from}} → {{to}}",
     "descriptionChanged": "Описание: {{from}} → {{to}}",
     "statusChanged": "Состояние: {{from}} → {{to}}",

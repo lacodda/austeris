@@ -321,6 +321,7 @@
     "noOne": "no one",
     "held": "held",
     "posted": "posted",
+    "postedOn": "posted on {{date}}",
     "dayChanged": "Date: {{from}} → {{to}}",
     "descriptionChanged": "Description: {{from}} → {{to}}",
     "statusChanged": "Status: {{from}} → {{to}}",

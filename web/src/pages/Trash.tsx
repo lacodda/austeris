@@ -20,7 +20,7 @@ import { Panel } from '@/components/ui/panel'
 import { QueryState } from '@/components/ui/query-state'
 import { useToastManager } from '@/components/ui/toast'
 import { api, attachmentUrl } from '@/lib/api'
-import { formatSize } from '@/lib/attachments'
+import { formatSize, isPicture } from '@/lib/attachments'
 import { formatDay, formatMoment, formatMomentDay } from '@/lib/dates'
 import { movements } from '@/lib/entries'
 import { useBooksChanged, useTrash } from '@/lib/ledger'
@@ -105,6 +105,11 @@ export function Trash() {
   )
 }
 
+/** A row of the trash: what it is above its two buttons on a phone, where the
+ * words need the width, and beside them from `sm` up. */
+const ROW = 'flex flex-col gap-2 px-3 py-2.5 text-sm sm:flex-row sm:items-center sm:gap-3'
+const ACTIONS = 'flex shrink-0 justify-end gap-2'
+
 function DeletedEntry({ item }: { item: TrashedEntry }) {
   const { t } = useTranslation()
   const locale = useLocale()
@@ -114,22 +119,24 @@ function DeletedEntry({ item }: { item: TrashedEntry }) {
   const files = item.entry.attachments.length
 
   return (
-    <li className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2.5 text-sm">
-      <div className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate font-medium text-text">{name}</span>
-        <span className="text-xs text-dim">
-          {[formatDay(item.entry.occurred_on, locale), files > 0 ? t('trash.withFiles', { count: files }) : null].filter(Boolean).join(' · ')}
-        </span>
-        <span className="text-xs text-faint">
-          {t('trash.deletedAt', { when: formatMoment(item.deleted_at, locale) })} · {t('trash.erasedOn', { date: formatMomentDay(item.erased_after, locale) })}
+    <li className={ROW}>
+      <div className="flex min-w-0 flex-1 items-start gap-3 sm:items-center">
+        <div className="flex min-w-0 flex-1 flex-col">
+          <span className="truncate font-medium text-text">{name}</span>
+          <span className="text-xs text-dim">
+            {[formatDay(item.entry.occurred_on, locale), files > 0 ? t('trash.withFiles', { count: files }) : null].filter(Boolean).join(' · ')}
+          </span>
+          <span className="text-xs text-faint">
+            {t('trash.deletedAt', { when: formatMoment(item.deleted_at, locale) })} · {t('trash.erasedOn', { date: formatMomentDay(item.erased_after, locale) })}
+          </span>
+        </div>
+        <span className="flex flex-col items-end">
+          {movements(item.entry).map((movement) => (
+            <Money key={movement.accountId} amount={movement.amount} currency={movement.currency} signDisplay="exceptZero" />
+          ))}
         </span>
       </div>
-      <span className="flex flex-col items-end">
-        {movements(item.entry).map((movement) => (
-          <Money key={movement.accountId} amount={movement.amount} currency={movement.currency} signDisplay="exceptZero" />
-        ))}
-      </span>
-      <span className="flex gap-2">
+      <span className={ACTIONS}>
         <Button size="sm" variant="primary" onClick={() => restore.mutate()} disabled={restore.isPending} aria-label={t('trash.restoreNamed', { name })}>
           {t('trash.restore')}
         </Button>
@@ -156,22 +163,28 @@ function RemovedFile({ item }: { item: TrashedAttachment }) {
   const from = item.entry_title || t('entry.untitled')
 
   return (
-    <li className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2.5 text-sm">
-      <span className="flex size-10 shrink-0 items-center justify-center rounded-sm border border-line text-dim">
-        <FileText aria-hidden className="size-5" />
-      </span>
-      <div className="flex min-w-0 flex-1 flex-col">
-        <a href={attachmentUrl(attachment.id)} target="_blank" rel="noopener" className="truncate font-medium text-text hover:text-accent">
-          {attachment.name}
-        </a>
-        <span className="text-xs text-dim">
-          {t('trash.fromEntry', { title: from, date: formatDay(item.entry_occurred_on, locale) })} · {formatSize(attachment.size, locale)}
-        </span>
-        <span className="text-xs text-faint">
-          {t('trash.removedAt', { when: formatMoment(item.removed_at, locale) })} · {t('trash.erasedOn', { date: formatMomentDay(item.erased_after, locale) })}
-        </span>
+    <li className={ROW}>
+      <div className="flex min-w-0 flex-1 items-start gap-3 sm:items-center">
+        {isPicture(attachment.media_type) ? (
+          <img src={attachmentUrl(attachment.id)} alt="" className="size-10 shrink-0 rounded-sm border border-line object-cover" />
+        ) : (
+          <span className="flex size-10 shrink-0 items-center justify-center rounded-sm border border-line text-dim">
+            <FileText aria-hidden className="size-5" />
+          </span>
+        )}
+        <div className="flex min-w-0 flex-1 flex-col">
+          <a href={attachmentUrl(attachment.id)} target="_blank" rel="noopener" className="truncate font-medium text-text hover:text-accent">
+            {attachment.name}
+          </a>
+          <span className="text-xs text-dim">
+            {t('trash.fromEntry', { title: from, date: formatDay(item.entry_occurred_on, locale) })} · {formatSize(attachment.size, locale)}
+          </span>
+          <span className="text-xs text-faint">
+            {t('trash.removedAt', { when: formatMoment(item.removed_at, locale) })} · {t('trash.erasedOn', { date: formatMomentDay(item.erased_after, locale) })}
+          </span>
+        </div>
       </div>
-      <span className="flex gap-2">
+      <span className={ACTIONS}>
         <Button
           size="sm"
           variant="primary"

@@ -105,5 +105,5 @@ function describe(change: Change, t: TFunction, locale: string): ReactNode {
 
 function posting(state: Posting, t: TFunction, locale: string): string {
   if (state.held) return t('history.held')
-  return state.on ? t('entry.postedOn', { date: formatDay(state.on, locale) }) : t('history.posted')
+  return state.on ? t('history.postedOn', { date: formatDay(state.on, locale) }) : t('history.posted')
 }
