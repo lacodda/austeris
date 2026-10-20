@@ -9,3 +9,8 @@ overrides:
   form-data: ^4.0.6
   # GHSA-rj75-hqrm-r3gf, through starlight > expressive-code > postcss-nested.
   postcss-selector-parser: ^7.1.6
+
+# Before a script runs, pnpm holds node_modules to the lockfile and installs
+# what has fallen behind it: a gate run against older packages than the lock
+# names passes for something other than what ships.
+verifyDepsBeforeRun: install
