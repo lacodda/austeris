@@ -277,7 +277,7 @@ fn short_id(id: &str) -> &str {
 }
 
 /// A response that answered, or the reason it did not, as the person needs it.
-async fn answered(response: reqwest::Response) -> Result<reqwest::Response> {
+pub(crate) async fn answered(response: reqwest::Response) -> Result<reqwest::Response> {
     if response.status() == reqwest::StatusCode::UNAUTHORIZED {
         bail!("that session is no longer good; run `austeris login` again");
     }
@@ -360,15 +360,15 @@ pub async fn exchange(args: &ExchangeArgs) -> Result<()> {
 
 /// Just enough of an account to name it and say its currency.
 #[derive(Debug, serde::Deserialize)]
-struct Account {
-    id: String,
-    name: String,
-    currency: String,
+pub(crate) struct Account {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) currency: String,
 }
 
 /// The account a name refers to: the whole name, in any case - the rule the
 /// ledger applies to `from cash` in a typed line.
-fn named<'a>(accounts: &'a [Account], name: &str) -> Result<&'a Account> {
+pub(crate) fn named<'a>(accounts: &'a [Account], name: &str) -> Result<&'a Account> {
     accounts.iter().find(|account| account.name.eq_ignore_ascii_case(name.trim())).with_context(|| {
         format!(
             "you have no account called `{name}`; you have {}",
@@ -556,7 +556,7 @@ fn said_about(entry: &Entry) -> String {
 /// Only for printing. The value keeps every digit everywhere else - this is the
 /// one place a person reads it, and `-45000.000000000000000000` is not how
 /// anyone says forty-five thousand.
-fn trim_zeros(amount: &str) -> String {
+pub(crate) fn trim_zeros(amount: &str) -> String {
     if !amount.contains('.') {
         return amount.to_owned();
     }
@@ -571,7 +571,7 @@ fn trim_zeros(amount: &str) -> String {
 }
 
 /// What the installation said went wrong.
-async fn message_from(response: reqwest::Response) -> String {
+pub(crate) async fn message_from(response: reqwest::Response) -> String {
     let status = response.status();
     let Ok(body) = response.text().await else {
         return format!("austeris answered {status}");
@@ -610,7 +610,7 @@ fn day(given: Option<&str>) -> String {
 }
 
 /// Where this installation is.
-fn base_url() -> String {
+pub(crate) fn base_url() -> String {
     std::env::var("AUSTERIS_URL").unwrap_or_else(|_| "http://127.0.0.1:8084".to_owned())
 }
 
@@ -650,7 +650,7 @@ fn store_session(cookie: &str) -> Result<()> {
 }
 
 /// Reads the stored session.
-fn read_session() -> Result<String> {
+pub(crate) fn read_session() -> Result<String> {
     let path = session_path()?;
     match std::fs::read_to_string(&path) {
         Ok(cookie) if !cookie.trim().is_empty() => Ok(cookie.trim().to_owned()),

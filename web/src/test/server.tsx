@@ -54,9 +54,17 @@ export const failure = (status: number, message: string, code?: string, params?:
 
 export const ME = { id: 'u1', email: 'ada@example.com', display_name: 'Ada' }
 
+/** Every module running, as an installation has them unless told otherwise. */
+export const MODULES = { modules: [{ name: 'imports', on: true }] }
+
 /** Signed in as Ada, with whatever else the test serves. */
 export function signedIn(routes: Record<string, Answer> = {}): Sent[] {
-  return serve({ '/api/v1/auth/me': json(ME), 'POST /api/v1/auth/logout': () => new Response(null, { status: 204 }), ...routes })
+  return serve({
+    '/api/v1/auth/me': json(ME),
+    'POST /api/v1/auth/logout': () => new Response(null, { status: 204 }),
+    '/api/v1/modules': json(MODULES),
+    ...routes,
+  })
 }
 
 /** Everything a screen is wrapped in, with a fresh cache per render so one

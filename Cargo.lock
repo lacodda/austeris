@@ -139,6 +139,7 @@ dependencies = [
  "anyhow",
  "austeris-common",
  "austeris-identity",
+ "austeris-imports",
  "austeris-ledger",
  "austeris-market",
  "austeris-proto",
@@ -202,6 +203,32 @@ dependencies = [
  "serde_json",
  "sha2 0.11.1",
  "sqlx",
+ "tokio",
+ "tonic",
+ "tower",
+ "tracing",
+ "utoipa",
+ "uuid",
+]
+
+[[package]]
+name = "austeris-imports"
+version = "0.12.0"
+dependencies = [
+ "anyhow",
+ "austeris-common",
+ "austeris-ledger",
+ "austeris-proto",
+ "axum",
+ "chrono",
+ "http-body-util",
+ "roxmltree",
+ "rust_decimal",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "sqlx",
+ "thiserror",
  "tokio",
  "tonic",
  "tower",
@@ -1952,6 +1979,15 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "roxmltree"
+version = "0.21.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1964b10c76125c36f8afe190065a4bf9a87bf324842c05701330bba9f1cacbb"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]

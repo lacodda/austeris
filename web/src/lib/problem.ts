@@ -1,6 +1,7 @@
 import type { TFunction } from 'i18next'
 import i18n from '@/i18n'
 import { ApiError } from '@/lib/api'
+import type { Reason } from '@/lib/types'
 
 /*
  * What went wrong, as the person reads it.
@@ -22,6 +23,13 @@ export function problem(error: Error, t: TFunction): string {
     if (i18n.exists(key)) return t(key, error.params)
   }
   return error.message
+}
+
+/** Why a document waits or was refused, in the interface's language when it
+ * can be - the same codes an error answers with. */
+export function reasonText(reason: Reason, t: TFunction): string {
+  const key = `errors.${reason.code}`
+  return i18n.exists(key) ? t(key, reason.params) : reason.message
 }
 
 /** Whether the server refused an entry as the same one recorded a moment ago. */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isDecimal, negate, parseAmount, sign, sum } from '@/lib/decimal'
+import { isDecimal, negate, over, parseAmount, roundTo, sign, sum, times } from '@/lib/decimal'
 
 describe('sum', () => {
   it('adds exactly where a double would not', () => {
@@ -83,5 +83,22 @@ describe('parseAmount', () => {
   it('keeps every digit of a coin no standard lists', () => {
     expect(parseAmount('0.00012345', 'en', 'BTC')).toBe('0.00012345')
     expect(parseAmount('0.500', 'en', 'BTC')).toBe('0.500')
+  })
+})
+
+describe('times, over and roundTo', () => {
+  it('multiply and divide exactly, rounding the way a bank does', () => {
+    expect(times('100.00', '7350')).toBe('735000.00')
+    expect(over('735000', '7350', 2)).toBe('100.00')
+    // 58 000 guaranies at 7 350 a dollar: 7.891... is 7.89.
+    expect(over('58000', '7350', 2)).toBe('7.89')
+    // Half away from zero, not to even.
+    expect(roundTo('0.5', 0)).toBe('1')
+    expect(roundTo('-10.125', 2)).toBe('-10.13')
+    expect(roundTo('735000.00', 0)).toBe('735000')
+  })
+
+  it('refuses to divide by nothing', () => {
+    expect(() => over('1', '0', 2)).toThrow()
   })
 })

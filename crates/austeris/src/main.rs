@@ -8,6 +8,7 @@
 mod add;
 mod demo;
 mod gateway;
+mod import;
 mod migrate;
 mod openapi;
 mod ratelimit;
@@ -59,6 +60,9 @@ enum Command {
     /// Posts a held payment, for the amount the bank took when that was
     /// another: `austeris clear 3f2a 180000`.
     Clear(add::ClearArgs),
+    /// Reads receipts into the books: `austeris import factura.xml`, or every
+    /// file in a folder.
+    Import(import::ImportArgs),
     /// Signs in, so `add` has a session to record with.
     Login(add::LoginArgs),
     /// Prints the `OpenAPI` document to stdout.
@@ -82,6 +86,7 @@ async fn main() -> Result<()> {
         Command::Exchange(args) => add::exchange(&args).await,
         Command::Pending => add::pending().await,
         Command::Clear(args) => add::clear(&args).await,
+        Command::Import(args) => import::import(&args).await,
         Command::Login(args) => add::login(&args).await,
         Command::Openapi => {
             println!("{}", serde_json::to_string_pretty(&openapi::document())?);
@@ -109,10 +114,23 @@ async fn serve_one(config: &Config, service: Service) -> Result<()> {
         anyhow::bail!("AUSTERIS_DEMO is honoured by `austeris serve` running every service; with a container per service, run `austeris demo` once instead");
     }
 
+    if service.is_switched_off() {
+        anyhow::bail!(
+            "{service} is switched off ({}=off); remove its container, or switch it on",
+            service.switch().unwrap_or_default()
+        );
+    }
+
     let mut tasks = JoinSet::new();
     let peers = Peers::from_env();
     let app = match service {
         Service::Gateway => gateway::router(&peers),
+        Service::Imports => {
+            // A module nobody calls over gRPC: it calls the ledger and
+            // identity, and only the gateway calls it.
+            let pool = schema_ready(config, service).await?;
+            start_imports(pool, &peers, &mut tasks)?
+        }
         data => {
             let pool = schema_ready(config, data).await?;
             if data == Service::Identity {
@@ -149,8 +167,11 @@ async fn serve_all(config: &Config) -> Result<()> {
     // Every schema first, and only then any listener: a gateway that answers
     // before its services have migrated would forward to half an installation.
     let mut pools = Vec::new();
-    for &service in Service::routed() {
+    for service in Service::running() {
         pools.push((service, schema_ready(config, service).await?));
+    }
+    for service in Service::routed().iter().filter(|service| service.is_switched_off()) {
+        tracing::info!(module = service.as_str(), "switched off; not started");
     }
     let pool_of = |wanted: Service| pools.iter().find(|(service, _)| *service == wanted).map(|(_, pool)| pool.clone());
     let (Some(identity), Some(ledger), Some(market)) = (pool_of(Service::Identity), pool_of(Service::Ledger), pool_of(Service::Market)) else {
@@ -179,7 +200,12 @@ async fn serve_all(config: &Config) -> Result<()> {
 
     let mut tasks = JoinSet::new();
     for (service, pool, rest, grpc) in listeners {
-        let app = start(service, pool, TcpIncoming::from(grpc), &peers, &mut tasks)?;
+        let app = if service == Service::Imports {
+            drop(grpc);
+            start_imports(pool, &peers, &mut tasks)?
+        } else {
+            start(service, pool, TcpIncoming::from(grpc), &peers, &mut tasks)?
+        };
         tasks.spawn(http(rest, app));
     }
 
@@ -187,7 +213,7 @@ async fn serve_all(config: &Config) -> Result<()> {
         .await
         .with_context(|| format!("binding {} (AUSTERIS_BIND)", config.bind))?;
     tracing::info!(
-        services = Service::routed().iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "),
+        services = Service::running().iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "),
         address = %listener.local_addr()?,
         "listening"
     );
@@ -240,8 +266,36 @@ fn start(service: Service, pool: sqlx::PgPool, grpc: TcpIncoming, peers: &Peers,
             });
             Ok(austeris_market::routes::router(pool, sources, Some(ledger)))
         }
+        Service::Imports => unreachable!("imports serves no gRPC; it is started by start_imports"),
         Service::Gateway => unreachable!("the gateway owns no schema and serves no gRPC"),
     }
+}
+
+/// Starts the imports module - the folder it watches, when there is one - and
+/// hands back its REST router.
+fn start_imports(pool: sqlx::PgPool, peers: &Peers, tasks: &mut JoinSet<Result<()>>) -> Result<Router> {
+    let books = austeris_imports::ledger::Remote::connect_lazy(peers.grpc(Service::Ledger))?;
+    let people = austeris_imports::ledger::Remote::connect_lazy(peers.grpc(Service::Identity))?;
+
+    // Said once, at startup, like a price source without its key: without
+    // Tesseract a slip cannot be read, and everything else works.
+    if let Some(ocr) = austeris_imports::slip::Ocr::find() {
+        tracing::info!(languages = ocr.languages(), "exchange slips are read by OCR");
+    } else {
+        tracing::info!("no OCR on this machine: exchange slips are not read from photos");
+    }
+
+    if let Some(root) = std::env::var_os("AUSTERIS_INBOX").filter(|value| !value.is_empty()) {
+        let root = std::path::PathBuf::from(root);
+        tracing::info!(folder = %root.display(), "taking documents in from a folder");
+        // Never returns, as the price refresher does not.
+        let watcher = austeris_imports::inbox::every_half_minute(pool.clone(), books.clone(), people, root);
+        tasks.spawn(async move {
+            watcher.await;
+            anyhow::bail!("the folder watcher stopped")
+        });
+    }
+    Ok(austeris_imports::routes::router(pool, books))
 }
 
 /// Serves a router on a listener until it stops.

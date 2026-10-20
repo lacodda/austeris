@@ -32,8 +32,20 @@ struct Upstream {
 pub fn router(peers: &Peers) -> Router {
     let client = austeris_common::http::client();
 
-    let mut api = Router::new();
+    let mut api = Router::new().route("/modules", axum::routing::get(modules));
     for service in Service::routed() {
+        // A module switched off answers that it is, rather than the 404 of a
+        // path nobody owns or the 502 of a service that is down: a screen
+        // asking it says "this installation has this switched off".
+        if service.is_switched_off() {
+            let off = *service;
+            let answer = move || async move { switched_off(off) };
+            let routes: Router = Router::new()
+                .route("/", axum::routing::any(answer))
+                .route("/{*rest}", axum::routing::any(answer));
+            api = api.nest(&format!("/{}", service.prefix()), routes);
+            continue;
+        }
         let upstream = Upstream {
             client: client.clone(),
             service: *service,
@@ -71,6 +83,44 @@ pub fn router(peers: &Peers) -> Router {
             crate::ratelimit::Limiter::default(),
             crate::ratelimit::limit,
         ))
+}
+
+/// The installation's modules, and which of them run.
+#[derive(Debug, serde::Serialize)]
+struct Modules {
+    /// Each module this build has, by name, and whether it is on.
+    modules: Vec<Module>,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct Module {
+    name: &'static str,
+    on: bool,
+}
+
+/// Which modules this installation runs - for a screen to show only what is
+/// there. Outside the session check, like the spec: it describes the
+/// installation, never anyone's books.
+async fn modules() -> axum::Json<Modules> {
+    axum::Json(Modules {
+        modules: Service::routed()
+            .iter()
+            .filter(|service| service.switch().is_some())
+            .map(|service| Module {
+                name: service.as_str(),
+                on: !service.is_switched_off(),
+            })
+            .collect(),
+    })
+}
+
+/// What a switched-off module answers every request with.
+fn switched_off(service: Service) -> AppError {
+    AppError::not_found(anyhow::anyhow!(
+        "{service} is switched off on this installation ({}=off)",
+        service.switch().unwrap_or_default()
+    ))
+    .with_code(Code::ModuleSwitchedOff, serde_json::json!({ "module": service.as_str() }))
 }
 
 /// Passes a request to the service that owns its prefix, and its answer back.
@@ -285,6 +335,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_modules_are_listed_with_whether_each_runs() {
+        let (status, body) = get("/api/v1/modules").await;
+        assert_eq!(status, StatusCode::OK);
+        let json: serde_json::Value = serde_json::from_str(&body).expect("json");
+        let imports = json["modules"]
+            .as_array()
+            .and_then(|modules| modules.iter().find(|module| module["name"] == "imports"))
+            .expect("imports is listed");
+        assert!(imports["on"].is_boolean());
+        // The installation itself is not a module anyone switches off.
+        assert!(
+            json["modules"]
+                .as_array()
+                .is_some_and(|modules| modules.iter().all(|module| module["name"] != "ledger"))
+        );
+    }
+
+    #[test]
+    fn a_switched_off_module_says_so_in_a_code_a_screen_can_read() {
+        use axum::response::IntoResponse;
+        let response = super::switched_off(crate::service::Service::Imports).into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
     async fn a_service_behind_the_gateway_is_not_served_without_a_session() {
         // Everything behind here is one person's finances. Before this check
         // existed, `market` answered anyone on the network - found by running
@@ -314,6 +389,7 @@ mod tests {
     fn routing_covers_every_service_prefix_and_nothing_else() {
         assert!(is_routed(&Uri::from_static("/api/v1/auth/login")));
         assert!(is_routed(&Uri::from_static("/api/v1/ledger/accounts")));
+        assert!(is_routed(&Uri::from_static("/api/v1/imports/documents")));
         assert!(!is_routed(&Uri::from_static("/api/v1/portfolio/positions")));
         // The prefix must be a whole segment: a service called `auth` must not
         // capture `/api/v1/authority/...`.

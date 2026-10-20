@@ -24,6 +24,20 @@ describe('App', () => {
     expect(screen.getByText('Ada')).toBeTruthy()
   })
 
+  it('lists a module in the navigation only while the installation runs it', async () => {
+    signedIn(BOOKS)
+    const { unmount } = render(app(<App />))
+    // In the header and in the phone's bar alike.
+    expect((await screen.findAllByRole('link', { name: 'Import' })).length).toBeGreaterThan(0)
+    unmount()
+
+    signedIn({ ...BOOKS, '/api/v1/modules': json({ modules: [{ name: 'imports', on: false }] }) })
+    render(app(<App />, '/import'))
+    // Switched off, its address is one nothing answers.
+    expect(await screen.findByRole('heading', { name: 'Accounts' })).toBeTruthy()
+    expect(screen.queryByRole('link', { name: 'Import' })).toBeNull()
+  })
+
   it('sends an address nothing answers to the accounts', async () => {
     signedIn(BOOKS)
     render(app(<App />, '/nowhere'))

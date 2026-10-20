@@ -23,11 +23,14 @@ pub enum Service {
     Ledger,
     /// Instruments and their prices.
     Market,
+    /// Documents read into the books: receipts, the folder they arrive in,
+    /// exchange slips. A module: the installation can switch it off.
+    Imports,
 }
 
 impl Service {
     /// Every service, in registration order.
-    pub const ALL: &'static [Self] = &[Self::Gateway, Self::Identity, Self::Ledger, Self::Market];
+    pub const ALL: &'static [Self] = &[Self::Gateway, Self::Identity, Self::Ledger, Self::Market, Self::Imports];
 
     /// The service's name, as it appears in a command line and in a URL.
     #[must_use]
@@ -37,6 +40,7 @@ impl Service {
             Self::Identity => "identity",
             Self::Ledger => "ledger",
             Self::Market => "market",
+            Self::Imports => "imports",
         }
     }
 
@@ -51,6 +55,7 @@ impl Service {
             Self::Identity => Some(austeris_identity::SCHEMA),
             Self::Ledger => Some(austeris_ledger::SCHEMA),
             Self::Market => Some(austeris_market::SCHEMA),
+            Self::Imports => Some(austeris_imports::SCHEMA),
         }
     }
 
@@ -62,6 +67,7 @@ impl Service {
             Self::Identity => Some(&austeris_identity::MIGRATOR),
             Self::Ledger => Some(&austeris_ledger::MIGRATOR),
             Self::Market => Some(&austeris_market::MIGRATOR),
+            Self::Imports => Some(&austeris_imports::MIGRATOR),
         }
     }
 
@@ -70,7 +76,36 @@ impl Service {
     /// The gateway is not among them: it does not forward to itself.
     #[must_use]
     pub fn routed() -> &'static [Self] {
-        &[Self::Identity, Self::Ledger, Self::Market]
+        &[Self::Identity, Self::Ledger, Self::Market, Self::Imports]
+    }
+
+    /// The variable that switches this service off, when it is a module the
+    /// installation can do without: `AUSTERIS_IMPORTS=off`.
+    ///
+    /// Modules only. Identity and the ledger are the installation; the market
+    /// was born before modules had switches, and gains one when its screens
+    /// can say it is off.
+    #[must_use]
+    pub fn switch(self) -> Option<&'static str> {
+        match self {
+            Self::Imports => Some("AUSTERIS_IMPORTS"),
+            Self::Gateway | Self::Identity | Self::Ledger | Self::Market => None,
+        }
+    }
+
+    /// Whether this installation has switched the service off.
+    ///
+    /// `off` or `false` switch it off; anything else, or nothing, leaves it on:
+    /// a module is part of the product until someone says otherwise.
+    #[must_use]
+    pub fn is_switched_off(self) -> bool {
+        self.switch().is_some_and(|name| is_off(std::env::var(name).ok().as_deref()))
+    }
+
+    /// The routed services this installation runs: every one not switched off.
+    #[must_use]
+    pub fn running() -> Vec<Self> {
+        Self::routed().iter().copied().filter(|service| !service.is_switched_off()).collect()
     }
 
     /// The path prefix under `/api/v1` this service answers on.
@@ -85,8 +120,14 @@ impl Service {
             Self::Identity => "auth",
             Self::Ledger => "ledger",
             Self::Market => "market",
+            Self::Imports => "imports",
         }
     }
+}
+
+/// Whether a module's switch says off.
+fn is_off(value: Option<&str>) -> bool {
+    value.is_some_and(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "off" | "false" | "0" | "no"))
 }
 
 /// Where each routed service answers: REST for the gateway, gRPC for peers.
@@ -204,7 +245,7 @@ mod tests {
     fn every_service_is_listed_in_all() {
         // `ALL` drives `migrate` with no argument: a service missing from it
         // has its schema silently left behind at the previous version.
-        for service in [Service::Gateway, Service::Identity, Service::Ledger, Service::Market] {
+        for service in [Service::Gateway, Service::Identity, Service::Ledger, Service::Market, Service::Imports] {
             assert!(Service::ALL.contains(&service), "{service} is missing from Service::ALL");
         }
     }
@@ -218,6 +259,20 @@ mod tests {
                 "{service} has a schema without migrations, or the other way round"
             );
         }
+    }
+
+    #[test]
+    fn a_module_is_on_until_it_is_switched_off_in_so_many_words() {
+        assert!(!super::is_off(None));
+        assert!(!super::is_off(Some("")));
+        assert!(!super::is_off(Some("on")));
+        for off in ["off", "OFF", " false ", "0", "no"] {
+            assert!(super::is_off(Some(off)), "`{off}` did not switch it off");
+        }
+        // Only modules have a switch: the installation without its ledger is
+        // not an installation.
+        assert_eq!(Service::Imports.switch(), Some("AUSTERIS_IMPORTS"));
+        assert_eq!(Service::Ledger.switch(), None);
     }
 
     #[test]

@@ -40,7 +40,13 @@ services:
       AUSTERIS_DEMO: ${AUSTERIS_DEMO:-true}
       AUSTERIS_FIRST_USER: ${AUSTERIS_FIRST_USER:-owner@austeris.local}
       AUSTERIS_CMC_API_KEY: ${AUSTERIS_CMC_API_KEY:-}
+      AUSTERIS_IMPORTS: ${AUSTERIS_IMPORTS:-on}
+      AUSTERIS_INBOX: /inbox
       RUST_LOG: ${RUST_LOG:-austeris=info,tower_http=info,warn}
+    volumes:
+      # Receipts dropped in ./inbox/demo@austeris.local/ are read into the
+      # demo's books. On Linux the folder has to be writable by uid 10001.
+      - ${AUSTERIS_INBOX_DIR:-./inbox}:/inbox
     ports:
       # The only published port of austeris itself.
       - "${AUSTERIS_PORT:-8084}:8080"

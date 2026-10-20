@@ -246,6 +246,47 @@ codes! {
     AttachmentAlready = "attachment.already_attached",
     /// A request larger than the gateway carries. Params: `limit_mb`.
     RequestTooLarge = "request.too_large",
+
+    /// A module the installation has switched off. Params: `module`.
+    ModuleSwitchedOff = "module.switched_off",
+
+    // Why a document handed to austeris was refused, or waits. Kept with the
+    // document as well as answered, so a screen says them the same way
+    // whenever it is asked.
+    /// A file that is not a receipt's XML. Params: `media_type`, absent when
+    /// the bytes are no kind of document austeris knows.
+    DocumentUnsupported = "document.unsupported",
+    /// A file larger than one kept can be. Params: `limit_mb`.
+    DocumentTooLarge = "document.too_large",
+    /// XML that does not parse, or text that is not XML. Params: `why`.
+    DocumentUnreadable = "document.unreadable",
+    /// An XML document that is not a SIFEN receipt.
+    DocumentNotAReceipt = "document.not_a_receipt",
+    /// Several receipts in one file. Params: `count`.
+    DocumentSeveral = "document.several",
+    /// A SIFEN document that records no payment - a delivery note. Params:
+    /// `kind`, as the document names itself.
+    DocumentNotAPayment = "document.not_a_payment",
+    /// A receipt missing something every receipt has, or with it malformed.
+    /// Params: `what`.
+    DocumentIncomplete = "document.incomplete",
+    /// The folder a document arrived in is named after no account of the
+    /// person's. Params: `name`.
+    DocumentUnknownAccount = "document.unknown_account",
+    /// The account chosen is closed. Params: `name`.
+    DocumentClosedAccount = "document.closed_account",
+    /// The account is in another currency than the receipt, and no rate
+    /// between them is known. Params: `from`, `to`, `day`.
+    DocumentNoRate = "document.no_rate",
+    /// The ledger could not be reached; it is tried again when asked.
+    DocumentLedgerUnavailable = "document.ledger_unavailable",
+    /// The ledger refused the entry. Params: `message`, its own sentence.
+    DocumentRefusedByLedger = "document.refused_by_ledger",
+
+    /// Reading a photo needs OCR, and this installation has none.
+    SlipOcrUnavailable = "slip.ocr_unavailable",
+    /// A photo OCR cannot read: not a JPEG, PNG or WebP picture.
+    SlipUnsupported = "slip.unsupported",
 }
 
 #[cfg(test)]

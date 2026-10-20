@@ -1,0 +1,42 @@
+[package]
+name = "austeris-imports"
+description = "Documents read into the books: receipts, the folder they arrive in, and exchange slips"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[dependencies]
+austeris-common.workspace = true
+# The ledger's pure helpers only - how many places a currency has, how a person
+# writes an amount, what a file's bytes are - so a receipt rounds and a slip
+# reads the way an entry typed by hand does. Its tables are reached through its
+# contract like any module's (ADR 0001).
+austeris-ledger.workspace = true
+austeris-proto.workspace = true
+
+anyhow.workspace = true
+axum.workspace = true
+chrono.workspace = true
+roxmltree.workspace = true
+rust_decimal.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tonic.workspace = true
+tracing.workspace = true
+utoipa.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+http-body-util.workspace = true
+tower.workspace = true
+
+[lints]
+workspace = true

@@ -21,6 +21,13 @@
 #
 # The two share the database volume, so switching shapes keeps the books. Run
 # one shape at a time: both publish the same port.
+#
+# Receipts dropped in `./inbox/<your sign-in address>/` are read into the books
+# within half a minute (a subfolder named after one of your accounts says they
+# were paid from it). The folder has to be writable by the container's user,
+# uid 10001, which moves each file it has read into `done/` or `refused/`:
+#
+#   mkdir -p inbox && sudo chown 10001 inbox
 x-austeris: &austeris
   # Pin a version in production. `latest` is convenient for a first look and a
   # poor thing to have an unattended `docker compose pull` follow.
@@ -34,6 +41,12 @@ x-environment: &environment
   AUSTERIS_DATABASE_URL: postgres://austeris:${POSTGRES_PASSWORD}@db:5432/austeris
   AUSTERIS_BIND: 0.0.0.0:8080
   RUST_LOG: ${RUST_LOG:-austeris=info,tower_http=info,warn}
+
+# The imports module - on unless switched off - and the folder it takes
+# receipts in from.
+x-imports: &imports
+  AUSTERIS_IMPORTS: ${AUSTERIS_IMPORTS:-on}
+  AUSTERIS_INBOX: /inbox
 
 services:
   db:
@@ -60,7 +73,7 @@ services:
     profiles: [single]
     command: ["serve"]
     environment:
-      <<: *environment
+      <<: [*environment, *imports]
       # The address the first account is created under on an empty
       # installation; its password is printed once, into this container's log.
       AUSTERIS_FIRST_USER: ${AUSTERIS_FIRST_USER:-owner@austeris.local}
@@ -75,6 +88,8 @@ services:
       # real person has an account, so a flag forgotten here cannot mix made-up
       # numbers into real books.
       AUSTERIS_DEMO: ${AUSTERIS_DEMO:-false}
+    volumes:
+      - ${AUSTERIS_INBOX_DIR:-./inbox}:/inbox
     ports:
       - "${AUSTERIS_PORT:-8084}:8080"
 
@@ -98,6 +113,8 @@ services:
       ledger:
         condition: service_healthy
       market:
+        condition: service_healthy
+      imports:
         condition: service_healthy
 
   identity:
@@ -123,6 +140,18 @@ services:
     environment:
       <<: *environment
       AUSTERIS_CMC_API_KEY: ${AUSTERIS_CMC_API_KEY:-}
+
+  # To run without it, remove this service and the gateway's wait for it, and
+  # give the gateway AUSTERIS_IMPORTS=off: a switched-off module refuses to
+  # start rather than run half-there.
+  imports:
+    <<: *austeris
+    profiles: [split]
+    command: ["serve", "imports"]
+    environment:
+      <<: [*environment, *imports]
+    volumes:
+      - ${AUSTERIS_INBOX_DIR:-./inbox}:/inbox
 
 volumes:
   db-data:

@@ -21,7 +21,10 @@ import type {
   Exchange,
   Flow,
   Identity,
+  ImportDocument,
+  DocumentState,
   IsoDate,
+  Module,
   NewAccount,
   NewEntry,
   Place,
@@ -30,9 +33,11 @@ import type {
   RateInForce,
   Recorded,
   Revision,
+  SlipReading,
   Tag,
   Template,
   Trash,
+  Upload,
 } from '@/lib/types'
 
 /** A call the server answered with anything but success. */
@@ -114,6 +119,10 @@ export function query(params: Record<string, string | number | undefined>): stri
 }
 
 const LEDGER = '/api/v1/ledger'
+const IMPORTS = '/api/v1/imports'
+
+/** A file sent as it is; the server reads what it is from its bytes. */
+const file = (body: File): RequestInit => ({ method: 'POST', body, headers: { 'Content-Type': 'application/octet-stream' } })
 
 /** Where a file's bytes are read from: an image's `src`, a link's `href`. The
  * session cookie goes with it, as with every call. */
@@ -192,4 +201,18 @@ export const api = {
 
   rateAt: (base: string, quote: string, on?: IsoDate) =>
     request<RateInForce>(`${LEDGER}/rates/at${query({ base, quote, on })}`),
+
+  /** Which modules this installation runs. */
+  modules: () => request<{ modules: Module[] }>('/api/v1/modules'),
+
+  documents: (state?: DocumentState) => request<ImportDocument[]>(`${IMPORTS}/documents${query({ state, limit: 100 })}`),
+  /** A receipt's file, read into the books - or kept waiting for what it
+   * does not say. */
+  upload: (body: File, account?: string) => request<Upload>(`${IMPORTS}/documents${query({ name: body.name, account })}`, file(body)),
+  /** What a waiting document waited for; left out stays as said before. */
+  bookDocument: (id: string, accountId?: string, categoryId?: string) =>
+    request<ImportDocument>(`${IMPORTS}/documents/${id}/book`, json('POST', { account_id: accountId ?? null, category_id: categoryId ?? null })),
+  dismissDocument: (id: string) => request<void>(`${IMPORTS}/documents/${id}`, { method: 'DELETE' }),
+  /** A photo of an exchange office's slip, read on the server. */
+  readSlip: (photo: File) => request<SlipReading>(`${IMPORTS}/slips`, file(photo)),
 }

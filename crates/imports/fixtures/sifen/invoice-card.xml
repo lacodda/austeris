@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A synthetic electronic invoice in the shape SIFEN v150 gives one: every
+     name, number and amount here is made up. A pharmacy with no trade name,
+     paid by debit card, one item. -->
+<rDE xmlns="http://ekuatia.set.gov.py/sifen/xsd">
+  <dVerFor>150</dVerFor>
+  <DE Id="01800888881001002000045622026101910000000027">
+    <dDVId>7</dDVId>
+    <dFecFirma>2026-10-19T09:30:02</dFecFirma>
+    <dSisFact>1</dSisFact>
+    <gTimb>
+      <iTiDE>1</iTiDE>
+      <dDesTiDE>Factura electrónica</dDesTiDE>
+      <dNumTim>87654321</dNumTim>
+      <dEst>001</dEst>
+      <dPunExp>002</dPunExp>
+      <dNumDoc>0000456</dNumDoc>
+    </gTimb>
+    <gDatGralOpe>
+      <dFeEmiDE>2026-10-19T09:30:00</dFeEmiDE>
+      <gOpeCom>
+        <iTipTra>1</iTipTra>
+        <cMoneOpe>PYG</cMoneOpe>
+      </gOpeCom>
+      <gEmis>
+        <dRucEm>80088888</dRucEm>
+        <dDVEmi>2</dDVEmi>
+        <dNomEmi>FARMACIA CENTRAL S.R.L.</dNomEmi>
+        <dDirEmi>CALLE EJEMPLO 99</dDirEmi>
+        <dDesCiuEmi>SAN LORENZO</dDesCiuEmi>
+      </gEmis>
+    </gDatGralOpe>
+    <gDtipDE>
+      <gCamCond>
+        <iCondOpe>1</iCondOpe>
+        <gPaConEIni>
+          <iTiPago>4</iTiPago>
+          <dDesTiPag>Tarjeta de débito</dDesTiPag>
+          <dMonTiPag>58000</dMonTiPag>
+          <cMoneTiPag>PYG</cMoneTiPag>
+          <gPagTarCD>
+            <iDenTarj>1</iDenTarj>
+            <dDesDenTarj>Visa</dDesDenTarj>
+            <iForProPa>1</iForProPa>
+            <dNumTarj>4321</dNumTarj>
+          </gPagTarCD>
+        </gPaConEIni>
+      </gCamCond>
+      <gCamItem>
+        <dCodInt>7790000000011</dCodInt>
+        <dDesProSer>IBUPROFENO 400MG X 10 COMP</dDesProSer>
+        <dDesUniMed>UNI</dDesUniMed>
+        <dCantProSer>1.0000</dCantProSer>
+        <gValorItem>
+          <dPUniProSer>58000.0000</dPUniProSer>
+          <dTotBruOpeItem>58000.0000</dTotBruOpeItem>
+          <gValorRestaItem>
+            <dDescItem>0</dDescItem>
+            <dTotOpeItem>58000.0000</dTotOpeItem>
+          </gValorRestaItem>
+        </gValorItem>
+      </gCamItem>
+    </gDtipDE>
+    <gTotSub>
+      <dTotOpe>58000</dTotOpe>
+      <dRedon>0</dRedon>
+      <dTotGralOpe>58000</dTotGralOpe>
+    </gTotSub>
+  </DE>
+</rDE>

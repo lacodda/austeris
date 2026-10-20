@@ -48,13 +48,17 @@ RUN cargo build --release --bin austeris
 
 FROM debian:trixie-slim
 # ca-certificates for TLS to PostgreSQL and to price sources; curl so the
-# healthcheck below needs no layer of its own.
+# healthcheck below needs no layer of its own. Tesseract, with English and
+# Spanish, reads an exchange office's slip from a photo on this machine - no
+# picture of anyone's money is sent away to be read (ADR 0014).
 RUN apt-get update \
-    && apt-get install --no-install-recommends -y ca-certificates curl \
+    && apt-get install --no-install-recommends -y ca-certificates curl tesseract-ocr tesseract-ocr-eng tesseract-ocr-spa \
     && rm -rf /var/lib/apt/lists/*
 
-# An unprivileged user: no service needs anything root grants.
-RUN useradd --system --create-home --uid 10001 austeris
+# An unprivileged user: no service needs anything root grants. The folder
+# receipts are dropped in is theirs to move files out of.
+RUN useradd --system --create-home --uid 10001 austeris \
+    && mkdir /inbox && chown austeris /inbox
 USER austeris
 
 COPY --from=build /src/target/release/austeris /usr/local/bin/austeris

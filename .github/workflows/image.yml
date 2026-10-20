@@ -83,6 +83,14 @@ jobs:
             -H 'Content-Type: application/json' \
             -d '{"email":"demo@austeris.local","password":"austeris-demo"}'
           curl -fsS -b jar http://127.0.0.1:8080/api/v1/ledger/balances | grep -q Everyday
+          # The OCR the image carries reads a slip on this architecture too,
+          # and a receipt is read rather than refused.
+          curl -fsS -b jar -H 'Content-Type: application/octet-stream' \
+            --data-binary @crates/imports/fixtures/slips/exchange-slip.jpg \
+            http://127.0.0.1:8080/api/v1/imports/slips | grep -q '"rate":"7350"'
+          curl -fsS -b jar -H 'Content-Type: application/octet-stream' \
+            --data-binary @crates/imports/fixtures/sifen/invoice-cash.xml \
+            'http://127.0.0.1:8080/api/v1/imports/documents?name=factura.xml' | grep -Eq '"state":"(booked|waiting)"'
           docker logs austeris
 
       # The file's name is the digest without its `sha256:` prefix, which is

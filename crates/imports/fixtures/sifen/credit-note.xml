@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A synthetic electronic credit note in the shape SIFEN v150 gives one:
+     every name, number and amount here is made up. The supermarket gives back
+     what one of its items cost. -->
+<rDE xmlns="http://ekuatia.set.gov.py/sifen/xsd">
+  <dVerFor>150</dVerFor>
+  <DE Id="05800999991001001000000722026102010000000036">
+    <gTimb>
+      <iTiDE>5</iTiDE>
+      <dDesTiDE>Nota de crédito electrónica</dDesTiDE>
+      <dEst>001</dEst>
+      <dPunExp>001</dPunExp>
+      <dNumDoc>0000007</dNumDoc>
+    </gTimb>
+    <gDatGralOpe>
+      <dFeEmiDE>2026-10-20T11:00:00</dFeEmiDE>
+      <gOpeCom>
+        <cMoneOpe>PYG</cMoneOpe>
+      </gOpeCom>
+      <gEmis>
+        <dRucEm>80099999</dRucEm>
+        <dDVEmi>1</dDVEmi>
+        <dNomEmi>SOL ALIMENTOS S.A.</dNomEmi>
+        <dNomFanEmi>SUPERMERCADO SOL</dNomFanEmi>
+        <dDesCiuEmi>ASUNCION (DISTRITO)</dDesCiuEmi>
+      </gEmis>
+    </gDatGralOpe>
+    <gDtipDE>
+      <gCamNCDE>
+        <iMotEmi>2</iMotEmi>
+        <dDesMotEmi>Devolución</dDesMotEmi>
+      </gCamNCDE>
+      <gCamItem>
+        <dDesProSer>GALLETITAS DULCES 400GR</dDesProSer>
+        <dCantProSer>1</dCantProSer>
+        <gValorItem>
+          <dPUniProSer>9550</dPUniProSer>
+          <gValorRestaItem>
+            <dTotOpeItem>9550</dTotOpeItem>
+          </gValorRestaItem>
+        </gValorItem>
+      </gCamItem>
+    </gDtipDE>
+    <gTotSub>
+      <dTotOpe>9550</dTotOpe>
+      <dTotGralOpe>9550</dTotGralOpe>
+    </gTotSub>
+  </DE>
+</rDE>

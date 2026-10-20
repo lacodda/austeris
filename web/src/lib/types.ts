@@ -323,3 +323,77 @@ export interface EntryFilter {
   place?: string
   status?: EntryStatus
 }
+
+/** A module of the installation, and whether it runs. */
+export interface Module {
+  name: string
+  on: boolean
+}
+
+/** Where a document handed over stands. */
+export type DocumentState = 'waiting' | 'booked' | 'refused'
+
+/** What a waiting document needs the person to say. */
+export type Needed = 'account' | 'category'
+
+/** Why a document waits or was refused: a code said in the interface's
+ * language from its params, and the server's sentence to fall back on. */
+export interface Reason {
+  code: string
+  params: Record<string, unknown>
+  message: string
+}
+
+/** A receipt as its SIFEN document says it. */
+export interface Receipt {
+  code?: string | null
+  kind: 'invoice' | 'credit_note'
+  number?: string | null
+  /** In the shop's own time, without a zone: `2026-10-18T16:12:43`. */
+  issued_at: string
+  issuer: {
+    name: string
+    trade_name?: string | null
+    tax_id?: string | null
+    city?: string | null
+  }
+  currency: string
+  items: { description: string; quantity: Decimal; unit?: string | null; total: Decimal }[]
+  total: Decimal
+  on_credit: boolean
+  payments: { means: string; amount: Decimal; currency: string; card_digits?: string | null }[]
+}
+
+/** A document handed to austeris to be read into the books. */
+export interface ImportDocument {
+  id: string
+  name: string
+  size: number
+  origin: 'upload' | 'folder'
+  state: DocumentState
+  receipt?: Receipt | null
+  /** The name its shop is filed under in the books. */
+  shop?: string | null
+  account_id?: string | null
+  category_id?: string | null
+  needs: Needed[]
+  reason?: Reason | null
+  entry_id?: string | null
+  received_at: string
+  booked_at?: string | null
+}
+
+/** What handing a document over came to. */
+export interface Upload {
+  document: ImportDocument
+  /** It had arrived before, as this file or as the same receipt. */
+  already: boolean
+}
+
+/** What an exchange office's slip was read as. */
+export interface SlipReading {
+  amounts: { amount: Decimal; currency: string }[]
+  /** One of `base` is `rate` of `quote`; either currency may be unknown. */
+  rate?: { base?: string | null; quote?: string | null; rate: Decimal; stated: boolean } | null
+  text: string
+}

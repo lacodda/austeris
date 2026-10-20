@@ -93,17 +93,25 @@ jobs:
           cache-dependency-path: web/pnpm-lock.yaml
       - name: Build the web interface
         run: pnpm --dir web install --frozen-lockfile && pnpm --dir web build
+      # The OCR the image ships, so the slip tests read a photo with the same
+      # program a stand does rather than skipping.
+      - name: Install Tesseract
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y tesseract-ocr tesseract-ocr-eng tesseract-ocr-spa
       # A skipped test also reports "ok", so the run is inspected rather than
-      # trusted: if the database never reached the tests, this job must fail
-      # instead of quietly passing on nothing. The whole suite, not a named
-      # list of files - a list silently stops covering the test file added
-      # after it was written.
+      # trusted: if the database or the OCR never reached the tests, this job
+      # must fail instead of quietly passing on nothing. The whole suite, not
+      # a named list of files - a list silently stops covering the test file
+      # added after it was written.
       - name: Test against PostgreSQL
         run: |
           set -o pipefail
           cargo test -- --nocapture 2>&1 | tee output.txt
           if grep -q 'skipped: AUSTERIS_DATABASE_URL is not set' output.txt; then
             echo "::error::the database tests skipped themselves; AUSTERIS_DATABASE_URL did not reach them"
+            exit 1
+          fi
+          if grep -q 'skipped: Tesseract is not installed' output.txt; then
+            echo "::error::the OCR tests skipped themselves; Tesseract is not on the PATH"
             exit 1
           fi
 

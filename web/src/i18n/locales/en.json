@@ -17,6 +17,7 @@
     "record": "Record",
     "accounts": "Accounts",
     "entries": "Entries",
+    "import": "Import",
     "signOut": "Sign out"
   },
   "signIn": {
@@ -213,7 +214,15 @@
     "fee": "cost {{fee}}",
     "saved": "{{amount}} better than the day's rate",
     "noReference": "no day's rate to measure against",
-    "staleNoFee": "the day's rate is too old to measure against"
+    "staleNoFee": "the day's rate is too old to measure against",
+    "readSlip": "Read the slip",
+    "readingSlip": "Reading the slip...",
+    "slipRead": "From the slip: {{what}}. Check it before recording.",
+    "slipRate": "1 {{base}} = {{rate}} {{quote}}",
+    "slipNothing": "Nothing legible on the slip; type the amounts. The photo is still kept with the exchange.",
+    "slipText": "What was read",
+    "slipKept": "The slip's photo is kept with the exchange.",
+    "slipAttachFailed": "The exchange is recorded, but its photo could not be kept: {{problem}}"
   },
   "record": {
     "title": "Record",
@@ -293,6 +302,27 @@
     },
     "request": {
       "too_large": "That is more than {{limit_mb}} MB - too large to send."
+    },
+    "module": {
+      "switched_off": "This part of austeris is switched off on this installation."
+    },
+    "document": {
+      "unsupported": "Only a receipt's XML is read into the books; a photo or a PDF is attached to its entry instead.",
+      "too_large": "A file can be up to {{limit_mb}} MB.",
+      "unreadable": "This file cannot be read as XML.",
+      "not_a_receipt": "This XML file is not a SIFEN receipt.",
+      "several": "This file holds {{count}} documents; one receipt per file.",
+      "not_a_payment": "This is a {{kind}}, which records no payment.",
+      "incomplete": "The receipt has no {{what}}, or it is not one.",
+      "unknown_account": "The folder is named “{{name}}”, and you have no account called that.",
+      "closed_account": "{{name}} is closed; choose another account.",
+      "no_rate": "The account is in {{to}}, the receipt in {{from}}, and no rate is known on or before {{day}}.",
+      "ledger_unavailable": "The books could not be reached; book it again in a moment.",
+      "refused_by_ledger": "The books refused it: {{message}}"
+    },
+    "slip": {
+      "ocr_unavailable": "This installation cannot read photos: it has no OCR.",
+      "unsupported": "A slip is read from a JPEG, PNG or WebP photo."
     }
   },
   "files": {
@@ -358,5 +388,40 @@
     "restored": "Restored.",
     "erased": "Erased.",
     "emptied": "The trash is empty."
+  },
+  "imports": {
+    "title": "Import",
+    "description": "Receipts read into the books: a SIFEN receipt's XML becomes one entry with a line per item, the shop and the file itself.",
+    "add": "Add receipts",
+    "adding": "Reading...",
+    "paidFrom": "Paid from",
+    "paidFromHelp": "For receipts that do not say - a card payment does not say which card.",
+    "asReceiptsSay": "As each receipt says",
+    "folder": "Receipts dropped in the installation's folder arrive here too.",
+    "uploaded": "{{booked}} booked, {{waiting}} waiting, {{refused}} not read.",
+    "waiting": "Waiting",
+    "waitingHelp": "Say what each one does not, and it goes into the books.",
+    "recent": "Recent",
+    "needsAccount": "Which account paid?",
+    "needsAccountBack": "Which account got it back?",
+    "needsCategory": "What was it for?",
+    "account": "Account",
+    "category": "Category",
+    "book": "Book",
+    "bookNamed": "Book {{name}}",
+    "booked": "In the books: {{name}}.",
+    "stillWaiting": "{{name}} still waits.",
+    "dismiss": "Dismiss",
+    "dismissNamed": "Dismiss {{name}}",
+    "dismissed": "Dismissed.",
+    "inBooks": "In the books",
+    "notRead": "Not read",
+    "fromFolder": "from the folder",
+    "items_one": "{{count}} item",
+    "items_other": "{{count}} items",
+    "onCredit": "sold on credit",
+    "creditNote": "money back",
+    "emptyTitle": "Nothing imported yet",
+    "emptyBody": "Choose a receipt's XML file - the one the shop e-mails - and it is in the books with its items, its shop and the file."
   }
 }

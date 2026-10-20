@@ -1,7 +1,8 @@
-import { useMemo, useState, type FormEvent } from 'react'
+import { useMemo, useRef, useState, type FormEvent } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { useLocale } from 'dowel-ui'
+import { ScanText } from 'lucide-react'
 import { AmountInput } from '@/components/AmountInput'
 import type { Picked } from '@/components/Picker'
 import { Alert } from '@/components/ui/alert'
@@ -10,13 +11,15 @@ import { DatePicker } from '@/components/ui/date-picker'
 import { DialogActions, DialogBody, DialogClose, DialogHeader, DialogPopup, DialogTitle } from '@/components/ui/dialog'
 import { Field } from '@/components/ui/field'
 import { api } from '@/lib/api'
+import { fillFromSlip, useModule } from '@/lib/imports'
 import { formatDay, today } from '@/lib/dates'
 import { negate, parseAmount, sign, sum } from '@/lib/decimal'
 import { keys, openAccounts, useAccounts, useBooksChanged } from '@/lib/ledger'
 import { problem as problemOf } from '@/lib/problem'
+import { useToastManager } from '@/components/ui/toast'
 import { useRecordedToast, useSecondPress } from '@/lib/recording'
 import { formatMoney, formatRate } from '@/lib/money'
-import type { ConversionSummary, PlaceBody } from '@/lib/types'
+import type { ConversionSummary, PlaceBody, SlipReading } from '@/lib/types'
 import { AccountSelect, CounterpartyField, PlaceField } from '@/pages/entries/fields'
 import { resolver } from '@/pages/entries/resolve'
 
@@ -29,6 +32,10 @@ import { resolver } from '@/pages/entries/resolve'
  * official rate, so the person can see before saving whether the exchange
  * office's board was far from it; after saving, the ledger says what the
  * difference cost.
+ *
+ * The slip itself can fill the amounts in: a photo of it is read on the
+ * server, the amounts and the rate it shows are put in the fields for the
+ * person to check, and the photo is kept with the exchange once it is saved.
  */
 export function ExchangeForm({ onDone }: { onDone: () => void }) {
   const { t } = useTranslation()
@@ -47,6 +54,10 @@ export function ExchangeForm({ onDone }: { onDone: () => void }) {
   const [counterparty, setCounterparty] = useState<Picked | null>(null)
   const [place, setPlace] = useState<PlaceBody | null>(null)
   const [problem, setProblem] = useState<string | null>(null)
+  const readsSlips = useModule('imports') === true
+  const toasts = useToastManager()
+  const camera = useRef<HTMLInputElement>(null)
+  const [slip, setSlip] = useState<{ photo: File; reading: SlipReading | null } | null>(null)
 
   const from = usable.find((account) => account.id === fromId)
   const to = usable.find((account) => account.id === toId)
@@ -63,6 +74,24 @@ export function ExchangeForm({ onDone }: { onDone: () => void }) {
       return sign(sum([rate.rate, '-1'])) >= 0 ? rate : api.rateAt(given, got, date)
     },
     enabled: pair !== null,
+  })
+
+  const read = useMutation({
+    mutationFn: (photo: File) => api.readSlip(photo),
+    onSuccess: (reading, photo) => {
+      setSlip({ photo, reading })
+      if (from && to) {
+        const fill = fillFromSlip(reading, from.currency, to.currency)
+        if (fill.given !== undefined) setGiven(fill.given)
+        if (fill.got !== undefined) setGot(fill.got)
+      }
+    },
+    // A slip that cannot be read is still worth keeping: the person types
+    // the amounts, and the photo goes with the exchange all the same.
+    onError: (error: Error, photo) => {
+      setSlip({ photo, reading: null })
+      setProblem(problemOf(error, t))
+    },
   })
 
   const record = useMutation({
@@ -85,6 +114,14 @@ export function ExchangeForm({ onDone }: { onDone: () => void }) {
     onSuccess: (done) => {
       void changed()
       recorded(done.entry, t('exchange.recorded'), done.conversion ? describe(done.conversion, locale, t) : undefined)
+      if (slip) {
+        // Kept with the entry it proves, like a receipt's photo. The exchange
+        // is recorded either way; a photo that could not be kept is said.
+        api
+          .attach(done.entry.id, slip.photo)
+          .then(() => void changed())
+          .catch((error: Error) => toasts.add({ type: 'error', title: t('exchange.slipAttachFailed', { problem: problemOf(error, t) }) }))
+      }
       onDone()
     },
     onError: (error: Error) => {
@@ -126,6 +163,31 @@ export function ExchangeForm({ onDone }: { onDone: () => void }) {
               <AmountInput value={got} onChange={(event) => setGot(event.target.value)} />
             </Field>
           </div>
+          {readsSlips ? (
+            <div className="flex flex-col gap-1">
+              <Button size="sm" className="self-start" onClick={() => camera.current?.click()} disabled={read.isPending || pair === null}>
+                <ScanText aria-hidden />
+                {read.isPending ? t('exchange.readingSlip') : t('exchange.readSlip')}
+              </Button>
+              <input
+                ref={camera}
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                capture="environment"
+                hidden
+                data-testid="slip-photo"
+                onChange={(event) => {
+                  const photo = event.target.files?.[0]
+                  event.target.value = ''
+                  if (photo) {
+                    setProblem(null)
+                    read.mutate(photo)
+                  }
+                }}
+              />
+              {slip ? <SlipSaid reading={slip.reading} /> : null}
+            </div>
+          ) : null}
           {pair && reference.data ? (
             <p className="text-sm text-dim">
               {t('exchange.reference', {
@@ -164,6 +226,30 @@ export function ExchangeForm({ onDone }: { onDone: () => void }) {
       </form>
       {secondPress.dialog}
     </DialogPopup>
+  )
+}
+
+/** What a slip was read as, for checking against the fields it filled. */
+function SlipSaid({ reading }: { reading: SlipReading | null }) {
+  const { t } = useTranslation()
+  const locale = useLocale()
+  if (!reading || (reading.amounts.length === 0 && !reading.rate)) {
+    return <p className="text-sm text-dim">{reading ? t('exchange.slipNothing') : t('exchange.slipKept')}</p>
+  }
+  const parts = reading.amounts.map((money) => formatMoney(money.amount, money.currency, locale))
+  if (reading.rate?.base && reading.rate.quote) {
+    parts.push(t('exchange.slipRate', { base: reading.rate.base, rate: formatRate(reading.rate.rate, locale), quote: reading.rate.quote }))
+  } else if (reading.rate) {
+    parts.push(formatRate(reading.rate.rate, locale))
+  }
+  return (
+    <div className="flex flex-col gap-1 text-sm text-dim">
+      <p>{t('exchange.slipRead', { what: parts.join(', ') })}</p>
+      <details>
+        <summary className="cursor-pointer text-xs">{t('exchange.slipText')}</summary>
+        <pre className="mt-1 max-h-40 overflow-auto font-mono text-xs whitespace-pre-wrap">{reading.text}</pre>
+      </details>
+    </div>
   )
 }
 

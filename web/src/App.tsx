@@ -1,14 +1,16 @@
 import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router'
 import { useTranslation } from 'react-i18next'
-import { ArrowLeftRight, ChevronDown, PenLine, Wallet } from 'lucide-react'
+import { ArrowLeftRight, ChevronDown, FileInput, PenLine, Wallet } from 'lucide-react'
 import { AppShell, Screen } from '@/components/ui/app-shell'
 import { Button } from '@/components/ui/button'
 import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from '@/components/ui/menu'
 import { NavRail, type NavRailItem } from '@/components/ui/nav-rail'
 import { languageName, LANGUAGES, setLanguage } from '@/i18n'
+import { useModule } from '@/lib/imports'
 import { useSession } from '@/lib/session'
 import { Accounts } from '@/pages/Accounts'
 import { Entries } from '@/pages/Entries'
+import { Import } from '@/pages/Import'
 import { Record } from '@/pages/Record'
 import { SignIn } from '@/pages/SignIn'
 import { Trash } from '@/pages/Trash'
@@ -18,6 +20,8 @@ const SCREENS = [
   { id: 'record', path: '/record', icon: <PenLine aria-hidden /> },
   { id: 'accounts', path: '/accounts', icon: <Wallet aria-hidden /> },
   { id: 'entries', path: '/entries', icon: <ArrowLeftRight aria-hidden /> },
+  // A module's screen, shown only while the installation runs it.
+  { id: 'import', path: '/import', icon: <FileInput aria-hidden />, module: 'imports' },
 ] as const
 
 /** Which screen is showing. */
@@ -34,9 +38,11 @@ export function App() {
 function Books() {
   const { t } = useTranslation()
   const { pathname } = useLocation()
-  const items: NavRailItem[] = SCREENS.map((screen) => ({ id: screen.id, label: t(`nav.${screen.id}`), icon: screen.icon }))
-  const active = SCREENS.find((screen) => pathname.startsWith(screen.path))?.id
-  const link = (item: NavRailItem) => <NavLink to={SCREENS.find((screen) => screen.id === item.id)?.path ?? '/'} />
+  const imports = useModule('imports')
+  const shown = SCREENS.filter((screen) => !('module' in screen) || imports === true)
+  const items: NavRailItem[] = shown.map((screen) => ({ id: screen.id, label: t(`nav.${screen.id}`), icon: screen.icon }))
+  const active = shown.find((screen) => pathname.startsWith(screen.path))?.id
+  const link = (item: NavRailItem) => <NavLink to={shown.find((screen) => screen.id === item.id)?.path ?? '/'} />
 
   return (
     <AppShell top={<Header items={items} active={active} link={link} />}>
@@ -50,6 +56,7 @@ function Books() {
           {/* Under the entries, so the navigation keeps them lit: the
               trash is where an entry goes, not a place of its own. */}
           <Route path="/entries/trash" element={<Trash />} />
+          {imports === false ? null : <Route path="/import" element={<Import />} />}
           {/* An address nothing answers lands on the money rather than on a
               blank page. */}
           <Route path="*" element={<Navigate to="/accounts" replace />} />

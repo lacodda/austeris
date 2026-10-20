@@ -61,6 +61,33 @@ export function negate(value: Decimal): Decimal {
   return write({ units: -units, scale })
 }
 
+/** The exact product. */
+export function times(a: Decimal, b: Decimal): Decimal {
+  const [x, y] = [scaled(a), scaled(b)]
+  return write({ units: x.units * y.units, scale: x.scale + y.scale })
+}
+
+/** `a / b`, to `places` digits after the point, half away from zero - the way
+ * a bank rounds a charge. */
+export function over(a: Decimal, b: Decimal, places: number): Decimal {
+  const [x, y] = [scaled(a), scaled(b)]
+  if (y.units === 0n) throw new Error('division by zero')
+  // a / b = (x.units / 10^x.scale) / (y.units / 10^y.scale); one digit more
+  // than asked for, so the last one decides the rounding.
+  const shift = places + 1 + y.scale - x.scale
+  const numerator = shift >= 0 ? x.units * 10n ** BigInt(shift) : x.units / 10n ** BigInt(-shift)
+  const quotient = numerator / y.units
+  const negative = quotient < 0n
+  const magnitude = negative ? -quotient : quotient
+  const rounded = (magnitude + 5n) / 10n
+  return write({ units: negative ? -rounded : rounded, scale: places })
+}
+
+/** An amount at `places` digits after the point, half away from zero. */
+export function roundTo(value: Decimal, places: number): Decimal {
+  return over(value, '1', places)
+}
+
 /** -1, 0 or 1. */
 export function sign(value: Decimal): -1 | 0 | 1 {
   const { units } = scaled(value)
@@ -117,7 +144,7 @@ export function parseAmount(text: string, locale: string, currency?: string): De
 /** How many digits after the point a currency has: none for PYG, two for
  * USD - or `undefined` for a code `Intl` does not know (a coin), which keeps
  * every digit it is given. */
-function currencyDigits(currency: string): number | undefined {
+export function currencyDigits(currency: string): number | undefined {
   // Any three letters are a well-formed code to `Intl`, and an unknown one
   // gets two digits - a coin's eight would be refused as too many.
   if (!isIsoCurrency(currency)) return undefined
