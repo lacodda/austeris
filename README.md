@@ -115,11 +115,9 @@ Every endpoint, with its shape: **[the ledger reference](https://lacodda.github.
 
 ## Status
 
-v0.13.0, early, with the books open: accounts, entries with who, where and
-which tags, held card payments, exchanges with their fee, and the day's rates
-of two central banks - from the command line, the API or a phone. Receipts
-arrive as files rather than typing; every entry keeps its receipts and its
-history, and a deletion waits thirty days in the trash.
+v0.13.0, early, with the books open: accounts, entries, holds and exchanges
+in several currencies, receipts read from their files, each entry's history
+and a trash - from the command line, the API or a phone.
 Each version: [CHANGELOG](https://github.com/lacodda/austeris/blob/main/CHANGELOG.md).
 
 ## Documentation
