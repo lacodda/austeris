@@ -183,7 +183,9 @@ pub async fn seed(books: &Books) -> Result<Seeded> {
 ///
 /// A payment is seeded held when it is recent; a run days later finds it
 /// still held - its key says it is already there - and posts it on the day the
-/// bank would have.
+/// bank would have. Only the demo's own: a hold someone recorded while looking
+/// around, or a receipt read in from another currency, waits for whoever made
+/// it to say what the bank took - a restart is not a bank.
 async fn post_what_the_bank_has_taken(pool: &PgPool, owner: Uuid, today: NaiveDate) -> Result<()> {
     let held = ledger::entries(
         pool,
@@ -195,7 +197,7 @@ async fn post_what_the_bank_has_taken(pool: &PgPool, owner: Uuid, today: NaiveDa
         },
     )
     .await?;
-    for entry in held {
+    for entry in held.into_iter().filter(|entry| entry.source.as_deref() == Some(SOURCE)) {
         let posted_on = entry.occurred_on + Days::new(HELD_DAYS);
         if posted_on <= today {
             ledger::clear_entry(pool, owner, &demo(), entry.id, posted_on, None).await?;
@@ -869,6 +871,55 @@ mod tests {
             .expect("reading a history")
             .expect("a history");
         assert_eq!(history.len(), 3, "recorded, the receipt kept, the description put right: {history:#?}");
+    }
+
+    #[tokio::test]
+    async fn a_restart_posts_the_demos_own_holds_and_no_one_elses() {
+        use austeris_ledger::model::EntryStatus;
+        use austeris_ledger::repository::{self as ledger, NewEntry, NewLine, Side};
+
+        let Some(books) = books("demo_holds").await else { return };
+        seed(&books).await.expect("seeding");
+        let owner = austeris_identity::routes::person(&books.identity, EMAIL)
+            .await
+            .expect("reading the household")
+            .expect("the household exists");
+        let account = ledger::accounts(&books.ledger, owner).await.expect("listing")[0].clone();
+        let category = ledger::categories(&books.ledger, owner)
+            .await
+            .expect("listing")
+            .into_iter()
+            .find(|category| category.flow == austeris_ledger::model::Flow::Expense)
+            .expect("an expense category");
+
+        // Someone looking around records a payment the bank has not posted,
+        // well before the days a bank takes - as a receipt read in from
+        // another currency is held.
+        let long_ago = Utc::now().date_naive() - chrono::Days::new(super::HELD_DAYS + 5);
+        let line = |side, amount: i64| NewLine {
+            side,
+            amount: Decimal::from(amount),
+            currency: account.currency.clone(),
+            note: String::new(),
+        };
+        let theirs = ledger::post_entry(
+            &books.ledger,
+            owner,
+            &austeris_common::Actor::Person(owner),
+            &NewEntry {
+                occurred_on: long_ago,
+                description: "their own hold".to_owned(),
+                pending: true,
+                lines: vec![line(Side::Account(account.id), -10), line(Side::Category(category.id), 10)],
+                ..NewEntry::default()
+            },
+        )
+        .await
+        .expect("recording a hold");
+
+        seed(&books).await.expect("seeding again");
+        let after = ledger::entry(&books.ledger, owner, theirs.entry.id).await.expect("reading").expect("the entry");
+        assert_eq!(after.status, EntryStatus::Pending, "a restart posted a hold the demo did not make");
     }
 
     #[test]
