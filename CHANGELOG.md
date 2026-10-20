@@ -2,6 +2,25 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.13.0] - 2026-10-20
+
+### Bug Fixes
+- Take the patched root certificates and zip
+- Move files out of folders the owner made, and leave a stuck one alone
+- Post only the demo's own holds on a restart
+
+### Build
+- Install what fell behind the lockfile before a script runs
+
+### Documentation
+- Receipts, the folder they arrive in and exchange slips
+- Say the status in three lines
+
+### Features
+- Find a shop by its tax number and post an entry with its file
+- Find the person an address belongs to
+- Read receipts into the books and exchange slips from a photo
+
 ## [0.12.0] - 2026-10-15
 
 ### Bug Fixes
