@@ -11,6 +11,21 @@ package identity.v1;
 service IdentityService {
   // Resolves a session token to the person holding it.
   rpc ValidateSession(ValidateSessionRequest) returns (ValidateSessionResponse);
+  // The person signing in with an address: how a module that is handed
+  // something by address - a folder named after its owner - learns whose it
+  // is. Nothing about the person beyond their id.
+  rpc FindPerson(FindPersonRequest) returns (FindPersonResponse);
+}
+
+message FindPersonRequest {
+  // The address, in any case.
+  string email = 1;
+}
+
+message FindPersonResponse {
+  // Empty when nobody signs in with that address, or their account is
+  // deactivated: either way there are no books of theirs to put anything in.
+  string user_id = 1;
 }
 
 message ValidateSessionRequest {

@@ -322,3 +322,42 @@ async fn readiness_reports_the_schema_version_this_build_expects() {
     let newest = MIGRATOR.iter().map(|m| m.version).max().expect("the service ships migrations");
     assert!(body.contains(&newest.to_string()), "readiness did not name the applied version: {body}");
 }
+
+#[tokio::test]
+async fn an_address_names_its_person_only_while_they_can_sign_in() {
+    use austeris_proto::identity::v1::FindPersonRequest;
+    use austeris_proto::identity::v1::identity_service_server::IdentityService as _;
+
+    let Some(pool) = pool("test_auth_find_person").await else { return };
+    let id = user_with_password(&pool, "Owner@Example.test", "correct horse").await;
+    let service = austeris_identity::grpc::Service::for_tests(pool.clone());
+    let find = |email: &str| FindPersonRequest { email: email.to_owned() };
+
+    // In any case, as signing in matches it.
+    let found = service
+        .find_person(tonic::Request::new(find(" owner@example.TEST ")))
+        .await
+        .expect("finding")
+        .into_inner();
+    assert_eq!(found.user_id, id.to_string());
+
+    let nobody = service
+        .find_person(tonic::Request::new(find("stranger@example.test")))
+        .await
+        .expect("finding")
+        .into_inner();
+    assert_eq!(nobody.user_id, "");
+
+    // Someone who has left has no books to put anything in.
+    sqlx::query("UPDATE users SET active = false WHERE id = $1")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .expect("deactivating");
+    let gone = service
+        .find_person(tonic::Request::new(find("owner@example.test")))
+        .await
+        .expect("finding")
+        .into_inner();
+    assert_eq!(gone.user_id, "", "a deactivated person was still found");
+}

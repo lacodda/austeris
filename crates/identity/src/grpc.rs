@@ -1,13 +1,15 @@
 //! The identity service's gRPC surface.
 //!
-//! One call: hand over a session token, get back who holds it. This is how
-//! every other service learns who is calling without any of them ever seeing a
-//! password (ADR 0001, ADR 0003).
+//! Hand over a session token, get back who holds it: this is how every other
+//! service learns who is calling without any of them ever seeing a password
+//! (ADR 0001, ADR 0003). And hand over an address, get back whose it is - for a
+//! module handed something by address rather than by a session.
 
 use austeris_proto::identity::v1::identity_service_server::{IdentityService, IdentityServiceServer};
-use austeris_proto::identity::v1::{ValidateSessionRequest, ValidateSessionResponse};
+use austeris_proto::identity::v1::{FindPersonRequest, FindPersonResponse, ValidateSessionRequest, ValidateSessionResponse};
 use sqlx::PgPool;
 use tonic::{Request, Response, Status};
+use uuid::Uuid;
 
 use crate::session;
 
@@ -21,6 +23,12 @@ impl Service {
     #[must_use]
     pub fn new(pool: PgPool) -> IdentityServiceServer<Self> {
         IdentityServiceServer::new(Self { pool })
+    }
+
+    /// The bare service, so tests can call the contract without a socket.
+    #[must_use]
+    pub fn for_tests(pool: PgPool) -> Self {
+        Self { pool }
     }
 }
 
@@ -43,6 +51,21 @@ impl IdentityService for Service {
                 email: holder.email,
             },
             None => ValidateSessionResponse::default(),
+        }))
+    }
+
+    async fn find_person(&self, request: Request<FindPersonRequest>) -> Result<Response<FindPersonResponse>, Status> {
+        let email = request.into_inner().email;
+        let found: Option<Uuid> = sqlx::query_scalar("SELECT id FROM users WHERE lower(email) = lower($1) AND active")
+            .bind(email.trim())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|error| {
+                tracing::error!(%error, "finding a person failed");
+                Status::internal("could not find the person")
+            })?;
+        Ok(Response::new(FindPersonResponse {
+            user_id: found.map(|id| id.to_string()).unwrap_or_default(),
         }))
     }
 }
