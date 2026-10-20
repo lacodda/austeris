@@ -108,6 +108,14 @@ says the rate the deal was done at, the reference it is measured against, and
 what the difference cost - on a line of its own, under the exchange fees
 category.
 
+**Read the slip** - once both accounts are chosen - takes a photo of the
+exchange office's slip, on a phone with the camera. The installation reads it
+([Imports](/austeris/reference/imports/#post-apiv1importsslips)) and fills in the
+amounts it found, working one out from the slip's rate when only the other was
+legible; what was read is shown beside the fields, with the text itself, to
+check before recording. The photo is kept with the exchange once it is
+recorded - also when nothing on it could be read.
+
 ### An entry
 
 Opening an entry shows every line of it, the files kept with it and its
@@ -153,6 +161,24 @@ trash** are asked about first, because nothing brings back what they erase.
 A period, an account, a category, a tag, a counterparty, and whether the bank
 has posted it. The filter is in the address, so a filtered list can be
 bookmarked, reloaded or sent to the next tab.
+
+## Import
+
+Receipts read into the books ([Imports](/austeris/reference/imports/)), shown
+while the installation runs the module. **Add receipts** takes a receipt's XML
+file - several at once - and says what they came to; **Paid from** names the
+account for receipts that do not say, as a card payment does not say which
+card.
+
+**Waiting** lists the receipts that are not in the books yet, each with what it
+waits for: which account paid, what it was for, or why the books did not take
+it. Choose them and **Book**; a category typed that does not exist yet is
+created, and the shop takes it as its usual one. **Recent** lists what went in
+and what could not be read, and why. **Dismiss** takes a document off the list;
+an entry it became stays.
+
+Receipts dropped in the installation's folder arrive here too, marked *from the
+folder*.
 
 ## Language, numbers and themes
 

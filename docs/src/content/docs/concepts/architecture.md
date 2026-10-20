@@ -10,7 +10,7 @@ behind a single gateway.
 
 A service owns a module of the product: `identity` owns people and sessions,
 `market` owns instruments and their prices, `ledger` owns accounts, categories
-and entries.
+and entries, `imports` owns the documents read into them.
 Each one:
 
 - owns **its own schema** in the shared database, and never reads another
@@ -25,7 +25,14 @@ joining two schemas.
 The ledger is the core and calls no module; modules call it. That is why the
 official exchange rates `market` reads from the central banks are **pushed** to
 the ledger after each hourly refresh, through `ledger.v1.RecordRates`, rather
-than fetched by the ledger when it needs one (ADR 0009).
+than fetched by the ledger when it needs one (ADR 0009). And it is why a
+receipt is read by `imports`, which posts the entry it becomes through
+`ledger.v1.PostEntry` with the receipt's file in the same transaction (ADR
+0014): the ledger learns no tax authority's format.
+
+A module can be switched off - `AUSTERIS_IMPORTS=off` - and is then not started
+at all; the gateway answers its paths with `module.switched_off`, and
+`/api/v1/modules` tells a screen not to offer it.
 
 ## One binary, one process
 
@@ -103,8 +110,10 @@ the running services: the binary already contains every service, so a spec
 assembled over the network would be the same answer arrived at less reliably -
 and would go blank whenever a service was down.
 
-The API reference on this site is generated from that document at build time.
-A spec checked into the tree is a copy nothing keeps honest.
+The API reference on this site is generated from that document at build time,
+by the binary being released: `austeris openapi` prints it to stdout, without a
+database or a running installation. A spec checked into the tree is a copy
+nothing keeps honest.
 
 On the gRPC side, `buf breaking` runs in CI against `main`. A change to an
 existing package that would break a client already speaking it is refused; the

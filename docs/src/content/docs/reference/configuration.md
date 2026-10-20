@@ -32,6 +32,7 @@ directory must not change how a deployment behaves.
 | `AUSTERIS_IDENTITY_GRPC_ADDR` | `http://identity:9090` | Where to validate sessions. |
 | `AUSTERIS_LEDGER_ADDR` | `http://ledger:8080` | Where to forward `/api/v1/ledger/...`. |
 | `AUSTERIS_MARKET_ADDR` | `http://market:8080` | Where to forward `/api/v1/market/...`. |
+| `AUSTERIS_IMPORTS_ADDR` | `http://imports:8080` | Where to forward `/api/v1/imports/...`. |
 
 Every routed service has a pair, `AUSTERIS_<SERVICE>_ADDR` and
 `AUSTERIS_<SERVICE>_GRPC_ADDR`, so one service can be run outside compose while
@@ -52,11 +53,25 @@ services reads none of them: it knows where it put them.
 | --- | --- | --- |
 | `AUSTERIS_CMC_API_KEY` | unset | CoinMarketCap key. Without it that price source is switched off: the service starts, says so once, and serves whatever prices are already stored. |
 
+## imports
+
+A module: on unless switched off, and then not started at all - see
+[Imports](/austeris/reference/imports/).
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `AUSTERIS_IMPORTS` | `on` | `off` switches the module off: it is not started, its paths answer `module.switched_off`, and the web interface does not offer it. Read by the process running it and by the gateway. |
+| `AUSTERIS_INBOX` | unset | The folder receipts are taken in from, every half minute: `<inbox>/<sign-in address>/`, and `<inbox>/<sign-in address>/<account>/` for receipts paid from that account. Unset, no folder is watched. The compose files set it to `/inbox`. |
+
+Exchange slips are read by Tesseract when it is on the `PATH` - the image carries
+it, with English and Spanish. Without it the module starts, says so once, and
+answers a photo with `slip.ocr_unavailable`.
+
 ## The CLI
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `AUSTERIS_URL` | `http://127.0.0.1:8084` | Which installation `austeris add` and `austeris login` talk to. Read by the CLI, never by a service. |
+| `AUSTERIS_URL` | `http://127.0.0.1:8084` | Which installation `austeris add`, `austeris import` and `austeris login` talk to. Read by the CLI, never by a service. |
 
 ## The compose files
 
@@ -68,4 +83,5 @@ Read by compose from `.env`, not by any binary:
 | `POSTGRES_PASSWORD` | - | The database password, required by the install file. Generate it: `openssl rand -hex 24`. |
 | `AUSTERIS_VERSION` | `latest` | Which published image to run. Pin it: an unattended `pull` should not follow `latest`. |
 | `AUSTERIS_PORT` | `8084` | The published port - the only one. |
+| `AUSTERIS_INBOX_DIR` | `./inbox` | The folder on the host that is the container's `/inbox`. On Linux it has to be writable by uid 10001, which moves each file it has read. |
 | `AUSTERIS_DB_PORT` | `5434` | Development file only: where PostgreSQL is published for a developer's own tools. |

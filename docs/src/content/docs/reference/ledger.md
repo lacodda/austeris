@@ -574,12 +574,18 @@ Who money goes to or comes from: a shop, a service, a person, an employer.
 
 ```json
 [{ "id": "…", "name": "Casa Rica", "key": "casarica", "kind": "shop",
-   "default_category_id": "…" }]
+   "default_category_id": "…", "tax_id": "80012345-6" }]
 ```
 
 `key` is how it is typed after `@`: the name in lower case without spaces or
 punctuation. Derived, never set - and unique, so *Casa Rica* and *casa-rica*
 cannot be two counterparties splitting what was spent there.
+
+`tax_id` is the shop's tax number as its receipts print it - a Paraguayan RUC
+with its check digit. A receipt finds its shop by it before its name, whatever
+name the receipt is printed under, and a shop typed by hand gains it from its
+first receipt ([Imports](/austeris/reference/imports/)). Unique too: two
+counterparties cannot carry one number.
 
 ### `POST /api/v1/ledger/counterparties`
 
@@ -594,7 +600,8 @@ have one typed the same way.
 
 ### `PATCH /api/v1/ledger/counterparties/{id}`
 
-Takes `name`, `kind` and `default_category_id`; `null` clears the last two.
+Takes `name`, `kind`, `default_category_id` and `tax_id`; `null` clears the
+last three.
 Every entry naming it follows: they name the counterparty, not a copy of its
 name.
 
@@ -605,7 +612,9 @@ Only one that no entry names; `409` otherwise.
 ## Places
 
 A country, as its ISO 3166-1 code, and a city in it when one is said. A code that
-only looks like one is refused - the United Kingdom is `GB`, not `UK`.
+only looks like one is refused - the United Kingdom is `GB`, not `UK`. A city is
+one place however its accents are typed: `ASUNCION` on a receipt is the
+Asunción already in your books.
 
 ### `GET /api/v1/ledger/places`
 

@@ -28,6 +28,11 @@ the money it could not convert instead of quietly leaving it out.
 - **One line from a receipt to the books.** `austeris add 45000 food lunch at
   the corner` - parsed by the service, so the terminal, the web page and the
   phone cannot read the same sentence differently.
+- **Receipts read, not typed.** A Paraguayan receipt's XML - uploaded, given to
+  `austeris import`, or dropped in a folder - becomes an entry with a line per
+  item, its shop and the file itself; what it does not say is asked once. An
+  exchange office's slip fills in an exchange from a photo, read on your own
+  machine.
 - **Several currencies, honestly.** A transfer, a split receipt and an exchange
   are all the same shape underneath; nothing is converted behind your back.
 - **Your whole picture.** Accounts and entries, assets and liabilities, loans
@@ -110,10 +115,11 @@ Every endpoint, with its shape: **[the ledger reference](https://lacodda.github.
 
 ## Status
 
-v0.12.0, early, with the books open: accounts, entries with who, where and
+v0.13.0, early, with the books open: accounts, entries with who, where and
 which tags, held card payments, exchanges with their fee, and the day's rates
-of two central banks - from the command line, the API or a phone. Every entry
-keeps its receipts and its history; a deletion waits thirty days in the trash.
+of two central banks - from the command line, the API or a phone. Receipts
+arrive as files rather than typing; every entry keeps its receipts and its
+history, and a deletion waits thirty days in the trash.
 Each version: [CHANGELOG](https://github.com/lacodda/austeris/blob/main/CHANGELOG.md).
 
 ## Documentation

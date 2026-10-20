@@ -55,6 +55,20 @@ and create an account, and the dump would collide with both. The script starts
 the database alone, checks the dump, refuses a database that already holds
 books, restores, and then starts austeris.
 
+## The folder receipts arrive in
+
+The stand's compose file mounts `inbox/` beside it as the folder receipts are
+taken in from ([Imports](/austeris/reference/imports/#the-folder)). Made once,
+owned by the container's user:
+
+```console
+$ ssh pi 'cd /srv/austeris && mkdir -p inbox && sudo chown -R 10001 inbox'
+```
+
+A receipt copied into `inbox/<your sign-in address>/` from another machine is
+in the books within half a minute, and the file moves into `done/`. Copying the
+same folder again is harmless: a receipt already in is answered as such.
+
 ## A repair by hand
 
 A change made straight in the database - `psql` on the stand - is recorded in
