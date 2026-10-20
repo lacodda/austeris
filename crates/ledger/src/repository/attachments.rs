@@ -3,9 +3,10 @@
 use anyhow::{Context, Result};
 use austeris_common::Actor;
 use sha2::{Digest, Sha256};
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
+use super::NewFile;
 use crate::model::Attachment;
 
 /// What attaching a file came to.
@@ -73,6 +74,33 @@ pub async fn attach(pool: &PgPool, owner_id: Uuid, by: &Actor, entry_id: Uuid, n
     .context("keeping the file")?;
     transaction.commit().await.context("keeping the file")?;
     Ok(Attached::Now(attachment))
+}
+
+/// Keeps files with an entry being written, in its transaction.
+///
+/// The same file twice is kept once: two copies of one receipt are one
+/// receipt, as when they are attached one after the other.
+pub(super) async fn keep_with_new_entry(transaction: &mut Transaction<'_, Postgres>, owner_id: Uuid, entry_id: Uuid, files: &[NewFile]) -> Result<()> {
+    for file in files {
+        let sha256 = Sha256::digest(&file.content).to_vec();
+        let size = i64::try_from(file.content.len()).context("a file larger than the database can say")?;
+        sqlx::query(
+            "INSERT INTO attachments (owner_id, entry_id, name, media_type, size, sha256, content)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
+             ON CONFLICT (entry_id, sha256) WHERE removed_at IS NULL DO NOTHING",
+        )
+        .bind(owner_id)
+        .bind(entry_id)
+        .bind(&file.name)
+        .bind(&file.media_type)
+        .bind(size)
+        .bind(&sha256)
+        .bind(&file.content)
+        .execute(&mut **transaction)
+        .await
+        .context("keeping a file with the entry")?;
+    }
+    Ok(())
 }
 
 /// A file of this person's and its bytes - on an entry, taken off one, or

@@ -367,6 +367,7 @@ pub async fn repeat(State(pool): State<PgPool>, caller: Caller, Path(id): Path<U
             place,
             tags: entry.tags.clone(),
             lines,
+            files: Vec::new(),
             allow_duplicate: body.allow_duplicate,
         };
         (new, None)

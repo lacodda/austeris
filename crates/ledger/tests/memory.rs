@@ -310,6 +310,7 @@ async fn a_module_and_a_script_are_each_named_for_what_they_did() {
                     note: String::new(),
                 },
             ],
+            ..Default::default()
         }))
         .await
         .expect("posting")
@@ -488,7 +489,7 @@ async fn two_restores_at_once_bring_one_entry_back() {
 async fn what_was_deleted_while_the_entry_waited_is_found_again_by_name() {
     let Some(pool) = pool("test_memory_restore_names").await else { return };
     let books = books(&pool).await;
-    let shop = repository::create_counterparty(&pool, books.owner, "Casa Rica", None, None)
+    let shop = repository::create_counterparty(&pool, books.owner, "Casa Rica", None, None, None)
         .await
         .expect("a counterparty");
     let entry = spend(&pool, &books, "45000", json!({ "counterparty_id": shop.id, "tags": ["trip", "work"] })).await;

@@ -222,6 +222,7 @@ impl Priced {
             place: payment.place,
             tags: payment.tags,
             lines,
+            files: Vec::new(),
             allow_duplicate,
         };
         Ok((entry, summary))

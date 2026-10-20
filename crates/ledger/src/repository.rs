@@ -412,10 +412,25 @@ pub struct NewEntry {
     pub tags: Vec<String>,
     /// The sides of the movement.
     pub lines: Vec<NewLine>,
+    /// Files kept with it from the start - the receipt it was read from -
+    /// written in the same transaction, so the entry never exists without the
+    /// proof it was made from.
+    pub files: Vec<NewFile>,
     /// Record it even when the same entry was recorded a moment ago: the
     /// person was asked and said this is a second one. Ignored for an entry
     /// with an idempotency key, which a retry finds by its key instead.
     pub allow_duplicate: bool,
+}
+
+/// A file to keep with an entry being written.
+#[derive(Debug, Clone)]
+pub struct NewFile {
+    /// Its name, as kept ([`crate::attachment::file_name`]).
+    pub name: String,
+    /// What its bytes were read as ([`crate::attachment::media_type`]).
+    pub media_type: String,
+    /// The file itself.
+    pub content: Vec<u8>,
 }
 
 /// How long after an entry the same one is taken for a second press rather
@@ -445,14 +460,21 @@ pub struct PossibleDuplicate {
 pub enum CounterpartyChoice {
     /// One the person already has.
     Existing(Uuid),
-    /// One named for the first time, created with the entry - in the same
-    /// transaction, so a refused entry leaves no counterparty behind. When one
-    /// by that key appeared in the meantime, it is used instead.
+    /// One named rather than pointed at: found by its tax number, else by the
+    /// key of its name, else created with the entry - in the same
+    /// transaction, so a refused entry leaves no counterparty behind.
+    ///
+    /// What the one found lacks it takes from here: a shop typed by hand
+    /// gains the tax number its first receipt carries, and one with no usual
+    /// category gains this one, so the next entry naming it can leave the
+    /// category out. What it already has is never replaced.
     New {
         /// What to call it.
         name: String,
         /// What money spent there is usually for.
         usual_category: Option<Uuid>,
+        /// Its tax number, as kept ([`crate::model::tax_id`]).
+        tax_id: Option<String>,
     },
 }
 
@@ -549,6 +571,7 @@ pub async fn post_entry(pool: &PgPool, owner_id: Uuid, by: &Actor, new: &NewEntr
 
     insert_lines(&mut transaction, entry_id, &new.lines).await?;
     details::set_tags(&mut transaction, owner_id, entry_id, &new.tags).await?;
+    attachments::keep_with_new_entry(&mut transaction, owner_id, entry_id, &new.files).await?;
 
     // This is where an unbalanced entry fails: the trigger is deferred, so the
     // rule is applied to the whole entry at once.

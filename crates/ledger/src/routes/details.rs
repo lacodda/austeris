@@ -49,6 +49,8 @@ pub struct NewCounterparty {
     pub kind: Option<CounterpartyKind>,
     /// What money spent there is usually for.
     pub default_category_id: Option<Uuid>,
+    /// Its tax number, as its receipts print it: a RUC, as `80012345-6`.
+    pub tax_id: Option<String>,
 }
 
 /// Creates a counterparty.
@@ -62,21 +64,22 @@ pub struct NewCounterparty {
     request_body = NewCounterparty,
     responses(
         (status = 201, description = "The counterparty", body = Counterparty),
-        (status = 400, description = "A counterparty needs a name with a letter or a digit in it", body = austeris_common::error::ErrorBody),
+        (status = 400, description = "A counterparty needs a name with a letter or a digit in it, and a tax number is letters and digits", body = austeris_common::error::ErrorBody),
         (status = 404, description = "The category is not yours", body = austeris_common::error::ErrorBody),
-        (status = 409, description = "You have one typed the same way", body = austeris_common::error::ErrorBody),
+        (status = 409, description = "You have one typed the same way, or with the same tax number", body = austeris_common::error::ErrorBody),
     ),
 )]
 pub async fn create_counterparty(State(pool): State<PgPool>, caller: Caller, Json(new): Json<NewCounterparty>) -> AppResult<(StatusCode, Json<Counterparty>)> {
     let name = counterparty_name(&new.name)?;
-    let counterparty = repository::create_counterparty(&pool, caller.id(), &name, new.kind, new.default_category_id)
+    let tax_id = new.tax_id.as_deref().map(checked_tax_id).transpose()?;
+    let counterparty = repository::create_counterparty(&pool, caller.id(), &name, new.kind, new.default_category_id, tax_id.as_deref())
         .await
         .map_err(|error| counterparty_refused(error, &name))?;
     Ok((StatusCode::CREATED, Json(counterparty)))
 }
 
 /// What changes about a counterparty. A field left out is left as it is;
-/// `null` clears the kind or the usual category.
+/// `null` clears the kind, the usual category or the tax number.
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct CounterpartyPatch {
     /// What to call it.
@@ -89,10 +92,14 @@ pub struct CounterpartyPatch {
     #[serde(default)]
     #[schema(value_type = Option<Uuid>)]
     pub default_category_id: Change<Uuid>,
+    /// Its tax number, as its receipts print it.
+    #[serde(default)]
+    #[schema(value_type = Option<String>)]
+    pub tax_id: Change<String>,
 }
 
-/// Renames a counterparty, says what it is, or changes what money spent there
-/// is usually for.
+/// Renames a counterparty, says what it is, changes what money spent there is
+/// usually for, or gives it the tax number its receipts are matched by.
 ///
 /// Every entry naming it follows: they name the counterparty, not a copy of its
 /// name.
@@ -104,8 +111,9 @@ pub struct CounterpartyPatch {
     request_body = CounterpartyPatch,
     responses(
         (status = 200, description = "The counterparty, as it now is", body = Counterparty),
+        (status = 400, description = "The tax number is not one", body = austeris_common::error::ErrorBody),
         (status = 404, description = "No such counterparty, or the category is not yours", body = austeris_common::error::ErrorBody),
-        (status = 409, description = "You have another one typed the same way", body = austeris_common::error::ErrorBody),
+        (status = 409, description = "You have another one typed the same way, or with the same tax number", body = austeris_common::error::ErrorBody),
     ),
 )]
 pub async fn change_counterparty(
@@ -119,6 +127,7 @@ pub async fn change_counterparty(
         name: name.clone(),
         kind: patch.kind,
         default_category_id: patch.default_category_id,
+        tax_id: patch.tax_id.try_map(|raw| checked_tax_id(&raw))?,
     };
     repository::change_counterparty(&pool, caller.id(), id, &changes)
         .await
@@ -162,8 +171,21 @@ fn counterparty_name(raw: &str) -> AppResult<String> {
     Ok(name.to_owned())
 }
 
+/// A tax number as it is kept, or why it is not one.
+fn checked_tax_id(raw: &str) -> AppResult<String> {
+    crate::model::tax_id(raw).ok_or_else(|| AppError::bad_request(anyhow::anyhow!("`{raw}` is not a tax number; letters and digits, as in 80012345-6")))
+}
+
 /// What a refused write of a counterparty means to the caller.
 fn counterparty_refused(error: anyhow::Error, name: &str) -> AppError {
+    let collided_on_tax_id = error
+        .chain()
+        .filter_map(|cause| cause.downcast_ref::<sqlx::Error>())
+        .filter_map(|error| error.as_database_error())
+        .any(|db| db.constraint() == Some("counterparties_owner_tax_id_key"));
+    if collided_on_tax_id {
+        return AppError::new(StatusCode::CONFLICT, anyhow::anyhow!("another of your counterparties has that tax number"));
+    }
     if is_unique_violation(&error) {
         return AppError::new(StatusCode::CONFLICT, anyhow::anyhow!("you have a counterparty typed the same way as `{name}`"));
     }

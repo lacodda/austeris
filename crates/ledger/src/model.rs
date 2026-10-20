@@ -148,6 +148,27 @@ pub struct Counterparty {
     /// What money spent here is usually for, so a typed line naming it can
     /// leave the category out.
     pub default_category_id: Option<Uuid>,
+    /// Its tax number as its receipts print it - a Paraguayan RUC, as
+    /// `80012345-6` - by which a receipt finds it whatever name it is printed
+    /// under. Absent until a receipt or the person says.
+    pub tax_id: Option<String>,
+}
+
+/// A tax number as it is kept: upper case, without the spaces and dots it is
+/// sometimes printed with - `80.012.345-6` is `80012345-6`. `None` for
+/// anything that is not one: letters and digits, in parts joined by dashes.
+#[must_use]
+pub fn tax_id(raw: &str) -> Option<String> {
+    let kept: String = raw
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '.')
+        .map(|c| c.to_ascii_uppercase())
+        .collect();
+    let well_formed = !kept.is_empty()
+        && kept
+            .split('-')
+            .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit() || c.is_ascii_uppercase()));
+    well_formed.then_some(kept)
 }
 
 /// A counterparty, as an entry names it.
@@ -714,6 +735,16 @@ mod tests {
         // explains.
         let wednesday = super::RateInForce::new(rate(23), monday);
         assert_eq!((wednesday.age_days, wednesday.stale), (5, true));
+    }
+
+    #[test]
+    fn a_tax_number_is_kept_one_way_however_it_was_printed() {
+        assert_eq!(super::tax_id("80012345-6").as_deref(), Some("80012345-6"));
+        assert_eq!(super::tax_id(" 80.012.345-6 ").as_deref(), Some("80012345-6"));
+        assert_eq!(super::tax_id("ab123").as_deref(), Some("AB123"));
+        for bad in ["", "-", "800-", "80012345--6", "800/12", "Ñ1"] {
+            assert_eq!(super::tax_id(bad), None, "`{bad}` was taken for a tax number");
+        }
     }
 
     #[test]

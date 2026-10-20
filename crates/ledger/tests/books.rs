@@ -1183,6 +1183,7 @@ async fn a_module_posts_through_the_contract_and_a_retry_books_once() {
                     note: String::new(),
                 },
             ],
+            ..Default::default()
         })
     };
 
@@ -1227,6 +1228,7 @@ async fn a_module_posting_without_a_key_is_refused() {
                     note: String::new(),
                 },
             ],
+            ..Default::default()
         }))
         .await
         .expect_err("a keyless post was accepted");
@@ -1262,6 +1264,7 @@ async fn a_module_told_its_own_arithmetic_is_wrong_rather_than_to_retry() {
                     note: String::new(),
                 },
             ],
+            ..Default::default()
         }))
         .await
         .expect_err("an unbalanced entry was accepted over the contract");
@@ -1527,7 +1530,7 @@ async fn a_counterparty_is_found_however_its_name_is_typed() {
 async fn a_line_naming_only_a_counterparty_needs_one_that_says_what_it_is_for() {
     let Some(pool) = pool("test_ledger_counterparty_usual").await else { return };
     let books = books(&pool).await;
-    repository::create_counterparty(&pool, books.owner, "Kiosk", None, None)
+    repository::create_counterparty(&pool, books.owner, "Kiosk", None, None, None)
         .await
         .expect("creating a counterparty");
 
@@ -1555,7 +1558,7 @@ async fn one_persons_counterparty_and_category_cannot_be_named_by_another() {
     let Some(pool) = pool("test_ledger_counterparty_owner").await else { return };
     let mine = books(&pool).await;
     let theirs = books(&pool).await;
-    let their_shop = repository::create_counterparty(&pool, theirs.owner, "Their shop", None, None)
+    let their_shop = repository::create_counterparty(&pool, theirs.owner, "Their shop", None, None, None)
         .await
         .expect("creating a counterparty");
 
@@ -1815,7 +1818,7 @@ async fn a_counterparty_that_entries_name_is_not_deleted_out_from_under_them() {
     let books = books(&pool).await;
     let (_, recorded) = quick(&pool, books.owner, r#"{"text":"45000 food @market"}"#).await;
     let market = recorded["new_counterparty"]["id"].as_str().expect("an id").to_owned();
-    let unused = repository::create_counterparty(&pool, books.owner, "Unused", None, None)
+    let unused = repository::create_counterparty(&pool, books.owner, "Unused", None, None, None)
         .await
         .expect("creating");
 

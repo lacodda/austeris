@@ -13,7 +13,9 @@ use std::str::FromStr;
 use austeris_common::Actor;
 use austeris_proto::ledger::v1::ledger_service_server::{LedgerService, LedgerServiceServer};
 use austeris_proto::ledger::v1::{
-    Balance, GetBalancesRequest, GetBalancesResponse, PostEntryRequest, PostEntryResponse, RecordRatesRequest, RecordRatesResponse, line::Side as ProtoSide,
+    Account as ProtoAccount, Balance, Counterparty as ProtoCounterparty, FindCounterpartyRequest, FindCounterpartyResponse, GetBalancesRequest,
+    GetBalancesResponse, ListAccountsRequest, ListAccountsResponse, PostEntryRequest, PostEntryResponse, Rate as ProtoRate, RateAtRequest, RateAtResponse,
+    RateInForce as ProtoRateInForce, RecordRatesRequest, RecordRatesResponse, line::Side as ProtoSide,
 };
 use chrono::{NaiveDate, Utc};
 use rust_decimal::Decimal;
@@ -21,8 +23,9 @@ use sqlx::PgPool;
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
-use crate::repository::{NewEntry, NewLine, ObservedRate, Side};
-use crate::{balance, repository};
+use crate::model::AccountKind;
+use crate::repository::{CounterpartyChoice, NewEntry, NewFile, NewLine, NewPlace, ObservedRate, Side};
+use crate::{attachment, balance, country, parse, repository};
 
 /// The service implementation.
 pub struct Service {
@@ -31,9 +34,13 @@ pub struct Service {
 
 impl Service {
     /// Wraps a pool as a gRPC service ready to be served.
+    ///
+    /// A message may be as large as a request carrying a file to the REST
+    /// surface: an entry posted with the receipt it was read from carries the
+    /// receipt, and tonic's own four megabytes would refuse a phone's photo.
     #[must_use]
     pub fn new(pool: PgPool) -> LedgerServiceServer<Self> {
-        LedgerServiceServer::new(Self { pool })
+        LedgerServiceServer::new(Self { pool }).max_decoding_message_size(attachment::BODY_LIMIT)
     }
 
     /// The bare service, so tests can call the contract without a socket.
@@ -97,6 +104,17 @@ impl LedgerService for Service {
             });
         }
 
+        let counterparty = request.counterparty.as_ref().map(counterparty_choice).transpose()?;
+        let place = request.place.as_ref().map(place_of).transpose()?;
+        let mut tags = Vec::with_capacity(request.tags.len());
+        for raw in &request.tags {
+            let name = parse::tag_name(raw.trim().trim_start_matches('#')).ok_or_else(|| Status::invalid_argument(format!("`{raw}` is not a tag")))?;
+            if !tags.iter().any(|seen: &String| seen.to_lowercase() == name.to_lowercase()) {
+                tags.push(name);
+            }
+        }
+        let files = request.files.iter().map(file_of).collect::<Result<Vec<_>, _>>()?;
+
         // The module is who writes: the entry's history says so, by the name
         // it signs the entry with.
         let posted = repository::post_entry(
@@ -108,11 +126,13 @@ impl LedgerService for Service {
                 description: request.description.trim().to_owned(),
                 idempotency_key: Some(request.idempotency_key.trim().to_owned()),
                 source: (!request.source.trim().is_empty()).then(|| request.source.trim().to_owned()),
+                pending: request.pending,
+                counterparty,
+                place,
+                tags,
                 lines,
-                // A module posts what has happened: a salary paid, an instalment
-                // due. It names no counterparty, place or tags, and holds
-                // nothing - those are a person's words about their own entries.
-                ..NewEntry::default()
+                files,
+                allow_duplicate: false,
             },
         )
         .await
@@ -202,6 +222,135 @@ impl LedgerService for Service {
             recorded: u32::try_from(recorded).unwrap_or(u32::MAX),
         }))
     }
+
+    async fn list_accounts(&self, request: Request<ListAccountsRequest>) -> Result<Response<ListAccountsResponse>, Status> {
+        let owner_id: Uuid = request
+            .into_inner()
+            .owner_id
+            .parse()
+            .map_err(|_| Status::invalid_argument("that is not a user id"))?;
+        let accounts = repository::accounts(&self.pool, owner_id).await.map_err(internal("listing accounts"))?;
+        Ok(Response::new(ListAccountsResponse {
+            accounts: accounts
+                .into_iter()
+                .map(|account| ProtoAccount {
+                    id: account.id.to_string(),
+                    name: account.name,
+                    kind: kind_name(account.kind).to_owned(),
+                    currency: account.currency,
+                    closed: account.closed_at.is_some(),
+                })
+                .collect(),
+        }))
+    }
+
+    async fn find_counterparty(&self, request: Request<FindCounterpartyRequest>) -> Result<Response<FindCounterpartyResponse>, Status> {
+        let request = request.into_inner();
+        let owner_id: Uuid = request.owner_id.parse().map_err(|_| Status::invalid_argument("that is not a user id"))?;
+        let tax_id = optional_tax_id(&request.tax_id)?;
+        let found = repository::counterparty_as_named(&self.pool, owner_id, request.name.trim(), tax_id.as_deref())
+            .await
+            .map_err(internal("finding a counterparty"))?;
+        Ok(Response::new(FindCounterpartyResponse {
+            counterparty: found.map(|counterparty| ProtoCounterparty {
+                id: counterparty.id.to_string(),
+                name: counterparty.name,
+                tax_id: counterparty.tax_id.unwrap_or_default(),
+                usual_category_id: counterparty.default_category_id.map(|id| id.to_string()).unwrap_or_default(),
+            }),
+        }))
+    }
+
+    async fn rate_at(&self, request: Request<RateAtRequest>) -> Result<Response<RateAtResponse>, Status> {
+        let request = request.into_inner();
+        let (base, quote) = (currency_code(&request.base)?, currency_code(&request.quote)?);
+        let on = NaiveDate::from_str(&request.on).map_err(|_| Status::invalid_argument("on is not a date (YYYY-MM-DD)"))?;
+        let rate = repository::rate_in_force(&self.pool, &base, &quote, on)
+            .await
+            .map_err(internal("reading a rate"))?;
+        Ok(Response::new(RateAtResponse {
+            rate: rate.map(|rate| ProtoRateInForce {
+                rate: Some(ProtoRate {
+                    base: rate.base_currency,
+                    quote: rate.quote_currency,
+                    on_date: rate.on_date.to_string(),
+                    rate: rate.rate.to_string(),
+                }),
+                source: rate.source,
+                stale: rate.stale,
+            }),
+        }))
+    }
+}
+
+/// The counterparty a module names, as the repository finds or creates it.
+fn counterparty_choice(named: &austeris_proto::ledger::v1::CounterpartyName) -> Result<CounterpartyChoice, Status> {
+    let name = named.name.trim();
+    let tax_id = optional_tax_id(&named.tax_id)?;
+    if name.is_empty() {
+        return Err(Status::invalid_argument("a counterparty is named; one without a name could never be typed"));
+    }
+    let usual_category = if named.usual_category_id.trim().is_empty() {
+        None
+    } else {
+        Some(parse_id(named.usual_category_id.trim(), "category")?)
+    };
+    Ok(CounterpartyChoice::New {
+        name: name.to_owned(),
+        usual_category,
+        tax_id,
+    })
+}
+
+/// A tax number as it is kept, or `None` for an empty one.
+fn optional_tax_id(raw: &str) -> Result<Option<String>, Status> {
+    if raw.trim().is_empty() {
+        return Ok(None);
+    }
+    crate::model::tax_id(raw)
+        .map(Some)
+        .ok_or_else(|| Status::invalid_argument(format!("`{raw}` is not a tax number")))
+}
+
+/// A place a module names, with its country checked.
+fn place_of(place: &austeris_proto::ledger::v1::Place) -> Result<NewPlace, Status> {
+    let country = country::code(&place.country).ok_or_else(|| Status::invalid_argument(format!("`{}` is not a country code", place.country)))?;
+    let city = Some(place.city.trim()).filter(|city| !city.is_empty()).map(ToOwned::to_owned);
+    Ok(NewPlace { country, city })
+}
+
+/// A file a module keeps with the entry, taken for what its bytes are.
+fn file_of(file: &austeris_proto::ledger::v1::File) -> Result<NewFile, Status> {
+    let name = attachment::file_name(&file.name).ok_or_else(|| Status::invalid_argument("a file needs a name"))?;
+    if file.content.is_empty() {
+        return Err(Status::invalid_argument(format!("{name} is empty")));
+    }
+    if file.content.len() > attachment::MAX_BYTES {
+        return Err(Status::invalid_argument(format!(
+            "{name} is larger than the {} MB a file kept with an entry can be",
+            attachment::MAX_BYTES / (1024 * 1024)
+        )));
+    }
+    let media_type =
+        attachment::media_type(&file.content).ok_or_else(|| Status::invalid_argument(format!("{name} is not a picture, a PDF or an XML document")))?;
+    Ok(NewFile {
+        name,
+        media_type: media_type.to_owned(),
+        content: file.content.clone(),
+    })
+}
+
+/// An account's kind, as the contract spells it.
+fn kind_name(kind: AccountKind) -> &'static str {
+    match kind {
+        AccountKind::Cash => "cash",
+        AccountKind::Bank => "bank",
+        AccountKind::Card => "card",
+        AccountKind::Brokerage => "brokerage",
+        AccountKind::CryptoWallet => "crypto_wallet",
+        AccountKind::Deposit => "deposit",
+        AccountKind::Loan => "loan",
+    }
 }
 
 /// An id, or which kind of id it was supposed to be.
@@ -234,6 +383,16 @@ fn refused_or_internal(error: &anyhow::Error) -> Status {
         .map(|db| db.message().to_owned());
     if let Some(message) = refused {
         return Status::invalid_argument(message);
+    }
+    // A usual category, or a counterparty, that is not this person's: the
+    // keys name the owner, so the database refuses it as missing.
+    let not_theirs = error
+        .chain()
+        .filter_map(|cause| cause.downcast_ref::<sqlx::Error>())
+        .filter_map(|error| error.as_database_error())
+        .any(|db| db.code().as_deref() == Some("23503"));
+    if not_theirs {
+        return Status::invalid_argument("the entry names a category or a counterparty that is not this person's");
     }
 
     let text = format!("{error:#}");

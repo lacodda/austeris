@@ -361,6 +361,7 @@ async fn create_entry(State(pool): State<PgPool>, caller: Caller, Json(new): Jso
             place,
             tags,
             lines,
+            files: Vec::new(),
             allow_duplicate: new.allow_duplicate,
         },
     )

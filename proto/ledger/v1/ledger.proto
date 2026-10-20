@@ -19,6 +19,16 @@ service LedgerService {
   // entry, so a rate already recorded for a pair and a day is never replaced -
   // not by a source revising its history, and not over one a person typed.
   rpc RecordRates(RecordRatesRequest) returns (RecordRatesResponse);
+  // A person's accounts, open and closed: what a module posting for them
+  // chooses among - the account a receipt was paid from, the one a folder is
+  // named after.
+  rpc ListAccounts(ListAccountsRequest) returns (ListAccountsResponse);
+  // The counterparty a document names, by its tax number or by its name, when
+  // the person has it - and what money spent there is usually for.
+  rpc FindCounterparty(FindCounterpartyRequest) returns (FindCounterpartyResponse);
+  // The rate in force on a day: the newest one not after it, for the pair as
+  // recorded, inverted, or through a third currency.
+  rpc RateAt(RateAtRequest) returns (RateAtResponse);
 }
 
 message PostEntryRequest {
@@ -40,6 +50,120 @@ message PostEntryRequest {
   string source = 5;
   // The sides of the movement, at least two.
   repeated Line lines = 6;
+  // Who the money went to or came from, when the module knows - a receipt
+  // names the shop. Absent for a movement that is nobody's: a salary split, a
+  // loan's interest.
+  CounterpartyName counterparty = 7;
+  // Where it happened, when the module knows.
+  Place place = 8;
+  // The person's labels on it, by name; one used for the first time is
+  // created.
+  repeated string tags = 9;
+  // Held rather than posted: the bank has not said what it took yet - a
+  // receipt paid by card in another currency than the card's.
+  bool pending = 10;
+  // Files kept with the entry from the start - the receipt it was read from -
+  // in the same transaction, so the entry never exists without them. Each is
+  // taken for what its bytes are, as a file a person attaches is.
+  repeated File files = 11;
+}
+
+// A counterparty as a document names it.
+message CounterpartyName {
+  // What to call it, if it is new.
+  string name = 1;
+  // Its tax number as the document prints it - a RUC, `80012345-6`. Matched
+  // before the name: a shop's receipts carry it the same way however the shop
+  // is named on them. Empty when the document has none.
+  string tax_id = 2;
+  // What money spent there is usually for. Given to one that has none yet -
+  // the person said so for this entry - and never put over one it has.
+  string usual_category_id = 3;
+}
+
+// A place: a country, and a city in it when there is one.
+message Place {
+  // ISO 3166-1 alpha-2, as `PY`.
+  string country = 1;
+  // The city; empty for the country as a whole. Matched however its accents
+  // were typed, so `ASUNCION` is the Asunción the person already has.
+  string city = 2;
+}
+
+// A file, as it is.
+message File {
+  // Its name, as it should be saved again.
+  string name = 1;
+  // Its bytes.
+  bytes content = 2;
+}
+
+message ListAccountsRequest {
+  string owner_id = 1;
+}
+
+message ListAccountsResponse {
+  // Open ones first, by kind and name.
+  repeated Account accounts = 1;
+}
+
+message Account {
+  string id = 1;
+  // What the person calls it.
+  string name = 2;
+  // `cash`, `bank`, `card`, `brokerage`, `crypto_wallet`, `deposit` or `loan`.
+  string kind = 3;
+  // The currency it is in.
+  string currency = 4;
+  // Closed: its entries are still true, and nothing new is recorded on it.
+  bool closed = 5;
+}
+
+message FindCounterpartyRequest {
+  string owner_id = 1;
+  // The tax number the document prints; empty when it has none.
+  string tax_id = 2;
+  // The name it prints, matched the way a typed `@name` is.
+  string name = 3;
+}
+
+message FindCounterpartyResponse {
+  // Absent when the person has none by that tax number or name.
+  optional Counterparty counterparty = 1;
+}
+
+message Counterparty {
+  string id = 1;
+  string name = 2;
+  // Empty when it has none.
+  string tax_id = 3;
+  // What money spent there is usually for; empty when nothing is.
+  string usual_category_id = 4;
+}
+
+message RateAtRequest {
+  // The currency being priced.
+  string base = 1;
+  // The currency it is priced in.
+  string quote = 2;
+  // The day, `YYYY-MM-DD`.
+  string on = 3;
+}
+
+message RateAtResponse {
+  // Absent when no rate for the pair is known on or before the day.
+  optional RateInForce rate = 1;
+}
+
+message RateInForce {
+  // The rate, and the day it was set for - not the day it was asked for.
+  Rate rate = 1;
+  // Where it came from: a source's name, `manual`, or two joined through a
+  // third currency.
+  string source = 2;
+  // Older than a long weekend by the day asked about: the last rate known,
+  // and not today's.
+  bool stale = 3;
 }
 
 message PostEntryResponse {

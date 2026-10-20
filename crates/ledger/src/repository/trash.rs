@@ -175,6 +175,7 @@ pub async fn restore_entry(pool: &PgPool, owner_id: Uuid, by: &Actor, id: Uuid) 
             let choice = CounterpartyChoice::New {
                 name: counterparty.name.clone(),
                 usual_category: None,
+                tax_id: None,
             };
             Some(choose_counterparty(&mut transaction, owner_id, &choice).await?)
         }

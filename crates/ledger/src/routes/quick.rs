@@ -307,6 +307,7 @@ async fn resolve(
         Spoken::Unknown(name) => CounterpartyChoice::New {
             name: name.clone(),
             usual_category: Some(category.id),
+            tax_id: None,
         },
     });
     let currency = spoken.currency.clone().unwrap_or_else(|| account.currency.clone());

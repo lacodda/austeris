@@ -633,7 +633,7 @@ fn trip_tag(day: NaiveDate) -> String {
 async fn counterparty(pool: &PgPool, owner: Uuid, name: &str, kind: CounterpartyKind, usual: Uuid) -> Result<Uuid> {
     match ledger::counterparty_by_name(pool, owner, name).await? {
         Some(found) => Ok(found.id),
-        None => Ok(ledger::create_counterparty(pool, owner, name, Some(kind), Some(usual)).await?.id),
+        None => Ok(ledger::create_counterparty(pool, owner, name, Some(kind), Some(usual), None).await?.id),
     }
 }
 
