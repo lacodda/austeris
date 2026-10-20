@@ -182,12 +182,17 @@ nobody is left as it is, and said once in the log. Taking a file in twice
 answers it with what it already is, so a folder kept in step with another
 machine - receipts saved from e-mail on a desktop - can be copied over in full.
 
-On Linux the folder must be writable by the container's user, uid 10001, which
-moves every file it has read:
+The container moves every file it has read, so on Linux the folders have to be
+writable by it. It joins the group that owns the folder - `AUSTERIS_INBOX_GID`,
+1000 by default, the first user of a Raspberry Pi or a desktop - so folders made
+by that user, group-writable, are enough:
 
 ```console
-$ mkdir -p inbox/owner@example.com && sudo chown -R 10001 inbox
+$ mkdir -p "inbox/owner@example.com/Visa Debit" && chmod -R g+w inbox
 ```
+
+A file that cannot be moved is still read and booked, said once in the log, and
+left alone after that.
 
 ## From a terminal
 

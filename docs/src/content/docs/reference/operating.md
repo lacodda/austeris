@@ -58,11 +58,11 @@ books, restores, and then starts austeris.
 ## The folder receipts arrive in
 
 The stand's compose file mounts `inbox/` beside it as the folder receipts are
-taken in from ([Imports](/austeris/reference/imports/#the-folder)). Made once,
-owned by the container's user:
+taken in from ([Imports](/austeris/reference/imports/#the-folder)). Made once by
+the stand's own user, group-writable - the container joins that user's group:
 
 ```console
-$ ssh pi 'cd /srv/austeris && mkdir -p inbox && sudo chown -R 10001 inbox'
+$ ssh pi 'cd /srv/austeris && mkdir -p "inbox/owner@example.com" && chmod -R g+w inbox'
 ```
 
 A receipt copied into `inbox/<your sign-in address>/` from another machine is

@@ -83,7 +83,8 @@ pub async fn every_half_minute(pool: PgPool, books: impl Books, people: impl Peo
 ///
 /// Returns an error when the folder cannot be read, or this service's
 /// database fails. A file that cannot be moved after it is taken in is said
-/// once and left: taking it in again answers it with what it already is.
+/// once and left alone after that; were it read again - after a restart - it
+/// is answered with what it already is.
 pub async fn sweep<S: BuildHasher>(
     pool: &PgPool,
     books: &impl Books,
@@ -129,6 +130,12 @@ pub async fn sweep<S: BuildHasher>(
 
         for (folder, account_name) in places {
             for file in settled_files(&folder, settled)? {
+                // Already said about: taken in and left where it could not be
+                // moved from, or not readable at all. Reading it every half
+                // minute would only say the same again.
+                if warned.contains(&file) {
+                    continue;
+                }
                 let name = file.file_name().and_then(|name| name.to_str()).unwrap_or("document").to_owned();
                 let size = std::fs::metadata(&file).map_or(0, |meta| meta.len());
                 if size > u64::try_from(MAX_BYTES).unwrap_or(u64::MAX) {

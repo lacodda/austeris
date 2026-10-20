@@ -575,6 +575,17 @@ async fn the_folder_takes_receipts_in_by_whose_and_which_account() {
         ("document.unknown_account", &serde_json::json!("Mastercard"))
     );
 
+    // A file already said about - one that could not be moved out of the
+    // folder - is left alone rather than read again every half minute.
+    let stuck = mine.join("stuck.xml");
+    std::fs::write(&stuck, fixture("sifen/credit-note.xml")).expect("a receipt");
+    warned.insert(stuck.clone());
+    let quiet = inbox::sweep(&setup.imports, &setup.books, &people, &root, Duration::ZERO, &mut warned)
+        .await
+        .expect("sweeping");
+    assert_eq!((quiet.taken, quiet.refused), (0, 0));
+    assert!(stuck.is_file());
+
     std::fs::remove_dir_all(&root).expect("cleaning up");
 }
 

@@ -83,5 +83,6 @@ Read by compose from `.env`, not by any binary:
 | `POSTGRES_PASSWORD` | - | The database password, required by the install file. Generate it: `openssl rand -hex 24`. |
 | `AUSTERIS_VERSION` | `latest` | Which published image to run. Pin it: an unattended `pull` should not follow `latest`. |
 | `AUSTERIS_PORT` | `8084` | The published port - the only one. |
-| `AUSTERIS_INBOX_DIR` | `./inbox` | The folder on the host that is the container's `/inbox`. On Linux it has to be writable by uid 10001, which moves each file it has read. |
+| `AUSTERIS_INBOX_DIR` | `./inbox` | The folder on the host that is the container's `/inbox`. |
+| `AUSTERIS_INBOX_GID` | `1000` | The group that owns that folder, which the container joins so it can move each file it has read: 1000 is the first user of a Raspberry Pi or a Linux desktop. `stat -c %g inbox` says which it is. |
 | `AUSTERIS_DB_PORT` | `5434` | Development file only: where PostgreSQL is published for a developer's own tools. |

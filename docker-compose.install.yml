@@ -24,10 +24,12 @@
 #
 # Receipts dropped in `./inbox/<your sign-in address>/` are read into the books
 # within half a minute (a subfolder named after one of your accounts says they
-# were paid from it). The folder has to be writable by the container's user,
-# uid 10001, which moves each file it has read into `done/` or `refused/`:
+# were paid from it), and each file read is moved into `done/` or `refused/`.
+# The container joins the group that owns the folder - AUSTERIS_INBOX_GID, 1000
+# by default: the first user of a Raspberry Pi or a desktop - so the folders
+# you make in it are its to move files out of:
 #
-#   mkdir -p inbox && sudo chown 10001 inbox
+#   mkdir -p inbox/you@example.com && chmod -R g+w inbox
 x-austeris: &austeris
   # Pin a version in production. `latest` is convenient for a first look and a
   # poor thing to have an unattended `docker compose pull` follow.
@@ -90,6 +92,8 @@ services:
       AUSTERIS_DEMO: ${AUSTERIS_DEMO:-false}
     volumes:
       - ${AUSTERIS_INBOX_DIR:-./inbox}:/inbox
+    group_add:
+      - "${AUSTERIS_INBOX_GID:-1000}"
     ports:
       - "${AUSTERIS_PORT:-8084}:8080"
 
@@ -152,6 +156,8 @@ services:
       <<: [*environment, *imports]
     volumes:
       - ${AUSTERIS_INBOX_DIR:-./inbox}:/inbox
+    group_add:
+      - "${AUSTERIS_INBOX_GID:-1000}"
 
 volumes:
   db-data:
