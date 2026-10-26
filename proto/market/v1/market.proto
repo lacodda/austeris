@@ -11,6 +11,28 @@ service MarketService {
   rpc GetPrices(GetPricesRequest) returns (GetPricesResponse);
   // The price of one instrument as of an instant.
   rpc GetPriceAt(GetPriceAtRequest) returns (GetPriceAtResponse);
+  // What each instrument named is: its kind, its ticker and its name.
+  rpc GetInstruments(GetInstrumentsRequest) returns (GetInstrumentsResponse);
+}
+
+message GetInstrumentsRequest {
+  // Instrument ids, as UUID strings. An id nobody knows is absent from the
+  // response.
+  repeated string instrument_ids = 1;
+}
+
+message GetInstrumentsResponse {
+  repeated Instrument instruments = 1;
+}
+
+message Instrument {
+  string id = 1;
+  // `crypto`, `stock`, `bond`, `fund`, `fx` or `manual`.
+  string kind = 2;
+  // The ticker as the world writes it: `BTC`.
+  string symbol = 3;
+  // What it is called: `Bitcoin`.
+  string name = 4;
 }
 
 message GetPricesRequest {

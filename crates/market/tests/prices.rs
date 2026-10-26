@@ -391,6 +391,19 @@ async fn the_grpc_contract_answers_with_the_same_rule_as_rest() {
 
     let price = response.price.expect("a price before ten in the morning");
     assert_eq!(price.price, "60000.000000000000000000", "the noon price had not happened yet");
+
+    // What each instrument is; one nobody knows is left out.
+    let response = service
+        .get_instruments(tonic::Request::new(austeris_proto::market::v1::GetInstrumentsRequest {
+            instrument_ids: vec![eth.id.to_string(), Uuid::new_v4().to_string()],
+        }))
+        .await
+        .expect("asking what instruments are")
+        .into_inner();
+    assert_eq!(response.instruments.len(), 1);
+    assert_eq!(response.instruments[0].symbol, "ETH");
+    assert_eq!(response.instruments[0].kind, "crypto");
+    assert_eq!(response.instruments[0].name, "Ethereum");
 }
 
 #[tokio::test]
@@ -635,4 +648,72 @@ async fn a_refresh_for_a_day_that_has_not_happened_is_refused() {
     let tomorrow = Utc::now().date_naive() + chrono::Days::new(1);
     let (status, body) = call(&pool, "POST", &format!("/market/prices/refresh?on={tomorrow}"), None).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+}
+
+#[tokio::test]
+async fn a_price_said_by_hand_is_the_latest_and_goes_stale_like_any() {
+    let Some(pool) = pool("test_market_manual").await else { return };
+    let coin = repository::upsert_instrument(&pool, Kind::Crypto, "BTC", "Bitcoin", Some(8)).await.unwrap();
+    let flat = repository::upsert_instrument(&pool, Kind::Manual, "FLAT", "The flat", None).await.unwrap();
+    // A source's price, a day old.
+    let yesterday = Utc::now() - chrono::Duration::days(1);
+    repository::record_price(&pool, coin.id, "USD", yesterday, decimal("60000"), "coinmarketcap")
+        .await
+        .unwrap();
+
+    let (status, body) = call(
+        &pool,
+        "POST",
+        &format!("/market/instruments/{}/prices", coin.id),
+        Some(r#"{"price":"61000.5","currency":"usd"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let said: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(said["source"], "manual");
+    assert_eq!(said["quote_currency"], "USD");
+    assert_eq!(decimal(said["price"].as_str().unwrap()), decimal("61000.5"), "the newer word is the latest");
+    assert_eq!(said["stale"], false);
+
+    // A coin priced by hand last week is as old as a source's would be.
+    let last_week = (Utc::now() - chrono::Duration::days(7)).to_rfc3339();
+    let (status, body) = call(
+        &pool,
+        "POST",
+        &format!("/market/instruments/{}/prices", coin.id),
+        Some(&format!(r#"{{"price":"55000","currency":"EUR","observed_at":"{last_week}"}}"#)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert!(body.contains(r#""stale":true"#), "{body}");
+    // Something priced by hand only stays current as long as its owner says.
+    let (_, body) = call(
+        &pool,
+        "POST",
+        &format!("/market/instruments/{}/prices", flat.id),
+        Some(&format!(r#"{{"price":"95000","currency":"USD","observed_at":"{last_week}"}}"#)),
+    )
+    .await;
+    assert!(body.contains(r#""stale":false"#), "{body}");
+
+    for (wrong, why) in [
+        (r#"{"price":"0","currency":"USD"}"#, "nothing"),
+        (r#"{"price":"-5","currency":"USD"}"#, "a negative price"),
+        (r#"{"price":"5","currency":"US"}"#, "a currency that is not a code"),
+        (
+            r#"{"price":"5","currency":"USD","observed_at":"2999-01-01T00:00:00Z"}"#,
+            "a moment that has not happened",
+        ),
+    ] {
+        let (status, body) = call(&pool, "POST", &format!("/market/instruments/{}/prices", coin.id), Some(wrong)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{why} was taken for a price: {body}");
+    }
+    let (status, _) = call(
+        &pool,
+        "POST",
+        &format!("/market/instruments/{}/prices", Uuid::new_v4()),
+        Some(r#"{"price":"5","currency":"USD"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }

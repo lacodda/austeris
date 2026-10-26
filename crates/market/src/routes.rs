@@ -45,6 +45,7 @@ pub fn router(pool: PgPool, sources: Arc<Sources>, ledger: Option<Ledger>) -> Ro
         .route("/market/instruments/sync", post(sync_instruments))
         .route("/market/instruments/{id}", get(read_instrument))
         .route("/market/instruments/{id}/sources", post(bind_source))
+        .route("/market/instruments/{id}/prices", post(record_price))
         .route("/market/prices", get(latest_prices))
         .route("/market/prices/{id}/history", get(price_history))
         .route("/market/prices/refresh", post(refresh_prices))
@@ -150,6 +151,75 @@ async fn bind_source(State(state): State<ServiceState>, Path(id): Path<Uuid>, Js
 
     repository::bind_source(&state.pool, id, &new.source, &new.external_id, new.priority).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// A price a person read somewhere and says.
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct NewPrice {
+    /// What one unit is worth, as a decimal string.
+    #[serde(with = "rust_decimal::serde::str")]
+    #[schema(value_type = String, example = "61234.56")]
+    pub price: rust_decimal::Decimal,
+    /// What it is worth it in: `USD`, `EUR`, `USDT`.
+    pub currency: String,
+    /// When it was worth that. Now when omitted.
+    pub observed_at: Option<DateTime<Utc>>,
+}
+
+/// The name a price a person states is recorded under.
+pub const MANUAL: &str = "manual";
+
+/// Records a price by hand: what a flat is worth, or a coin when no source
+/// with a key is switched on.
+///
+/// It is a price like any other - the newest one is the latest, whoever said
+/// it - recorded under the source `manual`, and it goes stale on its kind's
+/// calendar as a source's would: a coin priced by hand this morning is not
+/// its price tonight.
+#[utoipa::path(
+    post,
+    path = "/api/v1/market/instruments/{id}/prices",
+    tag = "market",
+    params(("id" = Uuid, Path, description = "The instrument")),
+    request_body = NewPrice,
+    responses(
+        (status = 201, description = "The price, as it now stands for the instrument", body = LatestPrice),
+        (status = 400, description = "The price is not positive, the currency is not a code, or the moment has not happened", body = austeris_common::error::ErrorBody),
+        (status = 404, description = "No such instrument", body = austeris_common::error::ErrorBody),
+    ),
+)]
+async fn record_price(State(state): State<ServiceState>, Path(id): Path<Uuid>, Json(new): Json<NewPrice>) -> AppResult<(StatusCode, Json<LatestPrice>)> {
+    let Some(instrument) = repository::instrument(&state.pool, id).await? else {
+        return Err(AppError::not_found(anyhow::anyhow!("no such instrument")));
+    };
+    if new.price <= rust_decimal::Decimal::ZERO {
+        return Err(AppError::bad_request(anyhow::anyhow!("a price is more than nothing")));
+    }
+    let currency = new.currency.trim().to_ascii_uppercase();
+    if !(3..=5).contains(&currency.len()) || !currency.chars().all(|c| c.is_ascii_uppercase()) {
+        return Err(AppError::bad_request(anyhow::anyhow!(
+            "`{}` is not a currency code; three letters, as in USD, or an exchange's ticker, as in USDT",
+            new.currency
+        )));
+    }
+    let now = Utc::now();
+    let observed_at = new.observed_at.unwrap_or(now);
+    // A minute of grace for a clock on the person's side running ahead.
+    if observed_at > now + Duration::minutes(1) {
+        return Err(AppError::bad_request(anyhow::anyhow!("a price is of a moment that has happened")));
+    }
+
+    repository::record_price(&state.pool, id, &currency, observed_at, new.price, MANUAL).await?;
+    let latest = repository::latest_prices(&state.pool, &[id], &currency)
+        .await?
+        .into_iter()
+        .next()
+        .map(|(price, kind)| LatestPrice {
+            stale: kind.is_stale(price.observed_at, now),
+            price,
+        })
+        .ok_or_else(|| AppError::internal(anyhow::anyhow!("the price of {} vanished once recorded", instrument.symbol)))?;
+    Ok((StatusCode::CREATED, Json(latest)))
 }
 
 /// Which instruments and currency a price query is about.
@@ -357,6 +427,7 @@ async fn list_sources(State(state): State<ServiceState>) -> AppResult<Json<Vec<S
         read_instrument,
         create_instrument,
         bind_source,
+        record_price,
         sync_instruments,
         latest_prices,
         price_history,
@@ -370,6 +441,7 @@ async fn list_sources(State(state): State<ServiceState>) -> AppResult<Json<Vec<S
         Kind,
         NewInstrument,
         NewBinding,
+        NewPrice,
         Synced,
         Refreshed,
         Failure,

@@ -29,6 +29,19 @@ pub enum Kind {
 }
 
 impl Kind {
+    /// The kind as it is written: `crypto`, `fund`.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Crypto => "crypto",
+            Self::Stock => "stock",
+            Self::Bond => "bond",
+            Self::Fund => "fund",
+            Self::Fx => "fx",
+            Self::Manual => "manual",
+        }
+    }
+
     /// Whether a price observed at `observed_at` is no longer current at `at`.
     ///
     /// Crypto trades every hour of every day, so a price two refreshes old has

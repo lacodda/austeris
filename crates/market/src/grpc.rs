@@ -5,7 +5,9 @@
 //! travels as a double is not the price that was recorded (ADR 0004).
 
 use austeris_proto::market::v1::market_service_server::{MarketService, MarketServiceServer};
-use austeris_proto::market::v1::{GetPriceAtRequest, GetPriceAtResponse, GetPricesRequest, GetPricesResponse, Price};
+use austeris_proto::market::v1::{
+    GetInstrumentsRequest, GetInstrumentsResponse, GetPriceAtRequest, GetPriceAtResponse, GetPricesRequest, GetPricesResponse, Instrument, Price,
+};
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use tonic::{Request, Response, Status};
@@ -87,6 +89,27 @@ impl MarketService for Service {
             price: price
                 .as_ref()
                 .map(|price| into_proto(price, kind.is_some_and(|kind| kind.is_stale(price.observed_at, at)))),
+        }))
+    }
+
+    async fn get_instruments(&self, request: Request<GetInstrumentsRequest>) -> Result<Response<GetInstrumentsResponse>, Status> {
+        let ids: Vec<Uuid> = request
+            .into_inner()
+            .instrument_ids
+            .iter()
+            .map(|id| id.parse().map_err(|_| Status::invalid_argument(format!("`{id}` is not an instrument id"))))
+            .collect::<Result<_, _>>()?;
+        let found = repository::instruments_named(&self.pool, &ids).await.map_err(internal("reading instruments"))?;
+        Ok(Response::new(GetInstrumentsResponse {
+            instruments: found
+                .into_iter()
+                .map(|instrument| Instrument {
+                    id: instrument.id.to_string(),
+                    kind: instrument.kind.as_str().to_owned(),
+                    symbol: instrument.symbol,
+                    name: instrument.name,
+                })
+                .collect(),
         }))
     }
 }

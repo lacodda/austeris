@@ -32,6 +32,20 @@ pub async fn instrument(pool: &PgPool, id: Uuid) -> Result<Option<Instrument>> {
         .context("reading an instrument")
 }
 
+/// The instruments named, in no particular order; an id nobody knows is left
+/// out.
+///
+/// # Errors
+///
+/// Returns an error when the query fails.
+pub async fn instruments_named(pool: &PgPool, ids: &[Uuid]) -> Result<Vec<Instrument>> {
+    sqlx::query_as("SELECT id, kind, symbol, name, decimals FROM instruments WHERE id = ANY($1)")
+        .bind(ids)
+        .fetch_all(pool)
+        .await
+        .context("reading instruments")
+}
+
 /// Creates an instrument, or returns the one already there.
 ///
 /// Idempotent on purpose: a sync that runs twice must not create a second BTC,
