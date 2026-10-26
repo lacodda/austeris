@@ -17,6 +17,7 @@ const entry = (id: string, description: string, on: string, amount = '15000'): E
   occurred_on: on,
   cleared_on: on,
   status: 'cleared',
+  kept: false,
   description,
   tags: [],
   lines: [

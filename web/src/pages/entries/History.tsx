@@ -47,7 +47,7 @@ function WhoName({ who }: { who: Who }) {
     case 'person':
       return <>{who.person_id === user?.id ? t('history.you') : t('history.someone')}</>
     case 'module':
-      return <>{who.module ? t('history.module', { module: who.module }) : t('history.aModule')}</>
+      return <>{who.module ? t('history.module', { module: t(`modules.${who.module}`, { defaultValue: who.module }) }) : t('history.aModule')}</>
     case 'outside':
       return <>{t('history.outside')}</>
   }

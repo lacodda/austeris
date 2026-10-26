@@ -119,10 +119,14 @@ pub fn money(kind: TradeKind, quantity: Decimal, price: Option<Decimal>, fee: De
     Some(currency::round(signed, currency).normalize())
 }
 
-/// A trade with what its money moved filled in.
+/// A trade as it is answered: what its money moved filled in, and its
+/// numbers without the zeros their columns pad them with.
 #[must_use]
 pub fn with_money(mut trade: Trade) -> Trade {
     trade.money = money(trade.kind, trade.quantity, trade.price, trade.fee, trade.currency.as_deref());
+    trade.quantity = trade.quantity.normalize();
+    trade.price = trade.price.map(|price| price.normalize());
+    trade.fee = trade.fee.normalize();
     trade
 }
 

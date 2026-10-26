@@ -8,6 +8,7 @@ const lunch: Entry = {
   occurred_on: '2026-10-01',
   cleared_on: '2026-10-01',
   status: 'cleared',
+  kept: false,
   description: 'lunch',
   tags: ['work'],
   lines: [

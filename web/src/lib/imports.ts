@@ -14,12 +14,17 @@ export const keys = {
   documents: ['imports', 'documents'] as const,
 }
 
-/** Whether this installation runs a module. `undefined` until it says: a
- * screen hides what may not be there rather than flashing it. */
-export function useModule(name: string): boolean | undefined {
+/** The modules this installation runs. `undefined` until it says: a screen
+ * hides what may not be there rather than flashing it. */
+export function useModules(): Set<string> | undefined {
   const modules = useQuery({ queryKey: keys.modules, queryFn: api.modules, staleTime: Infinity })
   if (!modules.data) return undefined
-  return modules.data.modules.some((module) => module.name === name && module.on)
+  return new Set(modules.data.modules.filter((module) => module.on).map((module) => module.name))
+}
+
+/** Whether this installation runs a module. `undefined` until it says. */
+export function useModule(name: string): boolean | undefined {
+  return useModules()?.has(name)
 }
 
 export const useDocuments = () => useQuery({ queryKey: keys.documents, queryFn: () => api.documents() })

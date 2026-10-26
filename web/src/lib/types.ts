@@ -114,7 +114,10 @@ export interface Tag {
   name: string
 }
 
-export type LineSide = 'account' | 'category' | 'conversion'
+/** Where a line's money is: an account, a category, money changing currency,
+ * or a holding - money that became something a module holds, a coin or a
+ * share, which no report of spending counts. */
+export type LineSide = 'account' | 'category' | 'conversion' | 'holding'
 
 export interface Line {
   id: string
@@ -138,6 +141,9 @@ export interface Entry {
   counterparty?: { id: string; name: string } | null
   place?: Place | null
   source?: string | null
+  /** Kept by the module that recorded it - a trade's money: its day,
+   * description and lines change there, and it is deleted there. */
+  kept: boolean
   lines: Line[]
   /** The files kept with it, in the order they were attached. */
   attachments: Attachment[]
@@ -396,4 +402,188 @@ export interface SlipReading {
   /** One of `base` is `rate` of `quote`; either currency may be unknown. */
   rate?: { base?: string | null; quote?: string | null; rate: Decimal; stated: boolean } | null
   text: string
+}
+
+/*
+ * The market: what can be priced, and what it is worth.
+ */
+
+export type InstrumentKind = 'crypto' | 'stock' | 'bond' | 'fund' | 'fx' | 'manual'
+
+/** The kinds a person adds by hand: a currency pair comes from the central
+ * banks, never from a form. */
+export const INSTRUMENT_KINDS: readonly InstrumentKind[] = ['crypto', 'stock', 'bond', 'fund', 'manual']
+
+export interface Instrument {
+  id: string
+  kind: InstrumentKind
+  symbol: string
+  name: string
+  decimals?: number | null
+}
+
+export interface NewInstrument {
+  kind: InstrumentKind
+  symbol: string
+  name: string
+}
+
+/** The latest price of an instrument, and whether it is still current. */
+export interface LatestPrice {
+  instrument_id: string
+  quote_currency: string
+  observed_at: string
+  price: Decimal
+  source: string
+  stale: boolean
+}
+
+export interface NewPrice {
+  price: Decimal
+  currency: string
+  /** Now when left out. */
+  observed_at?: string
+}
+
+/*
+ * The portfolio: trades, what they add up to, and what it is worth.
+ */
+
+export type TradeKind = 'buy' | 'sell' | 'transfer'
+
+export const TRADE_KINDS: readonly TradeKind[] = ['buy', 'sell', 'transfer']
+
+export interface Trade {
+  id: string
+  kind: TradeKind
+  account_id: string
+  to_account_id?: string | null
+  instrument_id: string
+  quantity: Decimal
+  /** In `currency`; a transfer has none. */
+  price?: Decimal | null
+  currency?: string | null
+  /** In `currency` for a buy or a sale, in units for a transfer. */
+  fee: Decimal
+  occurred_at: string
+  occurred_on: IsoDate
+  note: string
+  entry_id?: string | null
+  /** What its money moved the account by: negative for a buy. */
+  money?: Decimal | null
+  created_at: string
+  updated_at: string
+}
+
+export interface TradeBody {
+  kind: TradeKind
+  account_id: string
+  to_account_id?: string | null
+  instrument_id: string
+  quantity: Decimal
+  price?: Decimal | null
+  fee?: Decimal | null
+  /** The instant, with the offset of where it happened. */
+  occurred_at: string
+  note?: string
+}
+
+export interface Position {
+  account_id: string
+  instrument_id: string
+  quantity: Decimal
+}
+
+export type HoldingKind = 'cash' | 'position'
+
+/** A line of what an account holds, and what it is worth. */
+export interface Holding {
+  kind: HoldingKind
+  instrument_id?: string | null
+  /** The instrument's ticker, or the money's currency. */
+  symbol: string
+  name: string
+  quantity: Decimal
+  /** In the valuation's currency; absent when nothing is known. */
+  price?: Decimal | null
+  priced_at?: string | null
+  value?: Decimal | null
+  stale: boolean
+}
+
+export interface AccountValue {
+  account_id: string
+  name: string
+  holdings: Holding[]
+  total: Decimal
+}
+
+export interface Valuation {
+  on: IsoDate
+  at: string
+  currency: string
+  accounts: AccountValue[]
+  total: Decimal
+  /** Left out of the total for want of a price, by ticker or currency. */
+  unvalued: string[]
+  stale: boolean
+}
+
+export interface Snapshot extends Valuation {
+  id: string
+  note: string
+  taken_at: string
+}
+
+export interface SnapshotSummary {
+  id: string
+  on: IsoDate
+  currency: string
+  note: string
+  taken_at: string
+  total: Decimal
+  incomplete: boolean
+  stale: boolean
+}
+
+export interface Difference {
+  account_id: string
+  account_name: string
+  kind: HoldingKind
+  instrument_id?: string | null
+  symbol: string
+  quantity_then: Decimal
+  quantity_now: Decimal
+  value_then?: Decimal | null
+  value_now?: Decimal | null
+}
+
+export interface Comparison {
+  snapshot: Snapshot
+  against: Valuation
+  against_id?: string | null
+  differences: Difference[]
+}
+
+export interface TradeState {
+  kind: TradeKind
+  account_id: string
+  to_account_id?: string | null
+  instrument_id: string
+  quantity: Decimal
+  price?: Decimal | null
+  currency?: string | null
+  fee: Decimal
+  occurred_at: string
+  occurred_on: IsoDate
+  note: string
+}
+
+export interface TradeRevision {
+  id: number
+  at: string
+  action: 'created' | 'changed' | 'deleted'
+  who: Who
+  before?: TradeState | null
+  after?: TradeState | null
 }

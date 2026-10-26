@@ -12,6 +12,7 @@ import type {
   Attachment,
   Balances,
   Category,
+  Comparison,
   Counterparty,
   CounterpartyKind,
   Decimal,
@@ -23,21 +24,32 @@ import type {
   Identity,
   ImportDocument,
   DocumentState,
+  Instrument,
   IsoDate,
+  LatestPrice,
   Module,
   NewAccount,
   NewEntry,
+  NewInstrument,
+  NewPrice,
   Place,
+  Position,
   Preview,
   QuickLine,
   RateInForce,
   Recorded,
   Revision,
   SlipReading,
+  Snapshot,
+  SnapshotSummary,
   Tag,
   Template,
+  Trade,
+  TradeBody,
+  TradeRevision,
   Trash,
   Upload,
+  Valuation,
 } from '@/lib/types'
 
 /** A call the server answered with anything but success. */
@@ -120,6 +132,8 @@ export function query(params: Record<string, string | number | undefined>): stri
 
 const LEDGER = '/api/v1/ledger'
 const IMPORTS = '/api/v1/imports'
+const MARKET = '/api/v1/market'
+const PORTFOLIO = '/api/v1/portfolio'
 
 /** A file sent as it is; the server reads what it is from its bytes. */
 const file = (body: File): RequestInit => ({ method: 'POST', body, headers: { 'Content-Type': 'application/octet-stream' } })
@@ -215,4 +229,29 @@ export const api = {
   dismissDocument: (id: string) => request<void>(`${IMPORTS}/documents/${id}`, { method: 'DELETE' }),
   /** A photo of an exchange office's slip, read on the server. */
   readSlip: (photo: File) => request<SlipReading>(`${IMPORTS}/slips`, file(photo)),
+
+  instruments: () => request<Instrument[]>(`${MARKET}/instruments`),
+  createInstrument: (instrument: NewInstrument) => request<Instrument>(`${MARKET}/instruments`, json('POST', instrument)),
+  /** The latest price of every instrument, in a currency. */
+  prices: (currency: string) => request<LatestPrice[]>(`${MARKET}/prices${query({ currency })}`),
+  /** A price said by hand: the newest is the latest, whoever said it. */
+  recordPrice: (id: string, price: NewPrice) => request<LatestPrice>(`${MARKET}/instruments/${id}/prices`, json('POST', price)),
+
+  trades: () => request<Trade[]>(`${PORTFOLIO}/trades${query({ limit: 500 })}`),
+  /** A trade, and its money booked with it. */
+  createTrade: (trade: TradeBody) => request<Trade>(`${PORTFOLIO}/trades`, json('POST', trade)),
+  /** What a trade is now - every field - and its money restated. */
+  replaceTrade: (id: string, trade: TradeBody) => request<Trade>(`${PORTFOLIO}/trades/${id}`, json('PUT', trade)),
+  /** The trade, and its money taken back out of the books. */
+  deleteTrade: (id: string) => request<void>(`${PORTFOLIO}/trades/${id}`, { method: 'DELETE' }),
+  tradeHistory: (id: string) => request<TradeRevision[]>(`${PORTFOLIO}/trades/${id}/history`),
+  positions: (on?: IsoDate) => request<Position[]>(`${PORTFOLIO}/positions${query({ on })}`),
+  /** What every broker's and wallet's account holds, worth what, in a currency. */
+  value: (currency: string, on?: IsoDate) => request<Valuation>(`${PORTFOLIO}/value${query({ currency, on })}`),
+  snapshots: () => request<SnapshotSummary[]>(`${PORTFOLIO}/snapshots`),
+  takeSnapshot: (currency: string, note: string, on?: IsoDate) =>
+    request<Snapshot>(`${PORTFOLIO}/snapshots`, json('POST', { currency, note, on: on ?? null })),
+  /** A snapshot beside now - or beside another snapshot. */
+  snapshot: (id: string, against?: string) => request<Comparison>(`${PORTFOLIO}/snapshots/${id}${query({ against })}`),
+  deleteSnapshot: (id: string) => request<void>(`${PORTFOLIO}/snapshots/${id}`, { method: 'DELETE' }),
 }

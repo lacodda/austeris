@@ -1,5 +1,6 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
+import { Link } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { useLocale } from 'dowel-ui'
 import { Repeat, SquarePlus, X } from 'lucide-react'
@@ -185,12 +186,23 @@ function ViewEntry({ entry, onEdit, onPost, onDeleted }: { entry: Entry; onEdit:
               </span>
             </KeyValueRow>
           ) : null}
-          {entry.source ? <KeyValueRow label={t('entry.source')}>{entry.source}</KeyValueRow> : null}
+          {entry.source ? <KeyValueRow label={t('entry.source')}>{t(`modules.${entry.source}`, { defaultValue: entry.source })}</KeyValueRow> : null}
         </KeyValue>
+
+        {entry.kept ? (
+          <Alert tone="info">
+            {t('entry.keptNote', { module: t(`modules.${entry.source ?? ''}`, { defaultValue: entry.source ?? '' }) })}{' '}
+            {entry.source === 'portfolio' ? (
+              <Link to="/portfolio/trades" className="font-medium underline-offset-2 hover:underline">
+                {t('entry.keptLink')}
+              </Link>
+            ) : null}
+          </Alert>
+        ) : null}
 
         {/* What can be made of the entry, apart from what changes it: the
             footer keeps to the entry itself, and fits a phone's width. */}
-        {isExchange(entry) && !isOnePayment(entry, feeCategory) ? null : (
+        {entry.kept || (isExchange(entry) && !isOnePayment(entry, feeCategory)) ? null : (
           <div className="flex flex-wrap gap-2">
             {isExchange(entry) ? null : (
               <Button size="sm" onClick={() => repeat.mutate(false)} disabled={repeat.isPending}>
@@ -219,7 +231,9 @@ function ViewEntry({ entry, onEdit, onPost, onDeleted }: { entry: Entry; onEdit:
                         ? accountName(line.account_id)
                         : line.side === 'category' && line.category_id
                           ? (labels.get(line.category_id) ?? '')
-                          : t('entry.conversion')}
+                          : line.side === 'holding'
+                            ? t('entry.holding')
+                            : t('entry.conversion')}
                     </div>
                     {line.note ? <div className="text-xs text-dim">{line.note}</div> : null}
                   </TableCell>
@@ -237,6 +251,8 @@ function ViewEntry({ entry, onEdit, onPost, onDeleted }: { entry: Entry; onEdit:
       </DrawerBody>
       <DrawerActions
         start={
+          // A trade's money is deleted with the trade.
+          entry.kept ? null : (
           <ConfirmDialog>
             <ConfirmDialogTrigger render={<Button variant="danger" />}>{t('entry.delete')}</ConfirmDialogTrigger>
             <ConfirmDialogPopup>
@@ -252,6 +268,7 @@ function ViewEntry({ entry, onEdit, onPost, onDeleted }: { entry: Entry; onEdit:
               </ConfirmDialogActions>
             </ConfirmDialogPopup>
           </ConfirmDialog>
+          )
         }
       >
         <Button onClick={onEdit}>{t('entry.edit')}</Button>
@@ -285,8 +302,8 @@ function EditEntry({ entry, onDone }: { entry: Entry; onDone: () => void }) {
     mutationFn: async () => {
       const firstCategory = entry.lines.find((line) => line.side === 'category')?.category_id ?? undefined
       return api.updateEntry(entry.id, {
-        description: description.trim(),
-        occurred_on: date,
+        // An entry a module keeps has its day and description from there.
+        ...(entry.kept ? {} : { description: description.trim(), occurred_on: date }),
         counterparty_id: await resolver().counterparty(counterparty, firstCategory),
         tags,
         place: place && place.country ? place : null,
@@ -313,18 +330,23 @@ function EditEntry({ entry, onDone }: { entry: Entry; onDone: () => void }) {
   return (
     <form onSubmit={submit} className="flex min-h-0 flex-1 flex-col">
       <DrawerBody className="flex flex-col gap-4">
-        <Field label={t('entry.description')}>
-          <Input value={description} onChange={(event) => setDescription(event.target.value)} />
-        </Field>
-        <Field label={t('entry.date')} required>
-          <DatePicker
-            value={date}
-            onValueChange={setDate}
-            placeholder={t('entry.date')}
-            previousMonthLabel={t('calendar.previous')}
-            nextMonthLabel={t('calendar.next')}
-          />
-        </Field>
+        {/* A trade's day and what it is called come from the trade. */}
+        {entry.kept ? null : (
+          <>
+            <Field label={t('entry.description')}>
+              <Input value={description} onChange={(event) => setDescription(event.target.value)} />
+            </Field>
+            <Field label={t('entry.date')} required>
+              <DatePicker
+                value={date}
+                onValueChange={setDate}
+                placeholder={t('entry.date')}
+                previousMonthLabel={t('calendar.previous')}
+                nextMonthLabel={t('calendar.next')}
+              />
+            </Field>
+          </>
+        )}
         <CounterpartyField value={counterparty} onValueChange={setCounterparty} />
         <TagsField value={tags} onValueChange={setTags} />
         <PlaceField value={place} onValueChange={setPlace} />

@@ -60,6 +60,7 @@ const exchange: Entry = {
   id: 'e1',
   occurred_on: '2026-10-01',
   status: 'cleared',
+  kept: false,
   description: 'Cambios Chaco',
   tags: [],
   lines: [

@@ -29,13 +29,28 @@ describe('App', () => {
     const { unmount } = render(app(<App />))
     // In the header and in the phone's bar alike.
     expect((await screen.findAllByRole('link', { name: 'Import' })).length).toBeGreaterThan(0)
+    expect((await screen.findAllByRole('link', { name: 'Portfolio' })).length).toBeGreaterThan(0)
     unmount()
 
-    signedIn({ ...BOOKS, '/api/v1/modules': json({ modules: [{ name: 'imports', on: false }] }) })
-    render(app(<App />, '/import'))
+    signedIn({
+      ...BOOKS,
+      '/api/v1/modules': json({
+        modules: [
+          { name: 'imports', on: false },
+          { name: 'portfolio', on: false },
+        ],
+      }),
+    })
+    const { unmount: away } = render(app(<App />, '/import'))
     // Switched off, its address is one nothing answers.
     expect(await screen.findByRole('heading', { name: 'Accounts' })).toBeTruthy()
     expect(screen.queryByRole('link', { name: 'Import' })).toBeNull()
+    expect(screen.queryByRole('link', { name: 'Portfolio' })).toBeNull()
+    away()
+
+    signedIn({ ...BOOKS, '/api/v1/modules': json({ modules: [{ name: 'portfolio', on: false }] }) })
+    render(app(<App />, '/portfolio/trades'))
+    expect(await screen.findByRole('heading', { name: 'Accounts' })).toBeTruthy()
   })
 
   it('sends an address nothing answers to the accounts', async () => {

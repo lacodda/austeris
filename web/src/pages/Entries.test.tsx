@@ -126,9 +126,46 @@ describe('Entries', () => {
     expect(within(files).getByRole('link', { name: /receipt\.jpg/ }).getAttribute('href')).toBe('/api/v1/ledger/attachments/f1/content')
     const history = await screen.findByRole('region', { name: 'History' })
     expect(within(history).getByText('Recorded · you')).toBeTruthy()
-    expect(within(history).getByText('Changed · the demo module')).toBeTruthy()
+    expect(within(history).getByText('Changed · the Demo module')).toBeTruthy()
     expect(within(history).getByText('Description: "Weekly shop" → "Groceries"')).toBeTruthy()
     expect(within(history).getByText('Status: held → posted on Oct 9, 2026')).toBeTruthy()
+  })
+
+  it('shows a trade`s money as kept by the portfolio, with nothing to delete or repeat', async () => {
+    const trade = {
+      ...HELD,
+      id: 'e7',
+      status: 'cleared',
+      cleared_on: '2026-10-07',
+      description: 'Buy 0.01 BTC',
+      source: 'portfolio',
+      kept: true,
+      counterparty: null,
+      place: null,
+      tags: [],
+      lines: [
+        { id: 'l1', side: 'account', account_id: 'a1', amount: '-601', currency: 'PYG', note: '' },
+        { id: 'l2', side: 'holding', amount: '601', currency: 'PYG', note: '' },
+      ],
+    }
+    signedIn({
+      ...LISTS,
+      '/api/v1/ledger/entries': json([trade]),
+      '/api/v1/ledger/entries/e7': json(trade),
+      '/api/v1/ledger/entries/e7/history': json([]),
+    })
+    render(app(<Entries />, '/entries'))
+    await userEvent.click(await screen.findByRole('button', { name: 'Buy 0.01 BTC' }))
+
+    expect(await screen.findByText(/This is a trade's money, kept by Portfolio/)).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Open the trades' }).getAttribute('href')).toBe('/portfolio/trades')
+    expect(screen.getByText('Holdings')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Record again today' })).toBeNull()
+    // What is the person's to change on it: not its day, not its name.
+    await userEvent.click(screen.getByRole('button', { name: 'Edit' }))
+    expect(await screen.findByLabelText(/^Tags/)).toBeTruthy()
+    expect(screen.queryByLabelText(/^Description/)).toBeNull()
   })
 
   it('deletes to the trash, and Undo on the toast brings the entry back', async () => {
