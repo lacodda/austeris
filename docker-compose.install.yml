@@ -50,6 +50,11 @@ x-imports: &imports
   AUSTERIS_IMPORTS: ${AUSTERIS_IMPORTS:-on}
   AUSTERIS_INBOX: /inbox
 
+# The portfolio module - trades, positions and snapshots - on unless switched
+# off.
+x-portfolio: &portfolio
+  AUSTERIS_PORTFOLIO: ${AUSTERIS_PORTFOLIO:-on}
+
 services:
   db:
     image: postgres:18-alpine
@@ -75,7 +80,7 @@ services:
     profiles: [single]
     command: ["serve"]
     environment:
-      <<: [*environment, *imports]
+      <<: [*environment, *imports, *portfolio]
       # The address the first account is created under on an empty
       # installation; its password is printed once, into this container's log.
       AUSTERIS_FIRST_USER: ${AUSTERIS_FIRST_USER:-owner@austeris.local}
@@ -120,6 +125,8 @@ services:
         condition: service_healthy
       imports:
         condition: service_healthy
+      portfolio:
+        condition: service_healthy
 
   identity:
     <<: *austeris
@@ -158,6 +165,15 @@ services:
       - ${AUSTERIS_INBOX_DIR:-./inbox}:/inbox
     group_add:
       - "${AUSTERIS_INBOX_GID:-1000}"
+
+  # The same for the portfolio: AUSTERIS_PORTFOLIO=off for the gateway, and
+  # this service and the gateway's wait for it removed.
+  portfolio:
+    <<: *austeris
+    profiles: [split]
+    command: ["serve", "portfolio"]
+    environment:
+      <<: [*environment, *portfolio]
 
 volumes:
   db-data:

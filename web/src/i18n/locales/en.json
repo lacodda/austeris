@@ -324,6 +324,21 @@
     "slip": {
       "ocr_unavailable": "This installation cannot read photos: it has no OCR.",
       "unsupported": "A slip is read from a JPEG, PNG or WebP photo."
+    },
+    "trade": {
+      "unknown_account": "That account is not one of yours.",
+      "unknown_instrument": "That instrument is not in the catalogue.",
+      "not_a_holding_account": "Positions are held on a broker's or a wallet's account; {{name}} is not one.",
+      "closed_account": "{{name}} is closed; nothing new happens on it.",
+      "money_not_holding": "{{symbol}} is money here: it is an account's balance, not a position.",
+      "fee_too_large": "The fee is as much as the trade itself.",
+      "nothing_moved": "This trade moves less than one unit of {{currency}}.",
+      "oversold": "That would leave {{short}} {{symbol}} fewer than were held at the time.",
+      "refused_by_ledger": "The books refused the trade's money: {{message}}"
+    },
+    "portfolio": {
+      "ledger_unavailable": "The books are not answering; nothing was changed. Try again in a moment.",
+      "market_unavailable": "Prices are not answering; nothing was changed. Try again in a moment."
     }
   },
   "files": {

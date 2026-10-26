@@ -1,0 +1,42 @@
+[package]
+name = "austeris-portfolio"
+description = "What a person bought, sold and moved, what it adds up to, and what it is worth"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[dependencies]
+austeris-common.workspace = true
+# The ledger's pure helpers only - how many places a currency has, what a
+# currency code is - so a trade's money rounds the way an entry typed by hand
+# does. Its tables are reached through its contract like any module's
+# (ADR 0001).
+austeris-ledger.workspace = true
+austeris-proto.workspace = true
+
+anyhow.workspace = true
+axum.workspace = true
+chrono.workspace = true
+rust_decimal.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tonic.workspace = true
+tracing.workspace = true
+utoipa.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+# The market's own service, called in the test's process through its contract.
+austeris-market.workspace = true
+http-body-util.workspace = true
+tower.workspace = true
+
+[lints]
+workspace = true

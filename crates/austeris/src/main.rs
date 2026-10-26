@@ -131,6 +131,12 @@ async fn serve_one(config: &Config, service: Service) -> Result<()> {
             let pool = schema_ready(config, service).await?;
             start_imports(pool, &peers, &mut tasks)?
         }
+        Service::Portfolio => {
+            // Like imports: it calls the ledger and the market, and only the
+            // gateway calls it.
+            let pool = schema_ready(config, service).await?;
+            start_portfolio(pool, &peers)?
+        }
         data => {
             let pool = schema_ready(config, data).await?;
             if data == Service::Identity {
@@ -200,11 +206,16 @@ async fn serve_all(config: &Config) -> Result<()> {
 
     let mut tasks = JoinSet::new();
     for (service, pool, rest, grpc) in listeners {
-        let app = if service == Service::Imports {
-            drop(grpc);
-            start_imports(pool, &peers, &mut tasks)?
-        } else {
-            start(service, pool, TcpIncoming::from(grpc), &peers, &mut tasks)?
+        let app = match service {
+            Service::Imports => {
+                drop(grpc);
+                start_imports(pool, &peers, &mut tasks)?
+            }
+            Service::Portfolio => {
+                drop(grpc);
+                start_portfolio(pool, &peers)?
+            }
+            _ => start(service, pool, TcpIncoming::from(grpc), &peers, &mut tasks)?,
         };
         tasks.spawn(http(rest, app));
     }
@@ -267,6 +278,7 @@ fn start(service: Service, pool: sqlx::PgPool, grpc: TcpIncoming, peers: &Peers,
             Ok(austeris_market::routes::router(pool, sources, Some(ledger)))
         }
         Service::Imports => unreachable!("imports serves no gRPC; it is started by start_imports"),
+        Service::Portfolio => unreachable!("portfolio serves no gRPC; it is started by start_portfolio"),
         Service::Gateway => unreachable!("the gateway owns no schema and serves no gRPC"),
     }
 }
@@ -296,6 +308,13 @@ fn start_imports(pool: sqlx::PgPool, peers: &Peers, tasks: &mut JoinSet<Result<(
         });
     }
     Ok(austeris_imports::routes::router(pool, books))
+}
+
+/// Starts the portfolio module, and hands back its REST router.
+fn start_portfolio(pool: sqlx::PgPool, peers: &Peers) -> Result<Router> {
+    let books = austeris_portfolio::services::Remote::connect_lazy(peers.grpc(Service::Ledger))?;
+    let market = austeris_portfolio::services::Remote::connect_lazy(peers.grpc(Service::Market))?;
+    Ok(austeris_portfolio::routes::router(pool, books, market))
 }
 
 /// Serves a router on a listener until it stops.

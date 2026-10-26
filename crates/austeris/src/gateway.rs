@@ -312,9 +312,9 @@ mod tests {
 
     #[tokio::test]
     async fn an_unrouted_path_is_not_reachable() {
-        // `portfolio` is a module the plan has but the binary does not: a path
+        // `credit` is a module the plan has but the binary does not: a path
         // with no service behind it must 404 rather than be proxied nowhere.
-        let (status, _) = get("/api/v1/portfolio/positions").await;
+        let (status, _) = get("/api/v1/credit/loans").await;
         assert_eq!(status, StatusCode::NOT_FOUND);
     }
 
@@ -390,7 +390,8 @@ mod tests {
         assert!(is_routed(&Uri::from_static("/api/v1/auth/login")));
         assert!(is_routed(&Uri::from_static("/api/v1/ledger/accounts")));
         assert!(is_routed(&Uri::from_static("/api/v1/imports/documents")));
-        assert!(!is_routed(&Uri::from_static("/api/v1/portfolio/positions")));
+        assert!(is_routed(&Uri::from_static("/api/v1/portfolio/positions")));
+        assert!(!is_routed(&Uri::from_static("/api/v1/credit/loans")));
         // The prefix must be a whole segment: a service called `auth` must not
         // capture `/api/v1/authority/...`.
         assert!(!is_routed(&Uri::from_static("/api/v1/authority/x")));

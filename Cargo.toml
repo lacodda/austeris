@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/austeris", "crates/common", "crates/identity", "crates/imports", "crates/ledger", "crates/market", "crates/proto"]
+members = ["crates/austeris", "crates/common", "crates/identity", "crates/imports", "crates/ledger", "crates/market", "crates/portfolio", "crates/proto"]
 
 [workspace.package]
 version = "0.13.0"
@@ -19,6 +19,7 @@ austeris-identity = { path = "crates/identity", version = "0.13.0" }
 austeris-imports = { path = "crates/imports", version = "0.13.0" }
 austeris-ledger = { path = "crates/ledger", version = "0.13.0" }
 austeris-market = { path = "crates/market", version = "0.13.0" }
+austeris-portfolio = { path = "crates/portfolio", version = "0.13.0" }
 austeris-proto = { path = "crates/proto", version = "0.13.0" }
 
 anyhow = "1.0.104"

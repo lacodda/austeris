@@ -291,6 +291,35 @@ codes! {
     SlipOcrUnavailable = "slip.ocr_unavailable",
     /// A photo OCR cannot read: not a JPEG, PNG or WebP picture.
     SlipUnsupported = "slip.unsupported",
+
+    // Why a trade was not recorded, changed or deleted.
+    /// An account the trade names is not the person's.
+    TradeUnknownAccount = "trade.unknown_account",
+    /// The instrument is not in the market's catalogue.
+    TradeUnknownInstrument = "trade.unknown_instrument",
+    /// Positions are held on a broker's or a wallet's account. Params:
+    /// `name`, `kind`.
+    TradeNotAHoldingAccount = "trade.not_a_holding_account",
+    /// The account is closed. Params: `name`.
+    TradeClosedAccount = "trade.closed_account",
+    /// The instrument is money - a currency, or a stablecoin an account is
+    /// kept in. Params: `symbol`.
+    TradeMoneyNotHolding = "trade.money_not_holding",
+    /// The fee is as much as the trade: nothing arrives, or a sale brings in
+    /// nothing.
+    TradeFeeTooLarge = "trade.fee_too_large",
+    /// The money it moves rounds to nothing. Params: `currency`.
+    TradeNothingMoved = "trade.nothing_moved",
+    /// It leaves a position below nothing. Params: `symbol`, `short`, `at`.
+    TradeOversold = "trade.oversold",
+    /// The ledger refused the trade's money. Params: `message`, its own
+    /// sentence.
+    TradeRefusedByLedger = "trade.refused_by_ledger",
+    /// The ledger, which keeps the accounts and the money, did not answer.
+    PortfolioLedgerUnavailable = "portfolio.ledger_unavailable",
+    /// The market, which knows the instruments and their prices, did not
+    /// answer.
+    PortfolioMarketUnavailable = "portfolio.market_unavailable",
 }
 
 #[cfg(test)]

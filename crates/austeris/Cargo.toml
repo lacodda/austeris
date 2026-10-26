@@ -23,6 +23,7 @@ austeris-identity.workspace = true
 austeris-imports.workspace = true
 austeris-ledger.workspace = true
 austeris-market.workspace = true
+austeris-portfolio.workspace = true
 austeris-proto.workspace = true
 
 anyhow.workspace = true

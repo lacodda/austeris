@@ -42,6 +42,7 @@ services:
       AUSTERIS_CMC_API_KEY: ${AUSTERIS_CMC_API_KEY:-}
       AUSTERIS_IMPORTS: ${AUSTERIS_IMPORTS:-on}
       AUSTERIS_INBOX: /inbox
+      AUSTERIS_PORTFOLIO: ${AUSTERIS_PORTFOLIO:-on}
       RUST_LOG: ${RUST_LOG:-austeris=info,tower_http=info,warn}
     volumes:
       # Receipts dropped in ./inbox/demo@austeris.local/ are read into the

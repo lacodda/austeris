@@ -26,11 +26,14 @@ pub enum Service {
     /// Documents read into the books: receipts, the folder they arrive in,
     /// exchange slips. A module: the installation can switch it off.
     Imports,
+    /// Trades, positions, what they are worth and snapshots of it. A module:
+    /// the installation can switch it off.
+    Portfolio,
 }
 
 impl Service {
     /// Every service, in registration order.
-    pub const ALL: &'static [Self] = &[Self::Gateway, Self::Identity, Self::Ledger, Self::Market, Self::Imports];
+    pub const ALL: &'static [Self] = &[Self::Gateway, Self::Identity, Self::Ledger, Self::Market, Self::Imports, Self::Portfolio];
 
     /// The service's name, as it appears in a command line and in a URL.
     #[must_use]
@@ -41,6 +44,7 @@ impl Service {
             Self::Ledger => "ledger",
             Self::Market => "market",
             Self::Imports => "imports",
+            Self::Portfolio => "portfolio",
         }
     }
 
@@ -56,6 +60,7 @@ impl Service {
             Self::Ledger => Some(austeris_ledger::SCHEMA),
             Self::Market => Some(austeris_market::SCHEMA),
             Self::Imports => Some(austeris_imports::SCHEMA),
+            Self::Portfolio => Some(austeris_portfolio::SCHEMA),
         }
     }
 
@@ -68,6 +73,7 @@ impl Service {
             Self::Ledger => Some(&austeris_ledger::MIGRATOR),
             Self::Market => Some(&austeris_market::MIGRATOR),
             Self::Imports => Some(&austeris_imports::MIGRATOR),
+            Self::Portfolio => Some(&austeris_portfolio::MIGRATOR),
         }
     }
 
@@ -76,7 +82,7 @@ impl Service {
     /// The gateway is not among them: it does not forward to itself.
     #[must_use]
     pub fn routed() -> &'static [Self] {
-        &[Self::Identity, Self::Ledger, Self::Market, Self::Imports]
+        &[Self::Identity, Self::Ledger, Self::Market, Self::Imports, Self::Portfolio]
     }
 
     /// The variable that switches this service off, when it is a module the
@@ -89,6 +95,7 @@ impl Service {
     pub fn switch(self) -> Option<&'static str> {
         match self {
             Self::Imports => Some("AUSTERIS_IMPORTS"),
+            Self::Portfolio => Some("AUSTERIS_PORTFOLIO"),
             Self::Gateway | Self::Identity | Self::Ledger | Self::Market => None,
         }
     }
@@ -121,6 +128,7 @@ impl Service {
             Self::Ledger => "ledger",
             Self::Market => "market",
             Self::Imports => "imports",
+            Self::Portfolio => "portfolio",
         }
     }
 }
@@ -245,7 +253,14 @@ mod tests {
     fn every_service_is_listed_in_all() {
         // `ALL` drives `migrate` with no argument: a service missing from it
         // has its schema silently left behind at the previous version.
-        for service in [Service::Gateway, Service::Identity, Service::Ledger, Service::Market, Service::Imports] {
+        for service in [
+            Service::Gateway,
+            Service::Identity,
+            Service::Ledger,
+            Service::Market,
+            Service::Imports,
+            Service::Portfolio,
+        ] {
             assert!(Service::ALL.contains(&service), "{service} is missing from Service::ALL");
         }
     }
@@ -272,6 +287,7 @@ mod tests {
         // Only modules have a switch: the installation without its ledger is
         // not an installation.
         assert_eq!(Service::Imports.switch(), Some("AUSTERIS_IMPORTS"));
+        assert_eq!(Service::Portfolio.switch(), Some("AUSTERIS_PORTFOLIO"));
         assert_eq!(Service::Ledger.switch(), None);
     }
 

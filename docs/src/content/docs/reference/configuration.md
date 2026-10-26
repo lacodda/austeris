@@ -33,6 +33,7 @@ directory must not change how a deployment behaves.
 | `AUSTERIS_LEDGER_ADDR` | `http://ledger:8080` | Where to forward `/api/v1/ledger/...`. |
 | `AUSTERIS_MARKET_ADDR` | `http://market:8080` | Where to forward `/api/v1/market/...`. |
 | `AUSTERIS_IMPORTS_ADDR` | `http://imports:8080` | Where to forward `/api/v1/imports/...`. |
+| `AUSTERIS_PORTFOLIO_ADDR` | `http://portfolio:8080` | Where to forward `/api/v1/portfolio/...`. |
 
 Every routed service has a pair, `AUSTERIS_<SERVICE>_ADDR` and
 `AUSTERIS_<SERVICE>_GRPC_ADDR`, so one service can be run outside compose while
@@ -66,6 +67,15 @@ A module: on unless switched off, and then not started at all - see
 Exchange slips are read by Tesseract when it is on the `PATH` - the image carries
 it, with English and Spanish. Without it the module starts, says so once, and
 answers a photo with `slip.ocr_unavailable`.
+
+## portfolio
+
+A module: on unless switched off, and then not started at all - see
+[Portfolio](/austeris/reference/portfolio/).
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `AUSTERIS_PORTFOLIO` | `on` | `off` switches the module off: it is not started, its paths answer `module.switched_off`, and the web interface does not offer it. Read by the process running it and by the gateway. The entries its trades booked stay in the books, still kept by it: switched on again, it changes them as before. |
 
 ## The CLI
 

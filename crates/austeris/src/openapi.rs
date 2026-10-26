@@ -41,6 +41,7 @@ pub fn document() -> Document {
     document.merge(austeris_ledger::routes::ApiDoc::openapi());
     document.merge(austeris_market::routes::ApiDoc::openapi());
     document.merge(austeris_imports::routes::ApiDoc::openapi());
+    document.merge(austeris_portfolio::routes::ApiDoc::openapi());
 
     document
 }
@@ -60,6 +61,7 @@ mod tests {
         assert!(paths.contains(&"/api/v1/ledger/accounts"), "ledger is missing: {paths:?}");
         assert!(paths.contains(&"/api/v1/market/instruments"), "market is missing: {paths:?}");
         assert!(paths.contains(&"/api/v1/imports/documents"), "imports is missing: {paths:?}");
+        assert!(paths.contains(&"/api/v1/portfolio/trades"), "portfolio is missing: {paths:?}");
     }
 
     #[test]
