@@ -71,21 +71,8 @@ pub async fn valuation<B: Books, M: Market>(
         .into_iter()
         .map(|instrument| (instrument.id, instrument))
         .collect();
-    let prices: HashMap<Uuid, Price> = if on.is_none() {
-        market.prices(&ids, currency).await.map_err(Unvalued::Market)?
-    } else {
-        let mut found = Vec::new();
-        for id in &ids {
-            if let Some(price) = market.price_at(*id, currency, moment).await.map_err(Unvalued::Market)? {
-                found.push(price);
-            }
-        }
-        found
-    }
-    .into_iter()
-    .map(|price| (price.instrument_id, price))
-    .collect();
     let day = on.unwrap_or_else(|| now.date_naive());
+    let prices = prices_in(books, market, &ids, currency, on.map(|_| moment), day).await?;
     let cash: HashMap<Uuid, _> = books
         .cash(owner, day, currency)
         .await
@@ -147,6 +134,72 @@ pub async fn valuation<B: Books, M: Market>(
         });
     }
     Ok(assemble(day, moment, currency.to_owned(), valued))
+}
+
+/// The currencies a price is looked for in when there is none in the one
+/// asked for, in order: the ones price sources quote in.
+const REFERENCE_CURRENCIES: [&str; 2] = ["USD", "EUR"];
+
+/// What a unit of each instrument is worth in `currency`: the latest price, or
+/// the last observed by `by` - the end of `day`.
+///
+/// A source quotes in its own currency - a coin in dollars - and a person
+/// reads their portfolio in theirs. What has no price in it is priced in a
+/// currency sources do quote in, at the ledger's rate for the day: the one
+/// place money changes currency (ADR 0009). Either being stale makes the
+/// price stale.
+async fn prices_in<B: Books, M: Market>(
+    books: &B,
+    market: &M,
+    ids: &[Uuid],
+    currency: &str,
+    by: Option<DateTime<Utc>>,
+    day: NaiveDate,
+) -> Result<HashMap<Uuid, Price>, Unvalued> {
+    let mut prices: HashMap<Uuid, Price> = priced(market, ids, currency, by)
+        .await?
+        .into_iter()
+        .map(|price| (price.instrument_id, price))
+        .collect();
+    for reference in REFERENCE_CURRENCIES.into_iter().filter(|reference| *reference != currency) {
+        let missing: Vec<Uuid> = ids.iter().copied().filter(|id| !prices.contains_key(id)).collect();
+        if missing.is_empty() {
+            break;
+        }
+        let found = priced(market, &missing, reference, by).await?;
+        if found.is_empty() {
+            continue;
+        }
+        let Some(rate) = books.rate(reference, currency, day).await.map_err(Unvalued::Ledger)? else {
+            continue;
+        };
+        for price in found {
+            prices.insert(
+                price.instrument_id,
+                Price {
+                    price: price.price * rate.rate,
+                    stale: price.stale || rate.stale,
+                    ..price
+                },
+            );
+        }
+    }
+    Ok(prices)
+}
+
+/// The prices of these instruments in `currency`: the latest, or the last
+/// observed by `by`.
+async fn priced<M: Market>(market: &M, ids: &[Uuid], currency: &str, by: Option<DateTime<Utc>>) -> Result<Vec<Price>, Unvalued> {
+    let Some(moment) = by else {
+        return market.prices(ids, currency).await.map_err(Unvalued::Market);
+    };
+    let mut found = Vec::new();
+    for id in ids {
+        if let Some(price) = market.price_at(*id, currency, moment).await.map_err(Unvalued::Market)? {
+            found.push(price);
+        }
+    }
+    Ok(found)
 }
 
 /// A valuation of these accounts: each in order, its money first and its

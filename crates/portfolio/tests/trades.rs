@@ -18,7 +18,7 @@ use std::time::Duration;
 use austeris_common::{Actor, Config, USER_HEADER, db};
 use austeris_ledger::model::AccountKind;
 use austeris_market::model::Kind;
-use austeris_portfolio::services::{Account, Books, Cash, Local};
+use austeris_portfolio::services::{Account, Books, Cash, Local, Rate};
 use austeris_portfolio::{MIGRATOR, routes};
 use austeris_proto::ledger::v1::{PostEntryRequest, RestateEntryRequest};
 use axum::Router;
@@ -469,6 +469,9 @@ impl Books for Down {
     fn withdraw(&self, _owner: Uuid, _key: &str) -> impl Future<Output = Result<bool, Status>> {
         std::future::ready(Err(Status::unavailable("the ledger is down")))
     }
+    fn rate(&self, _base: &str, _quote: &str, _on: NaiveDate) -> impl Future<Output = Result<Option<Rate>, Status>> {
+        std::future::ready(Err(Status::unavailable("the ledger is down")))
+    }
 }
 
 /// The ledger answering what accounts there are, and down for posting.
@@ -490,6 +493,9 @@ impl Books for DownForPosting {
     }
     fn withdraw(&self, _owner: Uuid, _key: &str) -> impl Future<Output = Result<bool, Status>> {
         std::future::ready(Err(Status::unavailable("the ledger went down")))
+    }
+    fn rate(&self, base: &str, quote: &str, on: NaiveDate) -> impl Future<Output = Result<Option<Rate>, Status>> {
+        self.0.rate(base, quote, on)
     }
 }
 
@@ -594,10 +600,23 @@ async fn the_value_is_the_money_at_the_ledgers_rate_and_the_coins_at_the_markets
     assert_eq!(number(&value["total"]), decimal("768.851"));
     assert_eq!(value["unvalued"], json!(["ETH"]), "what the total leaves out is named");
 
-    // In a currency nothing is priced in, the coins have no value and say so.
+    // In a currency nothing is priced in, and no rate leads to, the coins have
+    // no value and say so.
     let (_, in_euros) = world.call("GET", "/portfolio/value?currency=EUR", None).await;
     assert_eq!(in_euros["unvalued"], json!(["BTC", "ETH", "USDT"]));
     assert_eq!(number(&in_euros["total"]), Decimal::ZERO);
+
+    // In guaranies, which no source quotes a coin in: the dollar price at the
+    // ledger's rate for the day - and the stablecoin through the dollar.
+    austeris_ledger::repository::record_rate(&world.ledger_pool, "USD", "PYG", Utc::now().date_naive(), decimal("7000"), "bcp")
+        .await
+        .expect("a rate");
+    let (_, in_guaranies) = world.call("GET", "/portfolio/value?currency=PYG", None).await;
+    let holdings = in_guaranies["accounts"][0]["holdings"].as_array().expect("holdings");
+    assert_eq!(number(&holdings[1]["price"]), decimal("434000000"), "{in_guaranies}");
+    assert_eq!(number(&holdings[1]["value"]), decimal("4340000"));
+    assert_eq!(number(&holdings[0]["value"]), decimal("1041957"), "149 USDT at 0.999 dollars at 7000 guaranies");
+    assert_eq!(in_guaranies["unvalued"], json!(["ETH"]));
 
     let (status, _) = world.call("GET", "/portfolio/value?currency=dollars", None).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);

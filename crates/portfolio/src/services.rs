@@ -15,7 +15,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use austeris_proto::ledger::v1::ledger_service_client::LedgerServiceClient;
 use austeris_proto::ledger::v1::ledger_service_server::LedgerService;
-use austeris_proto::ledger::v1::{GetBalancesRequest, ListAccountsRequest, PostEntryRequest, RestateEntryRequest, WithdrawEntryRequest};
+use austeris_proto::ledger::v1::{GetBalancesRequest, ListAccountsRequest, PostEntryRequest, RateAtRequest, RestateEntryRequest, WithdrawEntryRequest};
 use austeris_proto::market::v1::market_service_client::MarketServiceClient;
 use austeris_proto::market::v1::market_service_server::MarketService;
 use austeris_proto::market::v1::{GetInstrumentsRequest, GetPriceAtRequest, GetPricesRequest};
@@ -63,6 +63,15 @@ pub struct Cash {
     pub stale: bool,
 }
 
+/// A rate in force on a day, as the ledger keeps it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rate {
+    /// How many of the quote currency one of the base buys.
+    pub rate: Decimal,
+    /// Older than a long weekend by the day asked about.
+    pub stale: bool,
+}
+
 /// An instrument, as the market knows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Instrument {
@@ -102,6 +111,8 @@ pub trait Books: Send + Sync {
     fn restate(&self, request: RestateEntryRequest) -> impl Future<Output = Result<Uuid, Status>> + Send;
     /// Takes back an entry this module keeps; `false` when it was gone.
     fn withdraw(&self, owner: Uuid, key: &str) -> impl Future<Output = Result<bool, Status>> + Send;
+    /// The rate from `base` into `quote` in force on a day, when one is known.
+    fn rate(&self, base: &str, quote: &str, on: NaiveDate) -> impl Future<Output = Result<Option<Rate>, Status>> + Send;
 }
 
 /// The market, as this module uses it.
@@ -184,6 +195,14 @@ impl Books for Remote {
             .into_inner();
         Ok(withdrawn.withdrawn)
     }
+
+    async fn rate(&self, base: &str, quote: &str, on: NaiveDate) -> Result<Option<Rate>, Status> {
+        let found = LedgerServiceClient::new(self.channel.clone())
+            .rate_at(rate_request(base, quote, on))
+            .await?
+            .into_inner();
+        found.rate.as_ref().map(rate).transpose()
+    }
 }
 
 impl<T: LedgerService> Books for Local<T> {
@@ -218,6 +237,11 @@ impl<T: LedgerService> Books for Local<T> {
     async fn withdraw(&self, owner: Uuid, key: &str) -> Result<bool, Status> {
         let withdrawn = self.0.withdraw_entry(tonic::Request::new(withdraw_request(owner, key))).await?.into_inner();
         Ok(withdrawn.withdrawn)
+    }
+
+    async fn rate(&self, base: &str, quote: &str, on: NaiveDate) -> Result<Option<Rate>, Status> {
+        let found = self.0.rate_at(tonic::Request::new(rate_request(base, quote, on))).await?.into_inner();
+        found.rate.as_ref().map(rate).transpose()
     }
 }
 
@@ -280,6 +304,14 @@ fn withdraw_request(owner: Uuid, key: &str) -> WithdrawEntryRequest {
     }
 }
 
+fn rate_request(base: &str, quote: &str, on: NaiveDate) -> RateAtRequest {
+    RateAtRequest {
+        base: base.to_owned(),
+        quote: quote.to_owned(),
+        on: on.to_string(),
+    }
+}
+
 fn instruments_request(ids: &[Uuid]) -> GetInstrumentsRequest {
     GetInstrumentsRequest {
         instrument_ids: ids.iter().map(Uuid::to_string).collect(),
@@ -335,6 +367,14 @@ fn cash(balances: austeris_proto::ledger::v1::GetBalancesResponse) -> Result<Vec
             })
         })
         .collect()
+}
+
+fn rate(found: &austeris_proto::ledger::v1::RateInForce) -> Result<Rate, Status> {
+    let stated = found.rate.as_ref().ok_or_else(|| Status::internal("the ledger answered a rate without one"))?;
+    Ok(Rate {
+        rate: number(&stated.rate)?,
+        stale: found.stale,
+    })
 }
 
 fn instruments(found: austeris_proto::market::v1::GetInstrumentsResponse) -> Result<Vec<Instrument>, Status> {
