@@ -228,6 +228,10 @@ pub struct Entry {
     pub description: String,
     /// Which module produced it, or `None` when a person did.
     pub source: Option<String>,
+    /// Kept by the module that produced it: its day, description and lines
+    /// change only there - a trade's money is what the trade says - and it is
+    /// deleted only by taking the trade back.
+    pub kept: bool,
     /// Who the money went to or came from.
     pub counterparty: Option<CounterpartyRef>,
     /// Where it happened.
@@ -281,6 +285,10 @@ pub enum LineSide {
     /// Money changing currency. An exchange has two of these: one currency
     /// goes in, another comes out, and each still sums to zero on its own.
     Conversion,
+    /// Money that became something a module holds - a coin, a share - or came
+    /// back from one. Which thing is the module's to know; an entry with one
+    /// is kept by the module that posted it.
+    Holding,
 }
 
 /// One side of a movement.
@@ -697,6 +705,7 @@ mod tests {
             cleared_on: Some(day),
             description: String::new(),
             source: None,
+            kept: false,
             counterparty: None,
             place: None,
             tags: Vec::new(),

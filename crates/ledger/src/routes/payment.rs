@@ -217,6 +217,7 @@ impl Priced {
             description: payment.description,
             idempotency_key: None,
             source: None,
+            kept: false,
             pending: payment.pending,
             counterparty: payment.counterparty,
             place: payment.place,

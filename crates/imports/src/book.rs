@@ -146,6 +146,9 @@ pub async fn book(books: &impl Books, owner: Uuid, receipt: &Receipt, proof: Pro
         }),
         tags: Vec::new(),
         pending: entry.pending,
+        // The person's from here on: a receipt read into the books is an
+        // entry like one they typed, theirs to change or delete.
+        kept: false,
         files: vec![File {
             name: proof.name.to_owned(),
             content: proof.content.to_vec(),

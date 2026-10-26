@@ -18,7 +18,7 @@ use uuid::Uuid;
 use super::details::{choose_counterparty, find_or_create_place, set_tags};
 use super::history::{DeletionRow, Snapshot, deletion_for_update, deletions_select};
 use super::{CounterpartyChoice, NewLine, NewPlace, Side, ensure_sides_belong_to, entry};
-use crate::model::{Attachment, Entry, LineSide, Trash, TrashedAttachment, TrashedEntry};
+use crate::model::{Attachment, Entry, Trash, TrashedAttachment, TrashedEntry};
 use crate::trash::KEEP_DAYS;
 
 /// Makes a person's trash wait for whatever else is being done to it.
@@ -280,11 +280,8 @@ fn sides_of(was: &Snapshot, id: Uuid) -> Result<Vec<NewLine>> {
     was.lines
         .iter()
         .map(|line| {
-            let side = match (line.side, line.account_id, line.category_id) {
-                (LineSide::Account, Some(account), _) => Side::Account(account),
-                (LineSide::Category, _, Some(category)) => Side::Category(category),
-                (LineSide::Conversion, ..) => Side::Conversion,
-                _ => anyhow::bail!("a line of entry {id} in the trash names neither its account nor its category"),
+            let Some(side) = Side::of(line.side, line.account_id, line.category_id) else {
+                anyhow::bail!("a line of entry {id} in the trash names neither its account nor its category");
             };
             Ok(NewLine {
                 side,

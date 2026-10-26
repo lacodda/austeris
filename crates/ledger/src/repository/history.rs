@@ -34,6 +34,10 @@ pub struct Snapshot {
     pub source: Option<String>,
     /// A module's own name for it, which a retry finds it by.
     pub idempotency_key: Option<String>,
+    /// Kept by that module. Absent from a snapshot taken before modules kept
+    /// entries, which none was.
+    #[serde(default)]
+    pub kept: bool,
     /// When it was first recorded.
     pub created_at: DateTime<Utc>,
     /// Who it was with, named as they were then.
@@ -59,6 +63,7 @@ impl Snapshot {
             cleared_on: self.cleared_on,
             description: self.description,
             source: self.source,
+            kept: self.kept,
             counterparty: self.counterparty,
             place: self.place,
             tags: self.tags.into_iter().map(|tag| tag.name).collect(),
@@ -150,6 +155,7 @@ fn moved(snapshot: &Snapshot) -> Vec<Moved> {
                 LineSide::Account => 0,
                 LineSide::Category => 1,
                 LineSide::Conversion => 2,
+                LineSide::Holding => 3,
             };
             (
                 rank,
@@ -284,11 +290,16 @@ pub(super) struct Deletion {
 
 /// How an entry in the trash is found, for reading and for restoring alike:
 /// its history's last word is its deletion, and it is not in the books.
+///
+/// An entry a module kept is not among them: the module took it back with
+/// whatever it came from - a trade - and only it could bring it back. Its
+/// history stays readable by id until the trash's time is up.
 macro_rules! deletions_select {
     () => {
         "SELECT r.entry_id, r.at, r.actor, r.actor_person, r.actor_module, r.before
            FROM entry_revisions r
           WHERE r.owner_id = $1 AND r.action = 'deleted'
+            AND NOT COALESCE((r.before->>'kept')::boolean, false)
             AND r.at > now() - make_interval(days => $2)
             AND r.id = (SELECT max(x.id) FROM entry_revisions x WHERE x.entry_id = r.entry_id)
             AND NOT EXISTS (SELECT 1 FROM entries e WHERE e.id = r.entry_id)"
@@ -372,6 +383,7 @@ mod tests {
             description: "lunch".to_owned(),
             source: None,
             idempotency_key: None,
+            kept: false,
             created_at: Utc::now(),
             counterparty: None,
             place: None,

@@ -52,6 +52,7 @@ pub struct EntryPatch {
         (status = 200, description = "The entry, as it now is", body = Entry),
         (status = 400, description = "A tag or a place is not one, or the day is after the one it was posted on", body = austeris_common::error::ErrorBody),
         (status = 404, description = "No such entry, or the counterparty is not yours", body = austeris_common::error::ErrorBody),
+        (status = 409, description = "A module keeps the entry, and its day and description change there", body = austeris_common::error::ErrorBody),
     ),
 )]
 pub async fn change_entry(State(pool): State<PgPool>, caller: Caller, Path(id): Path<Uuid>, Json(patch): Json<EntryPatch>) -> AppResult<Json<Entry>> {

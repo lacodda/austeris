@@ -14,8 +14,9 @@ use austeris_common::Actor;
 use austeris_proto::ledger::v1::ledger_service_server::{LedgerService, LedgerServiceServer};
 use austeris_proto::ledger::v1::{
     Account as ProtoAccount, Balance, Counterparty as ProtoCounterparty, FindCounterpartyRequest, FindCounterpartyResponse, GetBalancesRequest,
-    GetBalancesResponse, ListAccountsRequest, ListAccountsResponse, PostEntryRequest, PostEntryResponse, Rate as ProtoRate, RateAtRequest, RateAtResponse,
-    RateInForce as ProtoRateInForce, RecordRatesRequest, RecordRatesResponse, line::Side as ProtoSide,
+    GetBalancesResponse, Line as ProtoLine, ListAccountsRequest, ListAccountsResponse, PostEntryRequest, PostEntryResponse, Rate as ProtoRate, RateAtRequest,
+    RateAtResponse, RateInForce as ProtoRateInForce, RecordRatesRequest, RecordRatesResponse, RestateEntryRequest, RestateEntryResponse, WithdrawEntryRequest,
+    WithdrawEntryResponse, line::Side as ProtoSide,
 };
 use chrono::{NaiveDate, Utc};
 use rust_decimal::Decimal;
@@ -24,7 +25,7 @@ use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
 use crate::model::AccountKind;
-use crate::repository::{CounterpartyChoice, NewEntry, NewFile, NewLine, NewPlace, ObservedRate, Side};
+use crate::repository::{CounterpartyChoice, NewEntry, NewFile, NewLine, NewPlace, NotKeptBy, ObservedRate, Restated, Side};
 use crate::{attachment, balance, country, parse, repository};
 
 /// The service implementation.
@@ -71,37 +72,12 @@ impl LedgerService for Service {
         }
 
         let occurred_on = NaiveDate::from_str(&request.occurred_on).map_err(|_| Status::invalid_argument("occurred_on is not a date (YYYY-MM-DD)"))?;
-
-        if request.lines.len() < 2 {
+        let lines = lines_of(&request.lines)?;
+        let source = Some(request.source.trim()).filter(|source| !source.is_empty());
+        if request.kept && source.is_none() {
             return Err(Status::invalid_argument(
-                "an entry has at least two sides: money leaves somewhere and arrives somewhere",
+                "an entry is kept by the module that posts it, and this one gave no name",
             ));
-        }
-
-        let mut lines = Vec::with_capacity(request.lines.len());
-        for line in &request.lines {
-            let amount = Decimal::from_str(&line.amount).map_err(|_| Status::invalid_argument(format!("`{}` is not an amount", line.amount)))?;
-            if amount.is_zero() {
-                return Err(Status::invalid_argument("a line of zero records nothing"));
-            }
-
-            let side = match &line.side {
-                Some(ProtoSide::AccountId(id)) => Side::Account(parse_id(id, "account")?),
-                Some(ProtoSide::CategoryId(id)) => Side::Category(parse_id(id, "category")?),
-                Some(ProtoSide::Conversion(_)) => Side::Conversion,
-                None => {
-                    return Err(Status::invalid_argument(
-                        "a line names an account, a category or a conversion; one that names none is money from nowhere",
-                    ));
-                }
-            };
-
-            lines.push(NewLine {
-                side,
-                amount,
-                currency: currency_code(&line.currency)?,
-                note: line.note.trim().to_owned(),
-            });
         }
 
         let counterparty = request.counterparty.as_ref().map(counterparty_choice).transpose()?;
@@ -125,7 +101,8 @@ impl LedgerService for Service {
                 occurred_on,
                 description: request.description.trim().to_owned(),
                 idempotency_key: Some(request.idempotency_key.trim().to_owned()),
-                source: (!request.source.trim().is_empty()).then(|| request.source.trim().to_owned()),
+                source: source.map(ToOwned::to_owned),
+                kept: request.kept,
                 pending: request.pending,
                 counterparty,
                 place,
@@ -281,6 +258,85 @@ impl LedgerService for Service {
             }),
         }))
     }
+
+    async fn restate_entry(&self, request: Request<RestateEntryRequest>) -> Result<Response<RestateEntryResponse>, Status> {
+        let request = request.into_inner();
+        let owner_id: Uuid = request.owner_id.parse().map_err(|_| Status::invalid_argument("that is not a user id"))?;
+        let (module, key) = keeper(&request.source, &request.idempotency_key)?;
+        let restated = Restated {
+            occurred_on: NaiveDate::from_str(&request.occurred_on).map_err(|_| Status::invalid_argument("occurred_on is not a date (YYYY-MM-DD)"))?,
+            description: request.description.trim().to_owned(),
+            lines: lines_of(&request.lines)?,
+        };
+        let entry = repository::restate_kept_entry(&self.pool, owner_id, module, key, &restated)
+            .await
+            .map_err(|error| refused_or_internal(&error))?
+            .ok_or_else(|| Status::not_found(format!("{module} has no entry under `{key}`")))?;
+        Ok(Response::new(RestateEntryResponse {
+            entry_id: entry.id.to_string(),
+        }))
+    }
+
+    async fn withdraw_entry(&self, request: Request<WithdrawEntryRequest>) -> Result<Response<WithdrawEntryResponse>, Status> {
+        let request = request.into_inner();
+        let owner_id: Uuid = request.owner_id.parse().map_err(|_| Status::invalid_argument("that is not a user id"))?;
+        let (module, key) = keeper(&request.source, &request.idempotency_key)?;
+        let withdrawn = repository::withdraw_kept_entry(&self.pool, owner_id, module, key)
+            .await
+            .map_err(|error| refused_or_internal(&error))?;
+        Ok(Response::new(WithdrawEntryResponse { withdrawn }))
+    }
+}
+
+/// The module asking about an entry it keeps, and the key it kept it under.
+fn keeper<'a>(source: &'a str, key: &'a str) -> Result<(&'a str, &'a str), Status> {
+    let (source, key) = (source.trim(), key.trim());
+    if source.is_empty() {
+        return Err(Status::invalid_argument(
+            "only the module keeping an entry changes it, and this one gave no name",
+        ));
+    }
+    if key.is_empty() {
+        return Err(Status::invalid_argument("an entry a module keeps is found by the key it was posted under"));
+    }
+    Ok((source, key))
+}
+
+/// The sides a module states, checked the way a person's are.
+fn lines_of(stated: &[ProtoLine]) -> Result<Vec<NewLine>, Status> {
+    if stated.len() < 2 {
+        return Err(Status::invalid_argument(
+            "an entry has at least two sides: money leaves somewhere and arrives somewhere",
+        ));
+    }
+
+    let mut lines = Vec::with_capacity(stated.len());
+    for line in stated {
+        let amount = Decimal::from_str(&line.amount).map_err(|_| Status::invalid_argument(format!("`{}` is not an amount", line.amount)))?;
+        if amount.is_zero() {
+            return Err(Status::invalid_argument("a line of zero records nothing"));
+        }
+
+        let side = match &line.side {
+            Some(ProtoSide::AccountId(id)) => Side::Account(parse_id(id, "account")?),
+            Some(ProtoSide::CategoryId(id)) => Side::Category(parse_id(id, "category")?),
+            Some(ProtoSide::Conversion(_)) => Side::Conversion,
+            Some(ProtoSide::Holding(_)) => Side::Holding,
+            None => {
+                return Err(Status::invalid_argument(
+                    "a line names an account, a category, a conversion or a holding; one that names none is money from nowhere",
+                ));
+            }
+        };
+
+        lines.push(NewLine {
+            side,
+            amount,
+            currency: currency_code(&line.currency)?,
+            note: line.note.trim().to_owned(),
+        });
+    }
+    Ok(lines)
 }
 
 /// The counterparty a module names, as the repository finds or creates it.
@@ -360,11 +416,7 @@ fn parse_id(raw: &str, what: &str) -> Result<Uuid, Status> {
 
 /// A currency code, normalised the same way the REST surface does it.
 fn currency_code(raw: &str) -> Result<String, Status> {
-    let trimmed = raw.trim();
-    if trimmed.len() != 3 || !trimmed.chars().all(|c| c.is_ascii_alphabetic()) {
-        return Err(Status::invalid_argument(format!("`{raw}` is not a currency code")));
-    }
-    Ok(trimmed.to_uppercase())
+    crate::currency::code(raw).ok_or_else(|| Status::invalid_argument(format!("`{raw}` is not a currency code")))
 }
 
 /// Tells a module what it got wrong, and hides what it did not.
@@ -375,6 +427,9 @@ fn currency_code(raw: &str) -> Result<String, Status> {
 /// recognised by its SQLSTATE, so one added to the schema later is refused
 /// here without being listed.
 fn refused_or_internal(error: &anyhow::Error) -> Status {
+    if let Some(not_kept) = error.downcast_ref::<NotKeptBy>() {
+        return Status::failed_precondition(not_kept.to_string());
+    }
     let refused = error
         .chain()
         .filter_map(|cause| cause.downcast_ref::<sqlx::Error>())

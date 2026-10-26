@@ -268,7 +268,8 @@
   },
   "errors": {
     "entry": {
-      "possible_duplicate": "The same entry was recorded {{seconds}} s ago."
+      "possible_duplicate": "The same entry was recorded {{seconds}} s ago.",
+      "kept": "This entry is kept by {{module}}: its day, description and money change there, and it is deleted there."
     },
     "line": {
       "empty": "There is nothing here to record.",

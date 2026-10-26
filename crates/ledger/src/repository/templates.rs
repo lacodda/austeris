@@ -101,6 +101,10 @@ pub enum NoTemplate {
     /// The entry is not one payment.
     #[error("{0}; a template is one payment from one account on one category")]
     NotOnePayment(#[from] NotOne),
+    /// A module keeps the entry: a trade's money, which only that module
+    /// records again.
+    #[error("this entry is kept by {0}, which records another")]
+    Kept(String),
 }
 
 /// Makes a button out of an entry, as the last of the person's buttons.
@@ -117,6 +121,9 @@ pub enum NoTemplate {
 /// already has a template by that name.
 pub async fn template_from_entry(pool: &PgPool, owner_id: Uuid, entry_id: Uuid, name: &str, ask_amount: bool) -> Result<Template> {
     let entry = super::entry(pool, owner_id, entry_id).await?.ok_or(NoTemplate::NoEntry)?;
+    if entry.kept {
+        return Err(NoTemplate::Kept(entry.source.unwrap_or_default()).into());
+    }
     let fee_category = super::category_for(pool, owner_id, Purpose::ExchangeFees).await?.map(|category| category.id);
     let paid = paid::of(&entry, fee_category).map_err(NoTemplate::from)?;
     let from = TemplateFrom {

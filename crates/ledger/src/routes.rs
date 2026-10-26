@@ -21,7 +21,7 @@ use crate::model::{
     Flowed, Group, GroupBy, Line, LineSide, Place, Purpose, RateInForce, Revision, RevisionAction, Tag, Template, Trash, TrashedAttachment, TrashedEntry, Who,
     WhoKind,
 };
-use crate::repository::{CounterpartyChoice, EntryFilter, NewEntry, NewLine, NewPlace, PossibleDuplicate, Side};
+use crate::repository::{CounterpartyChoice, EntryFilter, KeptEntry, NewEntry, NewLine, NewPlace, PossibleDuplicate, Side};
 use crate::{MIGRATOR, attachment, balance, country, parse, repository};
 
 mod attachments;
@@ -356,6 +356,7 @@ async fn create_entry(State(pool): State<PgPool>, caller: Caller, Json(new): Jso
             // are recording, and two coffees on one day are two entries.
             idempotency_key: None,
             source: None,
+            kept: false,
             pending: new.pending,
             counterparty: new.counterparty_id.map(CounterpartyChoice::Existing),
             place,
@@ -646,10 +647,14 @@ async fn read_entry(State(pool): State<PgPool>, caller: Caller, Path(id): Path<U
     responses(
         (status = 204, description = "In the trash"),
         (status = 404, description = "No such entry", body = austeris_common::error::ErrorBody),
+        (status = 409, description = "A module keeps the entry - a trade's money - and it is deleted there", body = austeris_common::error::ErrorBody),
     ),
 )]
 async fn delete_entry(State(pool): State<PgPool>, caller: Caller, Path(id): Path<Uuid>) -> AppResult<StatusCode> {
-    if repository::delete_entry(&pool, caller.id(), &caller.into(), id).await? {
+    let deleted = repository::delete_entry(&pool, caller.id(), &caller.into(), id)
+        .await
+        .map_err(|error| kept_by_a_module(&error).unwrap_or_else(|| AppError::internal(error)))?;
+    if deleted {
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(AppError::not_found(anyhow::anyhow!("no such entry")))
@@ -852,13 +857,11 @@ fn today() -> NaiveDate {
 /// Three letters, upper-cased, so `usd` and `USD` are one currency rather than
 /// two that never balance against each other.
 fn currency_code(raw: &str) -> AppResult<String> {
-    let trimmed = raw.trim();
-    if trimmed.len() != 3 || !trimmed.chars().all(|c| c.is_ascii_alphabetic()) {
-        return Err(AppError::bad_request(anyhow::anyhow!(
-            "`{raw}` is not a currency code; three letters, as in USD or PYG"
-        )));
-    }
-    Ok(trimmed.to_uppercase())
+    crate::currency::code(raw).ok_or_else(|| {
+        AppError::bad_request(anyhow::anyhow!(
+            "`{raw}` is not a currency code; three letters, as in USD or PYG, or an exchange's ticker of up to five, as in USDT"
+        ))
+    })
 }
 
 /// A unique-violation is the caller's conflict; anything else is a fault.
@@ -893,6 +896,9 @@ fn refused_or_missing(error: anyhow::Error) -> AppError {
             serde_json::json!({ "entry_id": twin.entry_id, "seconds": twin.seconds }),
         );
     }
+    if let Some(kept) = kept_by_a_module(&error) {
+        return kept;
+    }
     let refused = error
         .chain()
         .filter_map(|cause| cause.downcast_ref::<sqlx::Error>())
@@ -913,6 +919,33 @@ fn refused_or_missing(error: anyhow::Error) -> AppError {
         AppError::internal(error)
     }
 }
+
+/// The answer to changing an entry a module keeps, when that is what was
+/// refused: the repository says which module, and the database - for a path
+/// that did not ask first - says it in its error's detail.
+pub(crate) fn kept_by_a_module(error: &anyhow::Error) -> Option<AppError> {
+    let module = error.downcast_ref::<KeptEntry>().map(|kept| kept.module.clone()).or_else(|| {
+        error
+            .chain()
+            .filter_map(|cause| cause.downcast_ref::<sqlx::Error>())
+            .filter_map(|error| error.as_database_error())
+            .filter(|db| db.code().as_deref() == Some(KEPT_BY_A_MODULE))
+            .find_map(|db| {
+                db.try_downcast_ref::<sqlx::postgres::PgDatabaseError>()
+                    .and_then(|pg| pg.detail().map(ToOwned::to_owned))
+            })
+    })?;
+    Some(
+        AppError::new(
+            StatusCode::CONFLICT,
+            anyhow::anyhow!("this entry is kept by {module}: its day, description and money change there, and it is deleted there"),
+        )
+        .with_code(Code::EntryKept, serde_json::json!({ "module": module })),
+    )
+}
+
+/// The code the ledger's schema refuses a change to a kept entry with.
+const KEPT_BY_A_MODULE: &str = "AUK01";
 
 /// Whether an error is PostgreSQL refusing a reference to a row that is not
 /// there - or, the keys naming the owner, that is someone else's.
@@ -1083,15 +1116,18 @@ mod tests {
     }
 
     #[test]
-    fn a_currency_is_three_letters_in_one_case() {
+    fn a_currency_is_three_to_five_letters_in_one_case() {
         assert_eq!(currency_code("usd").expect("a code"), "USD");
         assert_eq!(currency_code("  PYG ").expect("a code"), "PYG");
+        // An exchange's cash: what a trade there is paid in.
+        assert_eq!(currency_code("usdt").expect("a code"), "USDT");
+        assert_eq!(currency_code("FDUSD").expect("a code"), "FDUSD");
         // Two currencies that differ only in case would never balance against
         // each other, and the entry would be refused for arithmetic that is
         // actually correct.
         assert_eq!(currency_code("usd").expect("a code"), currency_code("USD").expect("a code"));
 
-        for bad in ["", "US", "USDD", "US1", "долл"] {
+        for bad in ["", "US", "USDTTT", "US1", "US-T", "долл"] {
             assert!(currency_code(bad).is_err(), "`{bad}` was accepted as a currency");
         }
     }

@@ -56,6 +56,18 @@ const ISO_4217: &str = "AED AFN ALL AMD ANG AOA ARS AUD AWG AZN BAM BBD BDT BGN 
      SDG SEK SGD SHP SLE SLL SOS SRD SSP STN SVC SYP SZL THB TJS TMT TND TOP TRY TTD TWD TZS UAH UGX USD USN \
      UYI UYU UYW UZS VED VES VND VUV WST XAF XCD XCG XOF XPF YER ZAR ZMW ZWG ZWL";
 
+/// A currency's code as it is kept, or `None` when `raw` is not one.
+///
+/// Three letters, as ISO 4217 has them, or up to five: an exchange's ticker
+/// for money that is not a state's - `USDT`, `USDC`, `FDUSD` - which is the
+/// cash a trade on that exchange is paid in. Upper case, whatever it was typed
+/// in.
+#[must_use]
+pub fn code(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    ((3..=5).contains(&trimmed.len()) && trimmed.chars().all(|c| c.is_ascii_alphabetic())).then(|| trimmed.to_ascii_uppercase())
+}
+
 /// How many decimal places an amount of `code` has, when that is known.
 ///
 /// `None` for a code outside ISO 4217: an amount in it is kept to every digit

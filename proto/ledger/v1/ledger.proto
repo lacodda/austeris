@@ -29,6 +29,14 @@ service LedgerService {
   // The rate in force on a day: the newest one not after it, for the pair as
   // recorded, inverted, or through a third currency.
   rpc RateAt(RateAtRequest) returns (RateAtResponse);
+  // Says again what an entry the calling module keeps is: its day, its
+  // description and its lines, found by the key it was posted under. A trade
+  // edited is its money restated - the same entry, with the change in its
+  // history.
+  rpc RestateEntry(RestateEntryRequest) returns (RestateEntryResponse);
+  // Takes back an entry the calling module keeps: what it recorded did not
+  // happen after all. Taking back one already taken back is not an error.
+  rpc WithdrawEntry(WithdrawEntryRequest) returns (WithdrawEntryResponse);
 }
 
 message PostEntryRequest {
@@ -66,6 +74,12 @@ message PostEntryRequest {
   // in the same transaction, so the entry never exists without them. Each is
   // taken for what its bytes are, as a file a person attaches is.
   repeated File files = 11;
+  // Kept by the module posting it: what it says about the money - its day,
+  // description and lines - changes only through `RestateEntry`, and it goes
+  // only through `WithdrawEntry`; a person is told to change it where it came
+  // from. For a movement the module's own record decides, as a trade decides
+  // its money. An entry with a holding line has to be kept.
+  bool kept = 12;
 }
 
 // A counterparty as a document names it.
@@ -96,6 +110,40 @@ message File {
   string name = 1;
   // Its bytes.
   bytes content = 2;
+}
+
+message RestateEntryRequest {
+  string owner_id = 1;
+  // The key the entry was posted under.
+  string idempotency_key = 2;
+  // The module asking: the one that posted the entry and keeps it.
+  string source = 3;
+  // The day the money moved, `YYYY-MM-DD`.
+  string occurred_on = 4;
+  // What a person would call it.
+  string description = 5;
+  // The sides of the movement, replacing the ones it had; at least two. What
+  // a person added - tags, who it was with, where, its files - stays.
+  repeated Line lines = 6;
+}
+
+message RestateEntryResponse {
+  // The entry's id: the one it always had.
+  string entry_id = 1;
+}
+
+message WithdrawEntryRequest {
+  string owner_id = 1;
+  // The key the entry was posted under.
+  string idempotency_key = 2;
+  // The module asking: the one that posted the entry and keeps it.
+  string source = 3;
+}
+
+message WithdrawEntryResponse {
+  // Whether this call took it back; false when there was none under the key,
+  // because it had been taken back already.
+  bool withdrawn = 1;
 }
 
 message ListAccountsRequest {
@@ -177,11 +225,13 @@ message PostEntryResponse {
 
 message Line {
   // Exactly one of these. A line is a movement of an account's balance, an
-  // attribution to a category, or money changing currency inside the entry.
+  // attribution to a category, money changing currency inside the entry, or
+  // money becoming something the posting module holds.
   oneof side {
     string account_id = 1;
     string category_id = 2;
     Conversion conversion = 6;
+    Holding holding = 7;
   }
   // The signed amount, as a decimal string - never a double: protobuf has no
   // decimal type, and money that travels as a float is not the money anyone
@@ -194,11 +244,18 @@ message Line {
 }
 
 // Money changing currency. An entry's conversion lines take one currency in and
-// give another out, so each currency still sums to zero on its own: a trade of
-// 100 USD for 0.0016 BTC is -100 USD on the dollar account, +100 USD and
-// -0.0016 BTC on the conversion, and +0.0016 BTC on the wallet. It carries
-// nothing - which side a line is on is the whole of what it says.
+// give another out, so each currency still sums to zero on its own: an exchange
+// of 100 USD for 590 000 PYG is -100 USD on the dollar account, +100 USD and
+// -590000 PYG on the conversion, and +590000 PYG on the guarani account. It
+// carries nothing - which side a line is on is the whole of what it says.
 message Conversion {}
+
+// Money that became something the posting module holds - a coin, a share - or
+// came back from one. Buying 0.01 BTC for 601 USDT is -601 USDT on the exchange
+// account and +601 USDT on the holding: the money left the account and was not
+// spent, so no report of spending counts it. What it became is the module's to
+// know and to value. Only an entry the module keeps can have one.
+message Holding {}
 
 message GetBalancesRequest {
   string owner_id = 1;

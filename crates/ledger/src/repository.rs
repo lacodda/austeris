@@ -33,7 +33,7 @@ pub use trash::*;
 /// in a query of their own.
 macro_rules! header_select {
     () => {
-        "SELECT e.id, e.occurred_on, e.status, e.cleared_on, e.description, e.source,
+        "SELECT e.id, e.occurred_on, e.status, e.cleared_on, e.description, e.source, e.kept,
                 cp.id AS counterparty_id, cp.name AS counterparty_name,
                 p.id AS place_id, p.country::text AS country, p.city,
                 ARRAY(SELECT t.name FROM entry_tags et JOIN tags t ON t.id = et.tag_id
@@ -345,6 +345,8 @@ pub enum Side {
     Category(Uuid),
     /// Money changing currency inside the entry.
     Conversion,
+    /// Money that became something a module holds, or came back from one.
+    Holding,
 }
 
 impl Side {
@@ -355,6 +357,19 @@ impl Side {
             Self::Account(_) => LineSide::Account,
             Self::Category(_) => LineSide::Category,
             Self::Conversion => LineSide::Conversion,
+            Self::Holding => LineSide::Holding,
+        }
+    }
+
+    /// The side a stored line names, when its row says what it should.
+    #[must_use]
+    pub fn of(side: LineSide, account: Option<Uuid>, category: Option<Uuid>) -> Option<Self> {
+        match (side, account, category) {
+            (LineSide::Account, Some(account), _) => Some(Self::Account(account)),
+            (LineSide::Category, _, Some(category)) => Some(Self::Category(category)),
+            (LineSide::Conversion, ..) => Some(Self::Conversion),
+            (LineSide::Holding, ..) => Some(Self::Holding),
+            _ => None,
         }
     }
 
@@ -401,6 +416,8 @@ pub struct NewEntry {
     pub idempotency_key: Option<String>,
     /// Which module posted it.
     pub source: Option<String>,
+    /// Kept by that module: changed and taken back only by it, under its key.
+    pub kept: bool,
     /// Held rather than posted: a card payment the bank has not posted yet.
     /// Otherwise it is posted the day it happened.
     pub pending: bool,
@@ -553,8 +570,8 @@ pub async fn post_entry(pool: &PgPool, owner_id: Uuid, by: &Actor, new: &NewEntr
     };
 
     let entry_id: Uuid = sqlx::query_scalar(
-        "INSERT INTO entries (owner_id, occurred_on, description, idempotency_key, source, counterparty_id, place_id, status, cleared_on)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id",
+        "INSERT INTO entries (owner_id, occurred_on, description, idempotency_key, source, counterparty_id, place_id, status, cleared_on, kept)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id",
     )
     .bind(owner_id)
     .bind(new.occurred_on)
@@ -565,6 +582,7 @@ pub async fn post_entry(pool: &PgPool, owner_id: Uuid, by: &Actor, new: &NewEntr
     .bind(place_id)
     .bind(status)
     .bind(cleared_on)
+    .bind(new.kept)
     .fetch_one(&mut *transaction)
     .await
     .context("creating an entry")?;
@@ -620,15 +638,11 @@ async fn recent_twin(
             .context("reading the lines of the entries a moment ago")?;
 
     for (id, seconds) in candidates {
-        let theirs = movement(rows.iter().filter(|row| row.0 == id).filter_map(|row| {
-            let side = match (row.2, row.3, row.4) {
-                (LineSide::Account, Some(account), _) => Side::Account(account),
-                (LineSide::Category, _, Some(category)) => Side::Category(category),
-                (LineSide::Conversion, ..) => Side::Conversion,
-                _ => return None,
-            };
-            Some((side, row.5, row.6.clone()))
-        }));
+        let theirs = movement(
+            rows.iter()
+                .filter(|row| row.0 == id)
+                .filter_map(|row| Some((Side::of(row.2, row.3, row.4)?, row.5, row.6.clone()))),
+        );
         if theirs == wanted {
             return Ok(Some(PossibleDuplicate { entry_id: id, seconds }));
         }
@@ -647,6 +661,7 @@ fn movement(lines: impl Iterator<Item = (Side, Decimal, String)>) -> Vec<(u8, Op
                 Side::Account(id) => (0, Some(id)),
                 Side::Category(id) => (1, Some(id)),
                 Side::Conversion => (2, None),
+                Side::Holding => (3, None),
             };
             (rank, id, currency, amount.normalize())
         })
@@ -770,6 +785,9 @@ pub async fn change_entry(pool: &PgPool, owner_id: Uuid, by: &Actor, id: Uuid, c
     if exists.is_none() {
         return Ok(None);
     }
+    // Its day and what it is called are the module's when one keeps it, and
+    // the schema refuses anyone else; who it was with, where and its labels
+    // are the person's either way.
 
     if let Some(occurred_on) = changes.occurred_on {
         // A posted entry moves with its posting day when that was the same
@@ -965,6 +983,7 @@ struct Header {
     cleared_on: Option<NaiveDate>,
     description: String,
     source: Option<String>,
+    kept: bool,
     counterparty_id: Option<Uuid>,
     counterparty_name: Option<String>,
     place_id: Option<Uuid>,
@@ -984,6 +1003,7 @@ impl Header {
             cleared_on: self.cleared_on,
             description: self.description,
             source: self.source,
+            kept: self.kept,
             counterparty: self.counterparty_id.zip(self.counterparty_name).map(|(id, name)| CounterpartyRef { id, name }),
             place: self.place_id.zip(self.country).map(|(id, country)| Place { id, country, city: self.city }),
             tags: self.tags,
@@ -1131,6 +1151,8 @@ async fn lines_of(pool: &PgPool, entry_ids: &[Uuid]) -> Result<HashMap<Uuid, Vec
 ///
 /// Returns an error when the delete fails.
 pub async fn delete_entry(pool: &PgPool, owner_id: Uuid, by: &Actor, id: Uuid) -> Result<bool> {
+    // An entry a module keeps is refused by the schema, which names the
+    // module.
     let mut transaction = by.begin(pool).await?;
     let deleted = sqlx::query("DELETE FROM entries WHERE owner_id = $1 AND id = $2")
         .bind(owner_id)
@@ -1140,6 +1162,126 @@ pub async fn delete_entry(pool: &PgPool, owner_id: Uuid, by: &Actor, id: Uuid) -
         .context("deleting an entry")?;
     transaction.commit().await.context("deleting an entry")?;
     Ok(deleted.rows_affected() > 0)
+}
+
+/// Refused: the entry is kept by a module, and only that module changes it.
+#[derive(Debug, thiserror::Error)]
+#[error("this entry is kept by {module}; change it there")]
+pub struct KeptEntry {
+    /// The module keeping it.
+    pub module: String,
+}
+
+/// Refused: the entry under this key was not kept by the module asking.
+#[derive(Debug, thiserror::Error)]
+#[error("the entry posted under `{key}` is not kept by {module}, so {module} cannot change it")]
+pub struct NotKeptBy {
+    /// The module that asked.
+    pub module: String,
+    /// The key it asked by.
+    pub key: String,
+}
+
+/// What a module says its kept entry is now: everything a trade decides.
+#[derive(Debug, Clone)]
+pub struct Restated {
+    /// The day the money moved.
+    pub occurred_on: NaiveDate,
+    /// What a person would call it.
+    pub description: String,
+    /// The sides of the movement, replacing the ones it had.
+    pub lines: Vec<NewLine>,
+}
+
+/// The kept entry a module posted under `key`, locked for the rest of the
+/// transaction; `None` when there is none.
+async fn kept_for_update(transaction: &mut Transaction<'_, Postgres>, owner_id: Uuid, module: &str, key: &str) -> Result<Option<Uuid>> {
+    let found: Option<(Uuid, bool, Option<String>)> =
+        sqlx::query_as("SELECT id, kept, source FROM entries WHERE owner_id = $1 AND idempotency_key = $2 FOR UPDATE")
+            .bind(owner_id)
+            .bind(key)
+            .fetch_optional(&mut **transaction)
+            .await
+            .context("finding the entry by its key")?;
+    match found {
+        None => Ok(None),
+        Some((id, true, Some(source))) if source == module => Ok(Some(id)),
+        Some(_) => Err(NotKeptBy {
+            module: module.to_owned(),
+            key: key.to_owned(),
+        }
+        .into()),
+    }
+}
+
+/// Restates an entry a module keeps: its day, its description and its lines,
+/// as the module now says they are. What a person added to it - tags, who it
+/// was with, where, its files - stays.
+///
+/// Returns `None` when the module has no entry under that key.
+///
+/// # Errors
+///
+/// Returns [`NotKeptBy`] when the entry under the key is not this module's to
+/// change, or an error when the new lines do not balance or name something
+/// that is not this person's.
+pub async fn restate_kept_entry(pool: &PgPool, owner_id: Uuid, module: &str, key: &str, restated: &Restated) -> Result<Option<Entry>> {
+    let mut transaction = Actor::module(Some(module)).begin(pool).await?;
+    let Some(id) = kept_for_update(&mut transaction, owner_id, module, key).await? else {
+        return Ok(None);
+    };
+    ensure_sides_belong_to(&mut transaction, owner_id, &restated.lines).await?;
+
+    // Posted the day it happened, as a module's entry always is: it moves
+    // with its day.
+    sqlx::query(
+        "UPDATE entries SET cleared_on = CASE WHEN cleared_on = occurred_on THEN $3 ELSE cleared_on END,
+                            occurred_on = $3, description = $4, updated_at = now()
+          WHERE owner_id = $1 AND id = $2",
+    )
+    .bind(owner_id)
+    .bind(id)
+    .bind(restated.occurred_on)
+    .bind(&restated.description)
+    .execute(&mut *transaction)
+    .await
+    .context("restating the entry")?;
+    sqlx::query("DELETE FROM entry_lines WHERE entry_id = $1")
+        .bind(id)
+        .execute(&mut *transaction)
+        .await
+        .context("taking the entry's lines off")?;
+    insert_lines(&mut transaction, id, &restated.lines).await?;
+
+    transaction.commit().await.context("restating the entry")?;
+    entry(pool, owner_id, id).await
+}
+
+/// Takes back an entry a module keeps: the movement it recorded did not
+/// happen after all - the trade was deleted.
+///
+/// Deleted as an entry a person deletes is, so its history remembers it and
+/// who took it back; the trash leaves it out, because only the module could
+/// bring it back. `false` when the module has no entry under that key - taken
+/// back already, which a retry is.
+///
+/// # Errors
+///
+/// Returns [`NotKeptBy`] when the entry under the key is not this module's,
+/// or an error when the delete fails.
+pub async fn withdraw_kept_entry(pool: &PgPool, owner_id: Uuid, module: &str, key: &str) -> Result<bool> {
+    let mut transaction = Actor::module(Some(module)).begin(pool).await?;
+    let Some(id) = kept_for_update(&mut transaction, owner_id, module, key).await? else {
+        return Ok(false);
+    };
+    sqlx::query("DELETE FROM entries WHERE owner_id = $1 AND id = $2")
+        .bind(owner_id)
+        .bind(id)
+        .execute(&mut *transaction)
+        .await
+        .context("taking the entry back")?;
+    transaction.commit().await.context("taking the entry back")?;
+    Ok(true)
 }
 
 /// What every account held at the end of a day.

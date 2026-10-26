@@ -117,6 +117,7 @@ mod tests {
             cleared_on: None,
             description: String::new(),
             source: None,
+            kept: false,
             counterparty: None,
             place: None,
             tags: Vec::new(),

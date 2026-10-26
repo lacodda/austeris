@@ -482,6 +482,20 @@ impl LedgerService for Heard {
     ) -> Result<tonic::Response<austeris_proto::ledger::v1::RateAtResponse>, tonic::Status> {
         Err(tonic::Status::unimplemented("not part of this test"))
     }
+
+    async fn restate_entry(
+        &self,
+        _: tonic::Request<austeris_proto::ledger::v1::RestateEntryRequest>,
+    ) -> Result<tonic::Response<austeris_proto::ledger::v1::RestateEntryResponse>, tonic::Status> {
+        Err(tonic::Status::unimplemented("not part of this test"))
+    }
+
+    async fn withdraw_entry(
+        &self,
+        _: tonic::Request<austeris_proto::ledger::v1::WithdrawEntryRequest>,
+    ) -> Result<tonic::Response<austeris_proto::ledger::v1::WithdrawEntryResponse>, tonic::Status> {
+        Err(tonic::Status::unimplemented("not part of this test"))
+    }
 }
 
 /// Starts [`Heard`] on a local port and connects to it the way the market does.

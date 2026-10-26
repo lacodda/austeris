@@ -62,7 +62,7 @@ pub async fn list_templates(State(pool): State<PgPool>, caller: Caller) -> AppRe
         (status = 201, description = "The template, as the last button", body = Template),
         (status = 400, description = "It has no name, or the entry is not one payment", body = austeris_common::error::ErrorBody),
         (status = 404, description = "No such entry", body = austeris_common::error::ErrorBody),
-        (status = 409, description = "There is already a template by that name", body = austeris_common::error::ErrorBody),
+        (status = 409, description = "There is already a template by that name, or a module keeps the entry", body = austeris_common::error::ErrorBody),
     ),
 )]
 pub async fn create_template(State(pool): State<PgPool>, caller: Caller, Json(new): Json<NewTemplate>) -> AppResult<(StatusCode, Json<Template>)> {
@@ -76,6 +76,7 @@ pub async fn create_template(State(pool): State<PgPool>, caller: Caller, Json(ne
         .map_err(|error| match error.downcast_ref::<NoTemplate>() {
             Some(NoTemplate::NoEntry) => AppError::not_found(anyhow::anyhow!("no such entry")),
             Some(not_one @ NoTemplate::NotOnePayment(_)) => AppError::bad_request(anyhow::anyhow!("{not_one}")),
+            Some(NoTemplate::Kept(module)) => refused_or_missing(repository::KeptEntry { module: module.clone() }.into()),
             None => name_taken_or(error),
         })?;
     Ok((StatusCode::CREATED, Json(template)))
@@ -290,7 +291,7 @@ pub struct Repeat {
         (status = 201, description = "The new entry, and the conversion when it was converted again", body = Recorded),
         (status = 400, description = "The entry is an exchange, or no rate is known for its currency", body = austeris_common::error::ErrorBody),
         (status = 404, description = "No such entry", body = austeris_common::error::ErrorBody),
-        (status = 409, description = "The same entry was recorded a moment ago", body = austeris_common::error::ErrorBody),
+        (status = 409, description = "The same entry was recorded a moment ago, or a module keeps the entry and records another there", body = austeris_common::error::ErrorBody),
     ),
 )]
 pub async fn repeat(State(pool): State<PgPool>, caller: Caller, Path(id): Path<Uuid>, Json(body): Json<Repeat>) -> AppResult<(StatusCode, Json<Recorded>)> {
@@ -298,6 +299,16 @@ pub async fn repeat(State(pool): State<PgPool>, caller: Caller, Path(id): Path<U
     let entry = repository::entry(&pool, owner_id, id)
         .await?
         .ok_or_else(|| AppError::not_found(anyhow::anyhow!("no such entry")))?;
+    // A trade repeated here would be money spent on a coin no trade knows
+    // about; the module that keeps it records another.
+    if entry.kept {
+        return Err(refused_or_missing(
+            repository::KeptEntry {
+                module: entry.source.unwrap_or_default(),
+            }
+            .into(),
+        ));
+    }
     let occurred_on = body.occurred_on.unwrap_or_else(today);
     let pending = repository::was_held(entry.occurred_on, entry.cleared_on);
     let counterparty = entry.counterparty.as_ref().map(|known| CounterpartyChoice::Existing(known.id));
@@ -362,6 +373,7 @@ pub async fn repeat(State(pool): State<PgPool>, caller: Caller, Path(id): Path<U
             description: entry.description.clone(),
             idempotency_key: None,
             source: None,
+            kept: false,
             pending,
             counterparty,
             place,

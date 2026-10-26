@@ -183,6 +183,10 @@ codes! {
     /// An entry the same as this one was recorded a moment ago - a second
     /// press of the same button, most likely. Params: `entry_id`, `seconds`.
     PossibleDuplicate = "entry.possible_duplicate",
+    /// The entry is kept by a module - a trade's money - and its day,
+    /// description and money are changed there, and it is deleted there.
+    /// Params: `module`.
+    EntryKept = "entry.kept",
 
     // A typed line that cannot be read. These are what a screen shows while
     // the line is still being typed, so they are the ones most worth saying
