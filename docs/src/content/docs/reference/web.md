@@ -162,6 +162,38 @@ A period, an account, a category, a tag, a counterparty, and whether the bank
 has posted it. The filter is in the address, so a filtered list can be
 bookmarked, reloaded or sent to the next tab.
 
+## Portfolio
+
+What you hold at brokers and on exchanges, and what it is worth
+([Portfolio](/austeris/reference/portfolio/)), shown while the installation runs
+the module. Four parts:
+
+- **Holdings** - each brokerage and crypto wallet account: its money first,
+  then every position, with its price and value in one currency, and what the
+  account and everything add up to. The currency is remembered in this browser;
+  until you choose, it is the one most of your accounts are in. What has no
+  price is named under the total and left out of it; a price older than it
+  stays current for is marked `*`, and says when it is from.
+- **Trades** - every trade, the latest first, with what it moved the account's
+  money by. **Record a trade** opens the form: buy, sell or transfer, the
+  account, the instrument, how many, the price per unit in the account's
+  currency, the fee and when - and, before it is saved, what the money on the
+  account will move by. A transfer's fee is in units of what was sent. Opened, a
+  trade is changed or deleted in the same form, with its history under it; its
+  money moves with it.
+- **Instruments** - what can be priced, with its latest price and how old it is.
+  **Price it** records a price by hand; **Add an instrument** adds a coin, a
+  share, a fund, or something priced by hand only.
+- **Snapshots** - **Take a snapshot** keeps what the portfolio holds and is worth
+  today, or held on a day past. Opened, a snapshot is set beside now - or
+  beside another snapshot - line by line: how many then and now, what they were
+  worth, and the change.
+
+A trade's money is on the Entries screen like any entry, with a **Holdings**
+line beside the account's. It says it is kept by the portfolio: it is not
+deleted, repeated or moved to another day there, and its tags, counterparty and
+place are still yours.
+
 ## Import
 
 Receipts read into the books ([Imports](/austeris/reference/imports/)), shown

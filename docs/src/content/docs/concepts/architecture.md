@@ -10,7 +10,8 @@ behind a single gateway.
 
 A service owns a module of the product: `identity` owns people and sessions,
 `market` owns instruments and their prices, `ledger` owns accounts, categories
-and entries, `imports` owns the documents read into them.
+and entries, `imports` owns the documents read into them, `portfolio` owns
+trades and snapshots of what they add up to.
 Each one:
 
 - owns **its own schema** in the shared database, and never reads another
@@ -28,9 +29,14 @@ the ledger after each hourly refresh, through `ledger.v1.RecordRates`, rather
 than fetched by the ledger when it needs one (ADR 0009). And it is why a
 receipt is read by `imports`, which posts the entry it becomes through
 `ledger.v1.PostEntry` with the receipt's file in the same transaction (ADR
-0014): the ledger learns no tax authority's format.
+0014): the ledger learns no tax authority's format. A trade's money is posted
+by `portfolio` the same way, as an entry it **keeps**: only it restates or takes
+it back, through `ledger.v1.RestateEntry` and `WithdrawEntry`, so the trade and
+its money never tell two stories (ADR 0015). Its positions are valued at
+`market.v1.GetPrices`, and its accounts' money at the ledger's rates.
 
-A module can be switched off - `AUSTERIS_IMPORTS=off` - and is then not started
+A module can be switched off - `AUSTERIS_IMPORTS=off`, `AUSTERIS_PORTFOLIO=off` -
+and is then not started
 at all; the gateway answers its paths with `module.switched_off`, and
 `/api/v1/modules` tells a screen not to offer it.
 

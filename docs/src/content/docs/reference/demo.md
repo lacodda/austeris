@@ -36,7 +36,9 @@ Either way it prints how to sign in:
 ## What is in it
 
 - **Accounts:** `Everyday` (bank, EUR), `Cash` (EUR), `Savings` (deposit, EUR)
-  and `Travel card` (card, USD).
+  and `Travel card` (card, USD) - and, to invest from, `Broker` (brokerage,
+  EUR), `Coin exchange` (crypto wallet, kept in the stablecoin USDT) and
+  `Cold wallet` (crypto wallet).
 - **Categories:** `Salary` and `Side work` coming in; `Home` (`Rent`,
   `Utilities`), `Food` (`Groceries`, `Eating out`), `Transport`, `Health`,
   `Fun` and `Trips` going out.
@@ -56,9 +58,15 @@ Either way it prints how to sign in:
   time is deleted - so the files, the history and the trash are not empty. Made
   once: a run that finds any of it, or anything a person deleted or changed,
   leaves it be.
-- **Two instruments nobody trades**, `DMC` and `DWLD`, with a price a day. Their
-  names are invented on purpose: a demo price can never be mistaken for a real
-  one.
+- **Two instruments nobody trades**, `DMC` and `DWLD`, with a price a day - and
+  the coin's price this hour, so it is current when the demo has just started.
+  Their names are invented on purpose: a demo price can never be mistaken for a
+  real one.
+- **Fifteen trades**, recorded through the portfolio itself so their money is
+  booked as any trade's is: the index fund bought every fortnight on the
+  broker, the coin bought monthly on the exchange, some of it sold and some
+  sent on to the cold wallet. A USDT rate for every day values the exchange's
+  money, and a snapshot six weeks in gives *now* something to be compared with.
 
 Everything it writes is marked with the source `demo`.
 
@@ -69,6 +77,7 @@ Everything it writes is marked with the source `demo`.
   everyone on an installation, and made-up prices must never reach real books.
   Start from an empty database to see it.
 - **Duplicate anything.** Each day's entries carry a key made from the day, and
-  accounts and categories are found by name before they are created. Running it
+  accounts and categories are found by name before they are created; a trade
+  already recorded at its moment is not recorded again. Running it
   again - or restarting with the flag still set - adds the days since the last
   run and nothing else.

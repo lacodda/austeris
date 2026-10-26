@@ -61,6 +61,25 @@ The database holds one more rule here: an entry's conversion lines must take one
 currency in and give another out. A conversion that nets to zero in a currency,
 or only receives, is money disappearing into a side no report looks at.
 
+## Money that becomes a coin
+
+A purchase of shares or of a coin is money leaving an account and not being
+spent: it became something the person holds. The ledger does not know what a
+coin is - that is the portfolio's business - so the money lands on a fourth
+kind of side, a **holding**. Buying 0.01 BTC at 60 000 USDT on an exchange, with
+a fee of 1:
+
+| Line | USDT |
+| --- | --- |
+| the exchange account | −601 |
+| holding | +601 |
+
+The account's balance is its cash, which is what the exchange shows; the coin
+is a position in the portfolio, valued at the market's price; no report of what
+was spent counts the 601. A sale is the same the other way round. Only the
+module that keeps the entry can post a holding, so a person cannot type money
+into a coin no trade knows about ([ADR 0015](https://github.com/lacodda/austeris/blob/main/docs/adr/0015-the-portfolio-and-the-money-it-moves.md)).
+
 ## Where the rule lives
 
 In PostgreSQL, as a deferred constraint trigger — not only in the Rust that

@@ -35,6 +35,11 @@ the money it could not convert instead of quietly leaving it out.
   machine.
 - **Several currencies, honestly.** A transfer, a split receipt and an exchange
   are all the same shape underneath; nothing is converted behind your back.
+- **Trades whose money is in the books.** A buy on an exchange is a position
+  in the portfolio and its cost in the ledger - one entry the trade keeps in
+  step when it is changed or deleted. USDT on the exchange is money, valued at
+  its rate; the coins are valued at the market's price, and a snapshot of any
+  day is set beside now.
 - **Your whole picture.** Accounts and entries, assets and liabilities, loans
   and deposits, and a portfolio of crypto and securities.
 - **A web interface inside the binary.** Accounts and their total, entries split
@@ -116,8 +121,9 @@ Every endpoint, with its shape: **[the ledger reference](https://lacodda.github.
 ## Status
 
 v0.13.0, early, with the books open: accounts, entries, holds and exchanges
-in several currencies, receipts read from their files, each entry's history
-and a trash - from the command line, the API or a phone.
+in several currencies, receipts read from their files, a portfolio of trades
+valued and snapshotted, each entry's history and a trash - from the command
+line, the API or a phone.
 Each version: [CHANGELOG](https://github.com/lacodda/austeris/blob/main/CHANGELOG.md).
 
 ## Documentation

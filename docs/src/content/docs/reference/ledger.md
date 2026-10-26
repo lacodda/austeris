@@ -36,6 +36,11 @@ The codes so far are a [second press](#a-second-press), everything a
 Where money sits. An account is in **one** currency; a second currency means a
 second account, because an account holding two has no balance anyone can state.
 
+A currency is its code: three letters, as ISO 4217 has them (`PYG`, `USD`), or up
+to five for money that is not a state's - an exchange's stablecoin, `USDT`,
+`USDC`, `FDUSD` - which is the cash a trade there is paid in
+([Portfolio](/austeris/reference/portfolio/)).
+
 ### `GET /api/v1/ledger/accounts`
 
 Every account, open ones first.
@@ -108,7 +113,11 @@ A line on an account is in the account's currency; money in another currency
 reaches it through a **conversion**. An entry's conversion lines take one
 currency in and give another out — how is in
 [Money that changes currency](/austeris/concepts/double-entry/#money-that-changes-currency).
-Every line comes back with its `side`: `account`, `category` or `conversion`.
+Every line comes back with its `side`: `account`, `category`, `conversion` or
+`holding`. A **holding** is money that became something a module holds - a coin,
+a share - or came back from one: a buy on an exchange is the account's line and
+the holding's, and no report of spending counts it. Only a module posts one, on
+an entry it keeps (see below).
 
 The lines must sum to zero in every currency they touch. They are checked here
 and again at the database's commit; an entry that does not balance is refused
@@ -300,6 +309,17 @@ same status and code.
 Newest first. Takes `?from=`, `?to=`, `?account=`, `?category=`, `?tag=` (a
 name, in any case), `?counterparty=`, `?place=`, `?status=` (`pending` or
 `cleared`), `?limit=` (50 by default, 200 at most) and `?offset=`.
+
+### Entries a module keeps
+
+An entry a module posted and **keeps** - a trade's money - says so: `kept` is
+`true` and `source` names the module. What it says about the money - its day,
+its description and its lines - is the module's: the trade is changed or deleted
+in the portfolio, and its entry with it. Changing its day or description here,
+deleting it, repeating it or making a button of it answers `409` with the code
+`entry.kept` and the module in `params`. Its tags, counterparty, place and files
+are yours, as on any entry. The rule is the database's, so it holds for every
+path that writes.
 
 ### `PATCH /api/v1/ledger/entries/{id}`
 

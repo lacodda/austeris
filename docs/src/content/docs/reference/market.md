@@ -95,6 +95,23 @@ last one known — and says `"stale": true`:
 | `fx`, `stock`, `bond`, `fund` | four days: priced on business days, so a weekend with a holiday on either side is still current |
 | `manual` | never: it is as current as whoever priced it says |
 
+### `POST /api/v1/market/instruments/{id}/prices`
+
+A price said by hand - a coin's, when no source with a key is switched on, or a
+flat's:
+
+```json
+{ "price": "61000.5", "currency": "USD", "observed_at": "2026-10-26T14:00:00-03:00" }
+```
+
+`observed_at` defaults to now and cannot be later. It is recorded under the
+source `manual` and is a price like any other: the newest one is the latest,
+whoever said it, until a source says a newer one - and it goes stale on its
+kind's calendar, so a coin priced by hand this morning is stale by tonight. The
+answer is the instrument's latest price in that currency, as
+`GET /api/v1/market/prices` gives it. `400` for a price of nothing or less, a
+currency that is not a code, or a moment that has not happened.
+
 ### `GET /api/v1/market/prices/{id}/history`
 
 Every observation in a window, oldest first. Takes `?currency=`, `?from=` and
@@ -162,6 +179,7 @@ it already told us. History outlives the binding.
 service MarketService {
   rpc GetPrices(GetPricesRequest) returns (GetPricesResponse);
   rpc GetPriceAt(GetPriceAtRequest) returns (GetPriceAtResponse);
+  rpc GetInstruments(GetInstrumentsRequest) returns (GetInstrumentsResponse);
 }
 ```
 
@@ -169,7 +187,9 @@ service MarketService {
 one price usually wants forty. `GetPriceAt` takes Unix seconds and applies the
 same "as of" rule as the REST surface. Each price carries `stale`, measured
 against the instant asked about: last week's price is current for a question
-about last week.
+about last week. `GetInstruments` says what each instrument named is - its
+kind, ticker and name - so a module holding them can name them without
+reading this service's tables.
 
 Prices cross this wire as strings too: protobuf has no decimal type, and a
 price that travels as a double is not the price that was recorded.
