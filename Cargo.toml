@@ -39,14 +39,14 @@ rand = "0.10.3"
 rpassword = "7.5.4"
 # A receipt is an XML document: read-only, as a tree, and with no DTD - so an
 # entity in a file someone dropped in a folder cannot reach outside it.
-roxmltree = "0.21.1"
+roxmltree = "0.21.2"
 # TLS for what leaves the machine: a price source is an HTTPS endpoint on the
 # internet, and `austeris add` may talk to an installation behind a TLS
 # terminator. `rustls-no-provider` rather than `rustls`, which would bring
 # aws-lc-rs and a C toolchain into the arm64 image build; the provider is ring,
 # already here for sqlx, and austeris_common::http installs it.
 reqwest = { version = "0.13.5", default-features = false, features = ["stream", "query", "rustls-no-provider"] }
-rustls = { version = "0.23.43", default-features = false, features = ["ring", "std", "tls12"] }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1.0.229", features = ["derive"] }
 # `arbitrary_precision` is what actually keeps a price whole. Without it
 # serde_json parses every JSON number into an f64 first, and 61234.567890123456
@@ -63,7 +63,7 @@ rust_decimal = { version = "1.43.0", features = ["db-postgres", "serde-with-str"
 sha2 = "0.11.1"
 sqlx = { version = "0.9", features = ["runtime-tokio", "tls-rustls", "postgres", "migrate", "chrono", "uuid", "rust_decimal", "json"] }
 thiserror = "2.0.21"
-tokio = { version = "1.53.3", features = ["full"] }
+tokio = { version = "1.54.1", features = ["full"] }
 # gRPC between services (ADR 0003). tonic 0.14 keeps the prost codec in its own
 # crate, so the pair moves together.
 tonic = "0.14.6"
@@ -75,8 +75,8 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 # The REST surface describes itself: each service annotates its handlers, the
 # gateway merges the pieces into one document and serves it (ADR 0006).
 utoipa = { version = "6.0.0", features = ["axum_extras", "chrono", "uuid", "decimal"] }
-utoipa-swagger-ui = { version = "10.0.1", features = ["axum", "vendored"] }
-uuid = { version = "1.28.0", features = ["v4", "serde"] }
+utoipa-swagger-ui = { version = "10.0.2", features = ["axum", "vendored"] }
+uuid = { version = "1.29.0", features = ["v4", "serde"] }
 
 # Already in the tree through reqwest and tonic; used by the brand-asset gate
 # to inflate the PNGs inside `assets/icon.ico` and look at the actual pixels,

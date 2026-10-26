@@ -1,7 +1,7 @@
 import { Tooltip as Base } from '@base-ui/react/tooltip'
 import { cva, type VariantProps } from 'class-variance-authority'
 import { cn } from 'dowel-ui'
-import { usePopupContainer } from './layer'
+import { popupRoom, usePopupContainer } from './layer'
 
 /*
  * Tooltip.
@@ -43,6 +43,9 @@ export const tooltipPopupVariants = cva(
   [
     'rounded-md border border-line bg-raise px-2 py-1 text-xs text-text shadow-raise',
     'select-none',
+    // A phrase, by intent - but the text is the product's, and a tooltip that
+    // grows past the window hides the end of what it says.
+    popupRoom,
     // The enter and the leave. `duration-*` reads the token directly because
     // Tailwind's own utility takes a literal number.
     '[transition:opacity_var(--duration-quick)_var(--ease-out),transform_var(--duration-quick)_var(--ease-out)]',
@@ -62,9 +65,12 @@ export const tooltipPopupVariants = cva(
        * that nothing can be clicked in, which loses the hover and focus
        * behaviour to gain a width.
        */
+      // Each width is held to the room as well: a plain `max-w-64` here is
+      // the later class in the same group as the room's own cap, and
+      // tailwind-merge kept it and dropped the cap.
       size: {
-        sm: 'max-w-64',
-        wide: 'max-w-96',
+        sm: 'max-w-[min(16rem,var(--available-width))]',
+        wide: 'max-w-[min(24rem,var(--available-width))]',
       },
     },
     defaultVariants: { size: 'sm' },

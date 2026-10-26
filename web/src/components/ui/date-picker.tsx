@@ -1,5 +1,6 @@
 import { useId, useMemo, useState } from 'react'
 import { cn, useLocale } from 'dowel-ui'
+import { Button } from './button'
 import { fieldClasses } from './input'
 import { Popover, PopoverPopup, PopoverTrigger } from './popover'
 import { Calendar } from './calendar'
@@ -28,12 +29,35 @@ import { isIsoDate, type IsoDate } from './calendar-math'
  * label's `for` pointed at nothing and the button was named by whatever date
  * it showed - kilna's own picker had grown the same three props for the same
  * reason.
+ *
+ * A date chosen by mistake in an optional field is taken back from the popup:
+ * under the month, while a day is chosen, a button in the product's words. In
+ * the popup rather than beside the trigger, because the trigger is a button
+ * and a button cannot hold another, and a cross laid over the field is a
+ * second, smaller target squeezed against the first. A required field gives no
+ * words for it and cannot be emptied - and its `onValueChange` is never told
+ * `undefined`, which the type says: only a picker given `clearLabel` takes a
+ * handler that has to deal with nothing.
  */
 
-export interface DatePickerProps {
+/** Whether the date can be taken back, and what the handler is told. */
+export type DatePickerClearing =
+  | {
+      /** The words of the button that takes the date back: "Clear". Leave it
+       * out and a chosen date stays chosen - the shape of a required field. */
+      clearLabel: string
+      /** Told the chosen day, or `undefined` when it is taken back. */
+      onValueChange?: (value: IsoDate | undefined) => void
+    }
+  | {
+      clearLabel?: undefined
+      /** Told the chosen day. */
+      onValueChange?: (value: IsoDate) => void
+    }
+
+export type DatePickerProps = DatePickerClearing & {
   /** The chosen day, or `undefined` for none. */
   value?: IsoDate
-  onValueChange?: (value: IsoDate) => void
   /** Bounds, inclusive. */
   min?: IsoDate
   max?: IsoDate
@@ -60,6 +84,7 @@ export interface DatePickerProps {
 export function DatePicker({
   value,
   onValueChange,
+  clearLabel,
   min,
   max,
   placeholder,
@@ -77,6 +102,9 @@ export function DatePicker({
 }: DatePickerProps) {
   const [open, setOpen] = useState(false)
   const language = useLocale(locale)
+  // Either handler takes a day; only the one beside `clearLabel` is ever
+  // handed nothing, and the button that does it is drawn only with the words.
+  const report = onValueChange as ((value: IsoDate | undefined) => void) | undefined
   // Named by its label and then by the date it shows. A label alone would be
   // announced without the value on the button, and a name that does not hold
   // the words on the button fails WCAG 2.5.3: someone saying what they see to
@@ -117,7 +145,7 @@ export function DatePicker({
           <path d="M2 6.5h12M5.5 2v2M10.5 2v2" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
         </svg>
         {/* The empty face in `dim`: `faint` at this size measured 3.2:1. */}
-        <span id={shownId} className={cn('truncate', shown === undefined && 'text-dim')}>
+        <span id={shownId} data-placeholder={shown === undefined ? '' : undefined} className="truncate data-[placeholder]:text-dim">
           {shown ?? placeholder}
         </span>
       </PopoverTrigger>
@@ -126,8 +154,18 @@ export function DatePicker({
         * a form submitting the screen would otherwise lose the date. */}
       {name !== undefined && <input type="hidden" name={name} value={value ?? ''} />}
 
-      <PopoverPopup arrow={false} className="w-auto p-3">
+      {/* The calendar takes the focus to the day under the cursor itself, so
+        * the popup moves it nowhere first. And the popup is a dialog, so it is
+        * named - for the field. */}
+      <PopoverPopup
+        arrow={false}
+        className="w-auto p-3"
+        initialFocus={false}
+        aria-label={labelledBy === undefined ? (ariaLabel ?? placeholder) : undefined}
+        aria-labelledby={labelledBy}
+      >
         <Calendar
+          autoFocus
           value={value}
           min={min}
           max={max}
@@ -136,12 +174,26 @@ export function DatePicker({
           previousMonthLabel={previousMonthLabel}
           nextMonthLabel={nextMonthLabel}
           onValueChange={(next) => {
-            onValueChange?.(next)
+            report?.(next)
             // Choosing a day is the whole errand: the popup closes rather
             // than waiting for a second dismissing click.
             setOpen(false)
           }}
         />
+        {clearLabel !== undefined && value !== undefined && (
+          <div className="mt-2 flex justify-end border-t border-line pt-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                report?.(undefined)
+                setOpen(false)
+              }}
+            >
+              {clearLabel}
+            </Button>
+          </div>
+        )}
       </PopoverPopup>
     </Popover>
   )

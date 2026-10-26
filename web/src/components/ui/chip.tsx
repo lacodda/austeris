@@ -203,7 +203,7 @@ export function Chip(props: ChipProps) {
             // with a chip around it - while the area a pointer has to find
             // grows to the floor the theme sets.
             'grid size-4 place-items-center rounded-full text-faint transition-colors target-min',
-            'hover:bg-line hover:text-text',
+            'hover:bg-soft hover:text-text',
             'focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent',
           )}
         >

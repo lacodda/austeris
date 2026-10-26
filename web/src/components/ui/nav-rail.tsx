@@ -110,7 +110,8 @@ export function NavRail({
   return (
     <nav
       aria-label={label}
-      className={cn(navRailVariants({ layout }), narrow && 'items-center px-2', className)}
+      // Where to go next is no use on paper.
+      className={cn(navRailVariants({ layout }), narrow && 'items-center px-2', 'print:hidden', className)}
       {...props}
     >
       {items.map((item) => {

@@ -1,5 +1,6 @@
 import { useId, useMemo, useState } from 'react'
 import { cn, useLocale } from 'dowel-ui'
+import { Button } from './button'
 import { fieldClasses } from './input'
 import { Popover, PopoverPopup, PopoverTrigger } from './popover'
 import { Calendar } from './calendar'
@@ -23,6 +24,10 @@ import { isIsoDate, type IsoDate } from './calendar-math'
  * The second click can land before the first. Clicking the 20th and then the
  * 10th means the 10th to the 20th, because that is plainly what was meant;
  * refusing it would be correct and unhelpful.
+ *
+ * Given `clearLabel`, the popup offers to take the range back - half made or
+ * whole - under the month, the way DatePicker does, and `onValueChange` is
+ * told the empty range.
  */
 
 export interface DateRange {
@@ -35,6 +40,9 @@ export interface DateRange {
 export interface DateRangePickerProps {
   value?: DateRange
   onValueChange?: (value: DateRange) => void
+  /** The words of the button that takes the range back: "Clear". Leave it out
+   * and a chosen range can only be replaced, not emptied. */
+  clearLabel?: string
   min?: IsoDate
   max?: IsoDate
   /** What the trigger says when nothing is chosen. */
@@ -56,6 +64,7 @@ export interface DateRangePickerProps {
 export function DateRangePicker({
   value,
   onValueChange,
+  clearLabel,
   min,
   max,
   placeholder,
@@ -137,13 +146,23 @@ export function DateRangePicker({
           <path d="M2 6.5h12M5.5 2v2M10.5 2v2" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
         </svg>
         {/* The empty face in `dim`: `faint` at this size measured 3.2:1. */}
-        <span id={shownId} className={cn('truncate', shown === undefined && 'text-dim')}>
+        <span id={shownId} data-placeholder={shown === undefined ? '' : undefined} className="truncate data-[placeholder]:text-dim">
           {shown ?? placeholder}
         </span>
       </PopoverTrigger>
 
-      <PopoverPopup arrow={false} className="w-auto p-3">
+      {/* The calendar takes the focus to the day under the cursor itself, so
+        * the popup moves it nowhere first. And the popup is a dialog, so it is
+        * named - for the field. */}
+      <PopoverPopup
+        arrow={false}
+        className="w-auto p-3"
+        initialFocus={false}
+        aria-label={labelledBy === undefined ? (ariaLabel ?? placeholder) : undefined}
+        aria-labelledby={labelledBy}
+      >
         <Calendar
+          autoFocus
           value={range.start}
           rangeEnd={range.end}
           min={min}
@@ -154,6 +173,20 @@ export function DateRangePicker({
           nextMonthLabel={nextMonthLabel}
           onValueChange={choose}
         />
+        {clearLabel !== undefined && range.start !== undefined && (
+          <div className="mt-2 flex justify-end border-t border-line pt-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                onValueChange?.({})
+                setOpen(false)
+              }}
+            >
+              {clearLabel}
+            </Button>
+          </div>
+        )}
       </PopoverPopup>
     </Popover>
   )

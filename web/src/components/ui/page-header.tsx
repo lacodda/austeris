@@ -1,6 +1,6 @@
 import type { HTMLAttributes, ReactNode } from 'react'
 import { cva, type VariantProps } from 'class-variance-authority'
-import { cn } from 'dowel-ui'
+import { cn, type HeadingLevel } from 'dowel-ui'
 
 /*
  * PageHeader.
@@ -30,6 +30,10 @@ export interface PageHeaderProps extends Omit<HTMLAttributes<HTMLElement>, 'titl
   /** A trail, a status, a tab strip: whatever belongs between the heading and
    * the content. Drawn under the whole row. */
   children?: ReactNode
+  /** Where the title stands in the outline: `1` by default, the top of the
+   * screen's content. A header over the open item of a list beside its
+   * detail is one level down. */
+  level?: HeadingLevel
 }
 
 export function PageHeader({
@@ -38,8 +42,10 @@ export function PageHeader({
   actions,
   className,
   children,
+  level = 1,
   ...props
 }: PageHeaderProps) {
+  const Heading = `h${level}` as const
   return (
     <header className={cn('mb-4 flex flex-col gap-3', className)} {...props}>
       {/* `flex-wrap` and `items-start`: the actions drop to their own line on
@@ -47,7 +53,7 @@ export function PageHeader({
           screen is; a button can wait a row. */}
       <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
         <div className="flex min-w-0 flex-col gap-1">
-          <h1 className="text-xl font-semibold tracking-tight text-text">{title}</h1>
+          <Heading className="text-xl font-semibold tracking-tight text-text">{title}</Heading>
           {description === undefined ? null : (
             <p className="text-sm text-dim">{description}</p>
           )}
