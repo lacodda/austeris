@@ -27,12 +27,11 @@ impl Service {
         MarketServiceServer::new(Self { pool })
     }
 
-    /// The bare service, so tests can call the contract without a socket.
-    ///
-    /// What is worth testing here is the answers the contract gives, not
-    /// tonic's transport.
+    /// The bare service, called in the same process without a socket: what
+    /// the tests check the contract's answers with - not tonic's transport -
+    /// and what the demo seeds a module's records through.
     #[must_use]
-    pub fn for_tests(pool: PgPool) -> Self {
+    pub fn in_process(pool: PgPool) -> Self {
         Self { pool }
     }
 }

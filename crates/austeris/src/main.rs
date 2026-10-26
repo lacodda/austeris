@@ -185,7 +185,14 @@ async fn serve_all(config: &Config) -> Result<()> {
     };
 
     if demo::requested() {
-        demo::seed(&demo::Books { identity, ledger, market }).await?.report();
+        demo::seed(&demo::Books {
+            identity,
+            ledger,
+            market,
+            portfolio: pool_of(Service::Portfolio),
+        })
+        .await?
+        .report();
     } else {
         welcome_first_user(&identity).await?;
     }

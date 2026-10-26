@@ -288,7 +288,7 @@ async fn saving_an_entry_as_it_was_is_not_a_change() {
 async fn a_module_and_a_script_are_each_named_for_what_they_did() {
     let Some(pool) = pool("test_memory_who").await else { return };
     let books = books(&pool).await;
-    let service = grpc::Service::for_tests(pool.clone());
+    let service = grpc::Service::in_process(pool.clone());
     let posted = service
         .post_entry(tonic::Request::new(PostEntryRequest {
             owner_id: books.owner.to_string(),

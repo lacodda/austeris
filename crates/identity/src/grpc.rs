@@ -27,7 +27,7 @@ impl Service {
 
     /// The bare service, so tests can call the contract without a socket.
     #[must_use]
-    pub fn for_tests(pool: PgPool) -> Self {
+    pub fn in_process(pool: PgPool) -> Self {
         Self { pool }
     }
 }

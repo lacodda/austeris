@@ -361,7 +361,7 @@ async fn the_grpc_contract_answers_with_the_same_rule_as_rest() {
     repository::record_price(&pool, btc.id, "USD", morning, decimal("60000"), "test").await.unwrap();
     repository::record_price(&pool, btc.id, "USD", noon, decimal("61234.5"), "test").await.unwrap();
 
-    let service = austeris_market::grpc::Service::for_tests(pool.clone());
+    let service = austeris_market::grpc::Service::in_process(pool.clone());
 
     let response = service
         .get_prices(tonic::Request::new(austeris_proto::market::v1::GetPricesRequest {
@@ -410,7 +410,7 @@ async fn the_grpc_contract_answers_with_the_same_rule_as_rest() {
 async fn an_unparseable_id_is_the_callers_mistake_not_an_empty_answer() {
     let Some(pool) = pool("test_market_grpc_bad_id").await else { return };
 
-    let service = austeris_market::grpc::Service::for_tests(pool);
+    let service = austeris_market::grpc::Service::in_process(pool);
 
     let status = service
         .get_prices(tonic::Request::new(austeris_proto::market::v1::GetPricesRequest {

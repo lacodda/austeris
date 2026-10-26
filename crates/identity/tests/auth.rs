@@ -330,7 +330,7 @@ async fn an_address_names_its_person_only_while_they_can_sign_in() {
 
     let Some(pool) = pool("test_auth_find_person").await else { return };
     let id = user_with_password(&pool, "Owner@Example.test", "correct horse").await;
-    let service = austeris_identity::grpc::Service::for_tests(pool.clone());
+    let service = austeris_identity::grpc::Service::in_process(pool.clone());
     let find = |email: &str| FindPersonRequest { email: email.to_owned() };
 
     // In any case, as signing in matches it.

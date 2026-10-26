@@ -107,11 +107,11 @@ impl World {
     }
 
     fn books(&self) -> Ledger {
-        Local(Arc::new(austeris_ledger::grpc::Service::for_tests(self.ledger_pool.clone())))
+        Local(Arc::new(austeris_ledger::grpc::Service::in_process(self.ledger_pool.clone())))
     }
 
     fn market(&self) -> Market {
-        Local(Arc::new(austeris_market::grpc::Service::for_tests(self.market_pool.clone())))
+        Local(Arc::new(austeris_market::grpc::Service::in_process(self.market_pool.clone())))
     }
 
     fn app(&self) -> Router {

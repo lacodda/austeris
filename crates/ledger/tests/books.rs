@@ -613,7 +613,7 @@ async fn guaranies_are_priced_in_roubles_through_the_dollar() {
     // pair between them comes from neither.
     let Some(pool) = pool("test_ledger_cross").await else { return };
     let books = books(&pool).await;
-    let service = grpc::Service::for_tests(pool.clone());
+    let service = grpc::Service::in_process(pool.clone());
     for (source, quote, rate) in [("bcp", "PYG", "5000"), ("cbr", "RUB", "85")] {
         service
             .record_rates(tonic::Request::new(RecordRatesRequest {
@@ -643,7 +643,7 @@ async fn rates_from_a_source_never_replace_what_is_already_recorded() {
         .await
         .expect("recording a rate");
 
-    let service = grpc::Service::for_tests(pool.clone());
+    let service = grpc::Service::in_process(pool.clone());
     let push = |on_date: &str, rate: &str| RecordRatesRequest {
         source: "bcp".to_owned(),
         rates: vec![ProtoRate {
@@ -1160,7 +1160,7 @@ async fn a_converted_amount_carries_the_ledgers_scale_not_the_products() {
 async fn a_module_posts_through_the_contract_and_a_retry_books_once() {
     let Some(pool) = pool("test_ledger_grpc").await else { return };
     let books = books(&pool).await;
-    let service = grpc::Service::for_tests(pool.clone());
+    let service = grpc::Service::in_process(pool.clone());
 
     let request = || {
         tonic::Request::new(PostEntryRequest {
@@ -1205,7 +1205,7 @@ async fn a_module_posting_without_a_key_is_refused() {
     // twice".
     let Some(pool) = pool("test_ledger_grpc_key").await else { return };
     let books = books(&pool).await;
-    let service = grpc::Service::for_tests(pool.clone());
+    let service = grpc::Service::in_process(pool.clone());
 
     let status = service
         .post_entry(tonic::Request::new(PostEntryRequest {
@@ -1241,7 +1241,7 @@ async fn a_module_told_its_own_arithmetic_is_wrong_rather_than_to_retry() {
     // it can fix.
     let Some(pool) = pool("test_ledger_grpc_balance").await else { return };
     let books = books(&pool).await;
-    let service = grpc::Service::for_tests(pool.clone());
+    let service = grpc::Service::in_process(pool.clone());
 
     let status = service
         .post_entry(tonic::Request::new(PostEntryRequest {
@@ -1282,7 +1282,7 @@ async fn balances_cross_the_contract_as_strings_with_every_digit() {
         .await
         .expect("creating");
 
-    let service = grpc::Service::for_tests(pool.clone());
+    let service = grpc::Service::in_process(pool.clone());
     let answer = service
         .get_balances(tonic::Request::new(GetBalancesRequest {
             owner_id: books.owner.to_string(),
@@ -2015,7 +2015,7 @@ async fn a_held_payment_in_another_currency_posts_at_the_banks_amount_with_the_f
 async fn balances_cross_the_contract_with_what_is_available() {
     let Some(pool) = pool("test_ledger_grpc_available").await else { return };
     let books = books(&pool).await;
-    let service = grpc::Service::for_tests(pool.clone());
+    let service = grpc::Service::in_process(pool.clone());
     let (status, body) = quick(&pool, books.owner, r#"{"text":"~30000 food fuel","occurred_on":"2026-09-10"}"#).await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
 

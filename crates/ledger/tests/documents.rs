@@ -111,7 +111,7 @@ fn receipt(books: &Books, key: &str) -> PostEntryRequest {
 }
 
 async fn post(pool: &PgPool, request: PostEntryRequest) -> Result<(Uuid, bool), tonic::Status> {
-    let response = grpc::Service::for_tests(pool.clone())
+    let response = grpc::Service::in_process(pool.clone())
         .post_entry(tonic::Request::new(request))
         .await?
         .into_inner();
@@ -166,7 +166,7 @@ async fn a_receipt_finds_the_shop_by_its_tax_number_whatever_name_it_prints() {
     assert_eq!(entry.counterparty.map(|c| c.name), Some("Supermercado Sol".to_owned()));
     assert_eq!(repository::counterparties(&pool, books.owner).await.expect("listing").len(), 1);
 
-    let found = grpc::Service::for_tests(pool.clone())
+    let found = grpc::Service::in_process(pool.clone())
         .find_counterparty(tonic::Request::new(FindCounterpartyRequest {
             owner_id: books.owner.to_string(),
             tax_id: "80.012.345-6".to_owned(),
@@ -308,7 +308,7 @@ async fn a_module_reads_the_accounts_and_the_rate_it_chooses_by() {
         .expect("creating a card");
     repository::set_account_closed(&pool, books.owner, card.id, true).await.expect("closing it");
 
-    let service = grpc::Service::for_tests(pool.clone());
+    let service = grpc::Service::in_process(pool.clone());
     let accounts = service
         .list_accounts(tonic::Request::new(ListAccountsRequest {
             owner_id: books.owner.to_string(),

@@ -17,6 +17,7 @@
 //! next one.
 
 use std::fmt::Write as _;
+use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use austeris_common::{Actor, Config, db};
@@ -25,7 +26,10 @@ use austeris_ledger::model::{AccountKind, CounterpartyKind, EntryStatus, Flow, P
 use austeris_ledger::repository::{self as ledger, CounterpartyChoice, EntryChanges, EntryFilter, NewEntry, NewLine, NewPlace, Side};
 use austeris_market::model::Kind;
 use austeris_market::repository as market;
-use chrono::{Datelike, Days, NaiveDate, NaiveTime, Utc};
+use austeris_portfolio::model::{TradeBody, TradeKind};
+use austeris_portfolio::services::Local;
+use austeris_portfolio::trade;
+use chrono::{Datelike, Days, NaiveDate, NaiveTime, Timelike, Utc};
 use rust_decimal::Decimal;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -68,6 +72,8 @@ pub struct Books {
     pub ledger: PgPool,
     /// Instruments and prices.
     pub market: PgPool,
+    /// Trades and snapshots - when the installation runs the portfolio.
+    pub portfolio: Option<PgPool>,
 }
 
 /// What a seeding run did.
@@ -77,6 +83,8 @@ pub struct Seeded {
     pub created: bool,
     /// Entries posted by this run; earlier days are already there.
     pub entries: usize,
+    /// Trades recorded by this run.
+    pub trades: usize,
 }
 
 impl Seeded {
@@ -89,7 +97,10 @@ impl Seeded {
         if self.created {
             println!("  A demo household was created. Everything in it is made up.");
         } else {
-            println!("  The demo household is here; {} new entries bring it up to today.", self.entries);
+            println!(
+                "  The demo household is here; {} new entries and {} new trades bring it up to today.",
+                self.entries, self.trades
+            );
         }
         println!();
         println!("      email:    {EMAIL}");
@@ -124,6 +135,11 @@ pub async fn run() -> Result<()> {
         identity: open(Service::Identity).await?,
         ledger: open(Service::Ledger).await?,
         market: open(Service::Market).await?,
+        portfolio: if Service::Portfolio.is_switched_off() {
+            None
+        } else {
+            Some(open(Service::Portfolio).await?)
+        },
     };
     seed(&books).await?.report();
     Ok(())
@@ -161,6 +177,8 @@ pub async fn seed(books: &Books) -> Result<Seeded> {
         // recorded before the day's entries, because the exchange before a trip
         // is measured against it.
         ledger::record_rate(&books.ledger, "USD", "EUR", day, usd_in_eur(day), SOURCE).await?;
+        // A dollar stablecoin, the money on the coin exchange: worth a dollar.
+        ledger::record_rate(&books.ledger, "USDT", "EUR", day, usd_in_eur(day), SOURCE).await?;
         let mut day_entries = household.day(day, today);
         if let Some(exchange) = household.exchange(&books.ledger, owner, day).await? {
             day_entries.push(exchange);
@@ -176,7 +194,11 @@ pub async fn seed(books: &Books) -> Result<Seeded> {
     memory(&books.ledger, owner, household.shops.grocer, today).await?;
 
     prices(&books.market, first, today).await?;
-    Ok(Seeded { created, entries })
+    let trades = match &books.portfolio {
+        Some(pool) => portfolio(&books.ledger, &books.market, pool, owner, first, today).await?,
+        None => 0,
+    };
+    Ok(Seeded { created, entries, trades })
 }
 
 /// Posts the card payments held for longer than a bank takes, as of today.
@@ -681,22 +703,188 @@ fn movement(day: NaiveDate, key: &str, (account, currency): (Uuid, &str), other:
     }
 }
 
+/// The demo's invented instruments: ticker, kind, name, and the level, swing
+/// and period of the wave their price follows.
+const INSTRUMENTS: [(&str, Kind, &str, f64, f64, f64); 2] = [
+    ("DMC", Kind::Crypto, "Demo Coin", 54_000.0, 0.12, 30.0),
+    ("DWLD", Kind::Fund, "Demo World Index", 112.0, 0.05, 60.0),
+];
+
+/// What one of the demo's instruments cost in euros on a day.
+fn price_in_eur(symbol: &str, day: NaiveDate) -> Decimal {
+    INSTRUMENTS
+        .iter()
+        .find(|instrument| instrument.0 == symbol)
+        .map_or(Decimal::ONE, |&(_, _, _, level, swing, period)| wave(day, level, swing, period))
+}
+
 /// Invented instruments, with a price a day that looks like a market.
 async fn prices(pool: &PgPool, first: NaiveDate, last: NaiveDate) -> Result<()> {
     // Names nobody trades, so a demo price can never be taken for a real one.
-    let instruments = [
-        (Kind::Crypto, "DMC", "Demo Coin", 54_000.0, 0.12, 30.0),
-        (Kind::Fund, "DWLD", "Demo World Index", 112.0, 0.05, 60.0),
-    ];
-    for (kind, symbol, name, level, swing, period) in instruments {
+    for (symbol, kind, name, level, swing, period) in INSTRUMENTS {
         let instrument = market::upsert_instrument(pool, kind, symbol, name, None).await?;
         market::bind_source(pool, instrument.id, SOURCE, symbol, 100).await?;
         for day in first.iter_days().take_while(|day| *day <= last) {
             let at = day.and_time(NaiveTime::from_hms_opt(12, 0, 0).unwrap_or_default()).and_utc();
             market::record_price(pool, instrument.id, "EUR", at, wave(day, level, swing, period), SOURCE).await?;
         }
+        // A coin trades all day: this hour's price, so the coin is current
+        // when the demo has just started rather than stale since noon.
+        if kind == Kind::Crypto {
+            let now = Utc::now();
+            let hour = now.date_naive().and_hms_opt(now.hour(), 0, 0).unwrap_or_default().and_utc();
+            market::record_price(pool, instrument.id, "EUR", hour, wave(last, level, swing, period), SOURCE).await?;
+        }
     }
     Ok(())
+}
+
+/// A trade the demo makes on a day: how many days in, of what, where, how
+/// many, and what kind.
+struct Planned {
+    after_days: u64,
+    symbol: &'static str,
+    account: &'static str,
+    kind: TradeKind,
+    quantity: &'static str,
+}
+
+/// The demo's trades: an index fund bought a little every fortnight on the
+/// broker; a coin bought monthly on an exchange paid in a stablecoin, some
+/// sold, and some sent on to a wallet of its own.
+fn planned() -> Vec<Planned> {
+    let mut out: Vec<Planned> = (0..9)
+        .map(|n| Planned {
+            after_days: 3 + 14 * n,
+            symbol: "DWLD",
+            account: BROKER,
+            kind: TradeKind::Buy,
+            quantity: "5",
+        })
+        .collect();
+    out.extend((0..4).map(|n| Planned {
+        after_days: 7 + 30 * n,
+        symbol: "DMC",
+        account: EXCHANGE,
+        kind: TradeKind::Buy,
+        quantity: "0.02",
+    }));
+    out.push(Planned {
+        after_days: 75,
+        symbol: "DMC",
+        account: EXCHANGE,
+        kind: TradeKind::Sell,
+        quantity: "0.015",
+    });
+    out.push(Planned {
+        after_days: 90,
+        symbol: "DMC",
+        account: EXCHANGE,
+        kind: TradeKind::Transfer,
+        quantity: "0.02",
+    });
+    out
+}
+
+/// The broker the index fund is bought on.
+const BROKER: &str = "Broker";
+/// The exchange the coin is bought on, whose money is a dollar stablecoin.
+const EXCHANGE: &str = "Coin exchange";
+/// Where coins are sent to be kept.
+const WALLET: &str = "Cold wallet";
+
+/// The household's investments: accounts at a broker and an exchange, the
+/// trades on them - recorded through the portfolio module itself, so their
+/// money is booked as any trade's is - and one snapshot to compare with.
+///
+/// Idempotent like the rest: a trade already recorded at its moment is not
+/// recorded again, and a snapshot is taken only when there is none.
+async fn portfolio(ledger_pool: &PgPool, market_pool: &PgPool, pool: &PgPool, owner: Uuid, first: NaiveDate, today: NaiveDate) -> Result<usize> {
+    let books = Local(Arc::new(austeris_ledger::grpc::Service::in_process(ledger_pool.clone())));
+    let prices = Local(Arc::new(austeris_market::grpc::Service::in_process(market_pool.clone())));
+    let broker = account(ledger_pool, owner, AccountKind::Brokerage, BROKER, "EUR", 6_000).await?;
+    let exchange = account(ledger_pool, owner, AccountKind::CryptoWallet, EXCHANGE, "USDT", 6_000).await?;
+    let wallet = account(ledger_pool, owner, AccountKind::CryptoWallet, WALLET, "EUR", 0).await?;
+    let instruments = market::instruments(market_pool).await?;
+    let instrument = |symbol: &str| {
+        instruments
+            .iter()
+            .find(|instrument| instrument.symbol == symbol)
+            .map(|instrument| instrument.id)
+    };
+
+    let done = austeris_portfolio::repository::trades(
+        pool,
+        owner,
+        &austeris_portfolio::repository::TradeFilter {
+            limit: 500,
+            ..Default::default()
+        },
+    )
+    .await?;
+    let mut recorded = 0;
+    for plan in planned() {
+        let day = first + Days::new(plan.after_days);
+        let at = day.and_time(NaiveTime::from_hms_opt(14, 0, 0).unwrap_or_default()).and_utc();
+        let Some(instrument_id) = instrument(plan.symbol) else {
+            bail!("the demo's {} is not in the market", plan.symbol);
+        };
+        let account_id = if plan.account == BROKER { broker } else { exchange };
+        if at > Utc::now()
+            || done
+                .iter()
+                .any(|trade| trade.account_id == account_id && trade.instrument_id == instrument_id && trade.occurred_at == at)
+        {
+            continue;
+        }
+        // The broker is in euros, the market's own; the exchange's money is
+        // worth a dollar.
+        let in_eur = price_in_eur(plan.symbol, day);
+        let price = if plan.account == BROKER {
+            in_eur
+        } else {
+            (in_eur / usd_in_eur(day)).round_dp(2)
+        };
+        let quantity: Decimal = plan.quantity.parse()?;
+        let body = TradeBody {
+            kind: plan.kind,
+            account_id,
+            to_account_id: (plan.kind == TradeKind::Transfer).then_some(wallet),
+            instrument_id,
+            quantity,
+            price: (plan.kind != TradeKind::Transfer).then_some(price),
+            // A euro and a half a fund order; a tenth of a percent on the
+            // exchange; what the network takes, in coins, to send them.
+            fee: Some(match (plan.kind, plan.account) {
+                (TradeKind::Transfer, _) => Decimal::new(2, 4),
+                (_, BROKER) => Decimal::new(15, 1),
+                _ => (quantity * price / Decimal::from(1000)).round_dp(2),
+            }),
+            occurred_at: at.fixed_offset(),
+            note: String::new(),
+        };
+        trade::record(pool, &books, &prices, owner, &body)
+            .await
+            .map_err(|refused| anyhow::anyhow!("the demo's {} of {} was refused: {refused}", plan.symbol, day))?;
+        recorded += 1;
+    }
+
+    if austeris_portfolio::repository::snapshots(pool, owner).await?.is_empty() {
+        let on = first + Days::new(45);
+        let valuation = austeris_portfolio::value::valuation(pool, &books, &prices, owner, Some(on).filter(|on| *on < today), "EUR")
+            .await
+            .map_err(|error| anyhow::anyhow!("valuing the demo's portfolio: {error}"))?;
+        austeris_portfolio::repository::save_snapshot(pool, owner, &valuation, "Six weeks in").await?;
+    }
+    Ok(recorded)
+}
+
+/// An account of the household's, found by name or opened.
+async fn account(pool: &PgPool, owner: Uuid, kind: AccountKind, name: &str, currency: &str, opening: i64) -> Result<Uuid> {
+    match ledger::account_by_name(pool, owner, name).await? {
+        Some(found) => Ok(found.id),
+        None => Ok(ledger::create_account(pool, owner, kind, name, currency, Decimal::from(opening)).await?.id),
+    }
 }
 
 /// A value drifting around `level` by up to `swing` of itself, over `period`
@@ -785,6 +973,7 @@ mod tests {
             identity: pool(&format!("test_{name}_identity"), &austeris_identity::MIGRATOR).await?,
             ledger: pool(&format!("test_{name}_ledger"), &austeris_ledger::MIGRATOR).await?,
             market: pool(&format!("test_{name}_market"), &austeris_market::MIGRATOR).await?,
+            portfolio: Some(pool(&format!("test_{name}_portfolio"), &austeris_portfolio::MIGRATOR).await?),
         })
     }
 
@@ -799,6 +988,8 @@ mod tests {
         let second = seed(&books).await.expect("seeding again");
         assert!(!second.created, "a second run created a second household");
         assert_eq!(second.entries, 0, "a second run on the same day posted entries again");
+        assert_eq!(first.trades, 15, "four months of investing is fifteen trades");
+        assert_eq!(second.trades, 0, "a second run recorded trades again");
 
         // Every account the demo made has a balance someone would believe: the
         // cash machine keeps cash above zero, the salary keeps the bank there.
@@ -809,10 +1000,25 @@ mod tests {
         let balances = austeris_ledger::repository::balances(&books.ledger, owner, Utc::now().date_naive())
             .await
             .expect("reading balances");
-        assert_eq!(balances.len(), 4, "the demo has four accounts");
-        for balance in &balances {
+        assert_eq!(balances.len(), 7, "the demo has four accounts and three it invests from");
+        for balance in balances.iter().filter(|balance| balance.name != "Cold wallet") {
             assert!(balance.amount > Decimal::ZERO, "{} went below zero: {}", balance.name, balance.amount);
         }
+
+        // What it invested is worth something whole: every position has a
+        // price, the exchange's stablecoin a rate, and there is a snapshot to
+        // compare with.
+        let portfolio = books.portfolio.as_ref().expect("the portfolio");
+        let in_process = |pool: &PgPool| austeris_portfolio::services::Local(std::sync::Arc::new(austeris_ledger::grpc::Service::in_process(pool.clone())));
+        let prices = austeris_portfolio::services::Local(std::sync::Arc::new(austeris_market::grpc::Service::in_process(books.market.clone())));
+        let value = austeris_portfolio::value::valuation(portfolio, &in_process(&books.ledger), &prices, owner, None, "EUR")
+            .await
+            .expect("valuing");
+        assert!(value.unvalued.is_empty(), "the demo's portfolio has no price for {:?}", value.unvalued);
+        assert!(value.total > Decimal::ZERO);
+        let accounts: Vec<&str> = value.accounts.iter().map(|account| account.name.as_str()).collect();
+        assert_eq!(accounts, ["Broker", "Coin exchange", "Cold wallet"]);
+        assert_eq!(austeris_portfolio::repository::snapshots(portfolio, owner).await.expect("listing").len(), 1);
 
         // Who it pays, a tag per trip, and nothing held for longer than a bank
         // takes to post it.

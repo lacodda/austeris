@@ -172,7 +172,7 @@ async fn setup(name: &str) -> Option<Setup> {
         .await
         .expect("creating a category");
     Some(Setup {
-        books: Local(Arc::new(grpc::Service::for_tests(ledger.clone()))),
+        books: Local(Arc::new(grpc::Service::in_process(ledger.clone()))),
         ledger,
         imports,
         owner,

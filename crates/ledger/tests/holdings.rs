@@ -138,7 +138,7 @@ async fn balance(pool: &PgPool, owner: Uuid) -> Decimal {
 async fn a_purchase_leaves_the_account_and_is_not_spending() {
     let Some(pool) = pool("test_holdings_purchase").await else { return };
     let (owner, account) = exchange(&pool).await;
-    let ledger = grpc::Service::for_tests(pool.clone());
+    let ledger = grpc::Service::in_process(pool.clone());
 
     let posted = ledger
         .post_entry(tonic::Request::new(purchase(owner, account, true)))
@@ -169,7 +169,7 @@ async fn a_purchase_leaves_the_account_and_is_not_spending() {
 async fn a_holding_belongs_to_an_entry_a_module_keeps() {
     let Some(pool) = pool("test_holdings_unkept").await else { return };
     let (owner, account) = exchange(&pool).await;
-    let ledger = grpc::Service::for_tests(pool.clone());
+    let ledger = grpc::Service::in_process(pool.clone());
 
     let refused = ledger
         .post_entry(tonic::Request::new(purchase(owner, account, false)))
@@ -190,7 +190,7 @@ async fn a_holding_belongs_to_an_entry_a_module_keeps() {
 async fn a_person_changes_what_is_theirs_on_a_kept_entry_and_nothing_else() {
     let Some(pool) = pool("test_holdings_person").await else { return };
     let (owner, account) = exchange(&pool).await;
-    let ledger = grpc::Service::for_tests(pool.clone());
+    let ledger = grpc::Service::in_process(pool.clone());
     let id = ledger
         .post_entry(tonic::Request::new(purchase(owner, account, true)))
         .await
@@ -240,7 +240,7 @@ async fn a_person_changes_what_is_theirs_on_a_kept_entry_and_nothing_else() {
 async fn the_module_restates_and_takes_back_what_it_keeps() {
     let Some(pool) = pool("test_holdings_module").await else { return };
     let (owner, account) = exchange(&pool).await;
-    let ledger = grpc::Service::for_tests(pool.clone());
+    let ledger = grpc::Service::in_process(pool.clone());
     let id = ledger
         .post_entry(tonic::Request::new(purchase(owner, account, true)))
         .await
@@ -325,7 +325,7 @@ async fn an_entry_a_person_typed_is_not_a_modules_to_restate() {
     let food = repository::create_category(&pool, owner, None, Flow::Expense, "food")
         .await
         .expect("a category");
-    let ledger = grpc::Service::for_tests(pool.clone());
+    let ledger = grpc::Service::in_process(pool.clone());
     let line = |side: ProtoSide, amount: &str| ProtoLine {
         side: Some(side),
         amount: amount.to_owned(),
@@ -426,7 +426,7 @@ async fn an_installation_with_entries_migrates_to_holdings() {
     let exchange = repository::create_account(&pool, owner, AccountKind::CryptoWallet, "Exchange", "USDT", Decimal::ZERO)
         .await
         .expect("an account in a stablecoin");
-    grpc::Service::for_tests(pool.clone())
+    grpc::Service::in_process(pool.clone())
         .post_entry(tonic::Request::new(purchase(owner, exchange.id, true)))
         .await
         .expect("posting a purchase");
