@@ -61,7 +61,7 @@ export function ManageButtons({ templates }: { templates: Template[] }) {
   }
 
   return (
-    <DrawerPopup side="right" size="md" className="ml-auto">
+    <DrawerPopup side="right" size="md">
       <DrawerHeader
         action={
           <Button variant="icon" size="icon-sm" render={<DrawerClose />} aria-label={t('common.close')}>

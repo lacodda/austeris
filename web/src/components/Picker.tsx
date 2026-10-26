@@ -97,10 +97,7 @@ export function Picker({
     >
       <ComboboxInput id={id} placeholder={placeholder} {...aria} />
       <ComboboxPopup>
-        {/* `empty:p-0`: the element stays mounted for its announcement, and
-            with dowel 0.35 its padding stood as a blank band above every list
-            that did match. */}
-        <ComboboxEmpty className="empty:p-0">{emptyLabel}</ComboboxEmpty>
+        <ComboboxEmpty>{emptyLabel}</ComboboxEmpty>
         <ComboboxList>
           {(row: Row) => (
             <ComboboxItem key={row.value} value={row}>

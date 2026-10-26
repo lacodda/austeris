@@ -170,13 +170,7 @@ export function EntryForm({ onDone, defaultAccount }: { onDone: () => void; defa
   }
 
   return (
-    <DrawerPopup
-      side="right"
-      size="lg"
-      // dowel 0.35 lays the popup at the start of its viewport whatever the
-      // side; ordered from dowel, worked round here.
-      className="ml-auto"
-    >
+    <DrawerPopup side="right" size="lg">
       <form onSubmit={submit} className="flex min-h-0 flex-1 flex-col">
         <DrawerHeader action={<Button variant="icon" size="icon-sm" render={<DrawerClose />} aria-label={t('common.close')}><X aria-hidden /></Button>}>
           <DrawerTitle>{t('entry.newTitle')}</DrawerTitle>

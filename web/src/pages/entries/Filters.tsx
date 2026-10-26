@@ -63,6 +63,7 @@ export function Filters({ filter, onFilterChange, stacked = false }: FiltersProp
           set({ from: range.start, to: range.end })
         }}
         placeholder={t('filters.anyPeriod')}
+        clearLabel={t('filters.anyPeriod')}
         previousMonthLabel={t('calendar.previous')}
         nextMonthLabel={t('calendar.next')}
         className={stacked ? 'w-full' : 'w-auto'}

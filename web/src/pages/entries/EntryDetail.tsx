@@ -56,13 +56,7 @@ export function EntryDetail({ id, onDone }: { id: string; onDone: () => void }) 
   const [mode, setMode] = useState<Mode>('view')
 
   return (
-    <DrawerPopup
-      side="right"
-      size="lg"
-      // dowel 0.35 lays the popup at the start of its viewport whatever the
-      // side; ordered from dowel, worked round here.
-      className="ml-auto"
-    >
+    <DrawerPopup side="right" size="lg">
       <DrawerHeader
         action={
           <Button variant="icon" size="icon-sm" render={<DrawerClose />} aria-label={t('common.close')}>
