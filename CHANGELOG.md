@@ -2,6 +2,28 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.14.0] - 2026-10-26
+
+### Bug Fixes
+- Drop what dowel 0.40 fixed, and let the period filter be cleared
+
+### CI
+- Take the latest Node 22 in every job
+
+### Dependencies
+- Update the dependencies, and take dowel 0.40's components
+
+### Documentation
+- The portfolio, the money a trade moves, and entries a module keeps
+
+### Features
+- Money into holdings and entries a module keeps
+- Price an instrument by hand and say what instruments are
+- Trades, positions, their value and snapshots
+- Invest from a broker and a coin exchange
+- Value a coin in any currency the ledger has a rate for
+- A portfolio screen, and a trade's money shown as the trade's
+
 ## [0.13.0] - 2026-10-20
 
 ### Bug Fixes
