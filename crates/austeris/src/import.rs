@@ -18,7 +18,12 @@ use crate::add::{Account, answered, base_url, message_from, named, read_session,
 
 /// Arguments to `austeris import`.
 #[derive(Debug, clap::Args)]
+#[command(args_conflicts_with_subcommands = true, subcommand_negates_reqs = true)]
 pub struct ImportArgs {
+    /// Something other than receipts to bring in.
+    #[command(subcommand)]
+    pub source: Option<ImportFrom>,
+
     /// The receipts: files, or folders whose files are each one.
     #[arg(required = true, num_args = 1.., value_name = "PATH")]
     pub paths: Vec<PathBuf>,
@@ -35,7 +40,17 @@ pub struct ImportArgs {
     pub category: Option<String>,
 }
 
-/// Imports receipts.
+/// What else `import` brings in.
+#[derive(Debug, clap::Subcommand)]
+pub enum ImportFrom {
+    /// Brings the 2025 tracker's coins in: its wallets as accounts, its buys
+    /// and sells as trades, its prices and its snapshots - from a plain
+    /// `pg_dump` of its database. Says where the books and the tracker part.
+    /// Running it again changes nothing.
+    Legacy(crate::legacy::Args),
+}
+
+/// Imports receipts, or whatever else is named.
 ///
 /// # Errors
 ///
@@ -44,6 +59,9 @@ pub struct ImportArgs {
 /// reached or refuses a file outright. A receipt that waits or cannot be read
 /// into the books is said, not an error.
 pub async fn import(args: &ImportArgs) -> Result<()> {
+    if let Some(ImportFrom::Legacy(legacy)) = &args.source {
+        return crate::legacy::run(legacy).await;
+    }
     let session = read_session()?;
     let files = files(&args.paths)?;
     if files.is_empty() {

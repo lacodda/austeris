@@ -9,6 +9,7 @@ mod add;
 mod demo;
 mod gateway;
 mod import;
+mod legacy;
 mod migrate;
 mod openapi;
 mod ratelimit;
@@ -61,7 +62,8 @@ enum Command {
     /// another: `austeris clear 3f2a 180000`.
     Clear(add::ClearArgs),
     /// Reads receipts into the books: `austeris import factura.xml`, or every
-    /// file in a folder.
+    /// file in a folder. `austeris import legacy <dump>` brings the 2025
+    /// tracker's coins in.
     Import(import::ImportArgs),
     /// Signs in, so `add` has a session to record with.
     Login(add::LoginArgs),
