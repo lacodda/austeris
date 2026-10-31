@@ -554,8 +554,11 @@ impl Household {
             entry.counterparty = from.map(CounterpartyChoice::Existing);
             out.push(entry);
         };
+        // Enough to pay for a month with some left: the month's spending from
+        // the everyday account comes to about 3 750, and a salary short of
+        // that left the account below nothing by the last day of a month.
         if day.day() == 1 {
-            earn("salary", self.salary, Some(shops.employer), Decimal::from(3_400), "Salary");
+            earn("salary", self.salary, Some(shops.employer), Decimal::from(4_000), "Salary");
         }
         if day.day() == 18 && !day.month().is_multiple_of(3) {
             earn("side", self.side_work, None, dice.cents(250, 620), "Invoice paid");
