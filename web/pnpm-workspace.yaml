@@ -6,3 +6,10 @@ onlyBuiltDependencies:
 # what has fallen behind it: a gate run against older packages than the lock
 # names passes for something other than what ships.
 verifyDepsBeforeRun: install
+
+# minimatch before 11.0.1 can be made to expand a pattern without bound
+# (GHSA-g3hv-75wg-m249). eslint 10 still asks for ^10, and 10 has no fix;
+# eslint's own lint of this tree is the check that 11 serves it. Drop this
+# once eslint asks for 11 itself.
+overrides:
+  minimatch@<11.0.1: ^11.0.3
