@@ -866,7 +866,7 @@ async fn portfolio(ledger_pool: &PgPool, market_pool: &PgPool, pool: &PgPool, ow
             occurred_at: at.fixed_offset(),
             note: String::new(),
         };
-        trade::record(pool, &books, &prices, owner, &body)
+        trade::record(pool, &books, &prices, owner, &body, None)
             .await
             .map_err(|refused| anyhow::anyhow!("the demo's {} of {} was refused: {refused}", plan.symbol, day))?;
         recorded += 1;
@@ -877,7 +877,7 @@ async fn portfolio(ledger_pool: &PgPool, market_pool: &PgPool, pool: &PgPool, ow
         let valuation = austeris_portfolio::value::valuation(pool, &books, &prices, owner, Some(on).filter(|on| *on < today), "EUR")
             .await
             .map_err(|error| anyhow::anyhow!("valuing the demo's portfolio: {error}"))?;
-        austeris_portfolio::repository::save_snapshot(pool, owner, &valuation, "Six weeks in").await?;
+        austeris_portfolio::repository::save_snapshot(pool, owner, &valuation, "Six weeks in", None).await?;
     }
     Ok(recorded)
 }

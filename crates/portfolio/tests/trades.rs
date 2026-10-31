@@ -398,6 +398,133 @@ async fn a_trade_changed_restates_its_money_and_one_deleted_takes_it_back() {
     assert_eq!(history[4]["after"], Value::Null);
 }
 
+/// A body with the key a client names it by.
+fn keyed(mut body: Value, key: &str) -> Value {
+    body["idempotency_key"] = json!(key);
+    body
+}
+
+#[tokio::test]
+async fn a_trade_named_by_a_key_is_recorded_once() {
+    let Some(world) = World::new("portfolio_keyed").await else { return };
+    let body = keyed(buy(world.exchange, world.btc, "0.01", "60000", "1", 10), "import:17");
+    let (status, first) = world.call("POST", "/portfolio/trades", Some(body.clone())).await;
+    assert_eq!(status, StatusCode::CREATED, "{first}");
+    assert_eq!(first["idempotency_key"], "import:17");
+
+    // Brought again - as it was, or told differently: the trade recorded
+    // first, as it is, and nothing booked twice.
+    let told_otherwise = keyed(buy(world.exchange, world.btc, "0.02", "61000", "0", 11), " import:17 ");
+    for again in [body.clone(), told_otherwise] {
+        let (status, answer) = world.call("POST", "/portfolio/trades", Some(again)).await;
+        assert_eq!(status, StatusCode::OK, "{answer}");
+        assert_eq!(answer["id"], first["id"]);
+        assert_eq!(number(&answer["quantity"]), decimal("0.01"));
+        assert_eq!(number(&answer["money"]), decimal("-601"), "the trade is answered whole");
+    }
+    assert_eq!(world.cash().await, decimal("399"), "the money was booked once");
+
+    // Two requests racing under one key are one trade: the second waits for
+    // the first and answers it.
+    let racing = keyed(buy(world.exchange, world.btc, "0.005", "60000", "0", 12), "import:18");
+    let (one, two) = tokio::join!(
+        call(world.app(), world.owner, "POST", "/portfolio/trades", Some(racing.clone())),
+        call(world.app(), world.owner, "POST", "/portfolio/trades", Some(racing)),
+    );
+    let mut statuses = [one.0, two.0];
+    statuses.sort_unstable();
+    assert_eq!(statuses, [StatusCode::OK, StatusCode::CREATED], "{} / {}", one.1, two.1);
+    assert_eq!(one.1["id"], two.1["id"]);
+    assert_eq!(world.cash().await, decimal("99"));
+
+    // Saying what a trade is now keeps the name it was recorded under.
+    let id = first["id"].as_str().expect("an id");
+    let (status, changed) = world
+        .call(
+            "PUT",
+            &format!("/portfolio/trades/{id}"),
+            Some(buy(world.exchange, world.btc, "0.01", "59000", "1", 10)),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    assert_eq!(changed["idempotency_key"], "import:17");
+
+    // A key is a name: not nothing, and not a page of text.
+    for key in ["  ".to_owned(), "k".repeat(201)] {
+        let (status, refused) = world
+            .call(
+                "POST",
+                "/portfolio/trades",
+                Some(keyed(buy(world.exchange, world.btc, "0.001", "60000", "0", 13), &key)),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    }
+    let (_, trades) = world.call("GET", "/portfolio/trades", None).await;
+    assert_eq!(trades.as_array().expect("trades").len(), 2);
+}
+
+#[tokio::test]
+async fn a_snapshot_named_by_a_key_is_taken_once() {
+    let Some(world) = World::new("portfolio_keyed_snapshot").await else { return };
+    world.trade(buy(world.exchange, world.btc, "0.01", "60000", "0", 10)).await;
+
+    let body = json!({ "currency": "USDT", "on": "2026-10-20", "note": "as 2025 saw it", "idempotency_key": "import:snapshot:4" });
+    let (status, taken) = world.call("POST", "/portfolio/snapshots", Some(body)).await;
+    assert_eq!(status, StatusCode::CREATED, "{taken}");
+    assert_eq!(taken["idempotency_key"], "import:snapshot:4");
+
+    // Again, later, of another day: the one taken under the key, as taken.
+    let again = json!({ "currency": "USDT", "note": "again", "idempotency_key": "import:snapshot:4" });
+    let (status, answer) = world.call("POST", "/portfolio/snapshots", Some(again)).await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer["id"], taken["id"]);
+    assert_eq!(answer["note"], "as 2025 saw it");
+    assert_eq!(answer["on"], "2026-10-20");
+    let (_, listed) = world.call("GET", "/portfolio/snapshots", None).await;
+    assert_eq!(listed.as_array().expect("snapshots").len(), 1);
+
+    let (status, _) = world.call("POST", "/portfolio/snapshots", Some(json!({ "idempotency_key": "" }))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn the_keys_roll_back_only_when_none_would_be_lost() {
+    /// The version before the keys.
+    const BEFORE_KEYS: i64 = 20_261_026_120_001;
+    let Some(world) = World::new("portfolio_keys_migrate").await else { return };
+
+    // A trade of the previous form, written as the previous release wrote it:
+    // the keys arrive over it, and it reads as recorded without one.
+    austeris_common::migrate::undo(&world.pool, &MIGRATOR, BEFORE_KEYS)
+        .await
+        .expect("rolling back the keys");
+    let mut transaction = Actor::Person(world.owner).begin(&world.pool).await.expect("a transaction");
+    sqlx::query(
+        "INSERT INTO trades (owner_id, kind, account_id, instrument_id, quantity, price, currency, occurred_at, occurred_on, entry_id)
+         VALUES ($1, 'buy', $2, $3, 0.01, 60000, 'USDT', now(), current_date, $4)",
+    )
+    .bind(world.owner)
+    .bind(world.exchange)
+    .bind(world.btc)
+    .bind(Uuid::new_v4())
+    .execute(&mut *transaction)
+    .await
+    .expect("a trade of the previous form");
+    transaction.commit().await.expect("committing it");
+    austeris_common::migrate::run(&world.pool, &MIGRATOR).await.expect("migrating over a trade");
+    let (_, trades) = world.call("GET", "/portfolio/trades", None).await;
+    assert_eq!(trades[0]["idempotency_key"], Value::Null, "{trades}");
+    assert_eq!(number(&trades[0]["quantity"]), decimal("0.01"));
+
+    // A key recorded is what a rollback would lose.
+    world.trade(keyed(buy(world.exchange, world.btc, "0.01", "60000", "0", 11), "import:1")).await;
+    let error = austeris_common::migrate::undo(&world.pool, &MIGRATOR, BEFORE_KEYS)
+        .await
+        .expect_err("rolled back over a key");
+    assert!(format!("{error:#}").contains("idempotency keys"), "{error:#}");
+}
+
 #[tokio::test]
 async fn a_form_saved_untouched_is_no_change() {
     let Some(world) = World::new("portfolio_untouched").await else { return };

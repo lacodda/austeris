@@ -282,18 +282,64 @@ fn holding_account(accounts: &[Account], id: Uuid) -> Result<&Account, Refused> 
     Ok(account)
 }
 
-/// Records a trade, and books its money.
+/// What recording a trade came to.
+#[derive(Debug, Clone)]
+pub enum Recorded {
+    /// It is recorded now, and its money booked.
+    New(Trade),
+    /// It was recorded before, under the key it was named by now; it is
+    /// answered as it is.
+    Already(Trade),
+}
+
+/// The longest key a client may name a record by.
+const KEY_LENGTH: usize = 200;
+
+/// The key a client names a record by, trimmed; `None` when it named none.
+///
+/// # Errors
+///
+/// Returns [`Refused::Malformed`] when the key is empty or too long.
+pub fn idempotency_key(said: Option<&str>) -> Result<Option<&str>, Refused> {
+    match said.map(str::trim) {
+        None => Ok(None),
+        Some("") => Err(Refused::Malformed("an idempotency key is not empty")),
+        Some(key) if key.chars().count() > KEY_LENGTH => Err(Refused::Malformed("an idempotency key is 200 characters at most")),
+        Some(key) => Ok(Some(key)),
+    }
+}
+
+/// Records a trade, and books its money - or, named by a key a trade was
+/// recorded under before, answers that one.
 ///
 /// # Errors
 ///
 /// Returns [`Refused`] when the trade is not one this person can make, or the
 /// ledger or the market does not answer.
-pub async fn record<B: Books, M: Market>(pool: &PgPool, books: &B, market: &M, owner: Uuid, body: &TradeBody) -> Result<Trade, Refused> {
+pub async fn record<B: Books, M: Market>(pool: &PgPool, books: &B, market: &M, owner: Uuid, body: &TradeBody, key: Option<&str>) -> Result<Recorded, Refused> {
+    let key = idempotency_key(key)?;
+    if let Some(key) = key
+        && let Some(found) = repository::trade_by_key(pool, owner, key).await?
+    {
+        return Ok(Recorded::Already(with_money(found)));
+    }
+
     let Checked { trade: new, instrument } = check(books, market, owner, body).await?;
     let mut transaction = Actor::Person(owner).begin(pool).await?;
-    let mut trade = repository::insert_trade(&mut transaction, owner, &new)
-        .await
-        .map_err(|error| oversold_or(error, &instrument.symbol))?;
+    let inserted = repository::insert_trade(&mut transaction, owner, &new, key).await;
+    let mut trade = match (inserted, key) {
+        (Ok(trade), _) => trade,
+        // Recorded under the same key a moment ago, by a request racing this
+        // one: the unique index waited for it, and it is the answer.
+        (Err(error), Some(key)) if repository::key_taken(&error, repository::TRADE_KEY_TAKEN) => {
+            drop(transaction);
+            let found = repository::trade_by_key(pool, owner, key)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("a trade's key was taken and then not found"))?;
+            return Ok(Recorded::Already(with_money(found)));
+        }
+        (Err(error), _) => return Err(oversold_or(error, &instrument.symbol)),
+    };
 
     let leg = Leg::of(&trade, &instrument.symbol);
     if let Some(leg) = &leg {
@@ -304,11 +350,11 @@ pub async fn record<B: Books, M: Market>(pool: &PgPool, books: &B, market: &M, o
 
     if let Err(error) = transaction.commit().await {
         if leg.is_some() {
-            undo(books.withdraw(owner, &key(trade.id)).await.map(|_| ()), trade.id);
+            undo(books.withdraw(owner, &self::key(trade.id)).await.map(|_| ()), trade.id);
         }
         return Err(anyhow::Error::new(error).context("recording a trade").into());
     }
-    Ok(with_money(trade))
+    Ok(Recorded::New(with_money(trade)))
 }
 
 /// Says what a trade is now, and restates its money.

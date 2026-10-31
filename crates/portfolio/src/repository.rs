@@ -41,19 +41,36 @@ pub struct NewTrade {
 }
 
 /// The columns a trade is read with.
-const TRADE_COLUMNS: &str =
-    "id, kind, account_id, to_account_id, instrument_id, quantity, price, currency, fee, occurred_at, occurred_on, note, entry_id, created_at, updated_at";
+const TRADE_COLUMNS: &str = "id, kind, account_id, to_account_id, instrument_id, quantity, price, currency, fee, occurred_at, occurred_on, note, entry_id, \
+                             idempotency_key, created_at, updated_at";
 
-/// Writes a new trade.
+/// The constraint that says a trade's idempotency key is taken.
+pub const TRADE_KEY_TAKEN: &str = "trades_owner_idempotency_key";
+
+/// The constraint that says a snapshot's idempotency key is taken.
+pub const SNAPSHOT_KEY_TAKEN: &str = "snapshots_owner_idempotency_key";
+
+/// Whether an error is the schema saying a key is already taken, by the
+/// constraint named.
+#[must_use]
+pub fn key_taken(error: &anyhow::Error, constraint: &str) -> bool {
+    error
+        .chain()
+        .filter_map(|cause| cause.downcast_ref::<sqlx::Error>())
+        .filter_map(|error| error.as_database_error())
+        .any(|db| db.constraint() == Some(constraint))
+}
+
+/// Writes a new trade, under the key its client named it by when there is one.
 ///
 /// # Errors
 ///
 /// Returns an error when a rule of the schema refuses it - a position below
-/// nothing - or the write fails.
-pub async fn insert_trade(transaction: &mut Transaction<'_, Postgres>, owner_id: Uuid, new: &NewTrade) -> Result<Trade> {
+/// nothing, a key already taken - or the write fails.
+pub async fn insert_trade(transaction: &mut Transaction<'_, Postgres>, owner_id: Uuid, new: &NewTrade, key: Option<&str>) -> Result<Trade> {
     sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "INSERT INTO trades (owner_id, kind, account_id, to_account_id, instrument_id, quantity, price, currency, fee, occurred_at, occurred_on, note)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        "INSERT INTO trades (owner_id, kind, account_id, to_account_id, instrument_id, quantity, price, currency, fee, occurred_at, occurred_on, note, idempotency_key)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
          RETURNING {TRADE_COLUMNS}"
     )))
     .bind(owner_id)
@@ -68,9 +85,26 @@ pub async fn insert_trade(transaction: &mut Transaction<'_, Postgres>, owner_id:
     .bind(new.occurred_at)
     .bind(new.occurred_on)
     .bind(&new.note)
+    .bind(key)
     .fetch_one(&mut **transaction)
     .await
     .context("recording a trade")
+}
+
+/// The trade of this person's recorded under a key.
+///
+/// # Errors
+///
+/// Returns an error when the query fails.
+pub async fn trade_by_key(pool: &PgPool, owner_id: Uuid, key: &str) -> Result<Option<Trade>> {
+    sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT {TRADE_COLUMNS} FROM trades WHERE owner_id = $1 AND idempotency_key = $2"
+    )))
+    .bind(owner_id)
+    .bind(key)
+    .fetch_optional(pool)
+    .await
+    .context("finding a trade by its key")
 }
 
 /// Says what a trade is now.
@@ -297,23 +331,26 @@ pub async fn history(pool: &PgPool, owner_id: Uuid, id: Uuid) -> Result<Option<V
     ))
 }
 
-/// Keeps a valuation as a snapshot.
+/// Keeps a valuation as a snapshot, under the key its client named it by when
+/// there is one.
 ///
 /// # Errors
 ///
-/// Returns an error when a write fails.
-pub async fn save_snapshot(pool: &PgPool, owner_id: Uuid, valuation: &Valuation, note: &str) -> Result<Snapshot> {
+/// Returns an error when a write fails, or the key is already taken.
+pub async fn save_snapshot(pool: &PgPool, owner_id: Uuid, valuation: &Valuation, note: &str, key: Option<&str>) -> Result<Snapshot> {
     let mut transaction = pool.begin().await.context("opening a transaction")?;
-    let (id, taken_at): (Uuid, DateTime<Utc>) =
-        sqlx::query_as("INSERT INTO snapshots (owner_id, on_date, priced_at, currency, note) VALUES ($1, $2, $3, $4, $5) RETURNING id, taken_at")
-            .bind(owner_id)
-            .bind(valuation.on)
-            .bind(valuation.at)
-            .bind(&valuation.currency)
-            .bind(note)
-            .fetch_one(&mut *transaction)
-            .await
-            .context("taking a snapshot")?;
+    let (id, taken_at): (Uuid, DateTime<Utc>) = sqlx::query_as(
+        "INSERT INTO snapshots (owner_id, on_date, priced_at, currency, note, idempotency_key) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, taken_at",
+    )
+    .bind(owner_id)
+    .bind(valuation.on)
+    .bind(valuation.at)
+    .bind(&valuation.currency)
+    .bind(note)
+    .bind(key)
+    .fetch_one(&mut *transaction)
+    .await
+    .context("taking a snapshot")?;
     for account in &valuation.accounts {
         for holding in &account.holdings {
             sqlx::query(
@@ -342,8 +379,27 @@ pub async fn save_snapshot(pool: &PgPool, owner_id: Uuid, valuation: &Valuation,
         id,
         note: note.to_owned(),
         taken_at,
+        idempotency_key: key.map(ToOwned::to_owned),
         valuation: valuation.clone(),
     })
+}
+
+/// The snapshot of this person's taken under a key.
+///
+/// # Errors
+///
+/// Returns an error when a query fails.
+pub async fn snapshot_by_key(pool: &PgPool, owner_id: Uuid, key: &str) -> Result<Option<Snapshot>> {
+    let id: Option<Uuid> = sqlx::query_scalar("SELECT id FROM snapshots WHERE owner_id = $1 AND idempotency_key = $2")
+        .bind(owner_id)
+        .bind(key)
+        .fetch_optional(pool)
+        .await
+        .context("finding a snapshot by its key")?;
+    match id {
+        Some(id) => snapshot(pool, owner_id, id).await,
+        None => Ok(None),
+    }
 }
 
 /// A person's snapshots, the latest moment first.
@@ -416,7 +472,7 @@ struct SnapshotLine {
 /// Returns an error when a query fails.
 pub async fn snapshot(pool: &PgPool, owner_id: Uuid, id: Uuid) -> Result<Option<Snapshot>> {
     let Some(header): Option<SnapshotHeader> =
-        sqlx::query_as("SELECT on_date, priced_at, currency, note, taken_at FROM snapshots WHERE owner_id = $1 AND id = $2")
+        sqlx::query_as("SELECT on_date, priced_at, currency, note, taken_at, idempotency_key FROM snapshots WHERE owner_id = $1 AND id = $2")
             .bind(owner_id)
             .bind(id)
             .fetch_optional(pool)
@@ -459,6 +515,7 @@ pub async fn snapshot(pool: &PgPool, owner_id: Uuid, id: Uuid) -> Result<Option<
         id,
         note: header.note,
         taken_at: header.taken_at,
+        idempotency_key: header.idempotency_key,
         valuation,
     }))
 }
@@ -471,6 +528,7 @@ struct SnapshotHeader {
     currency: String,
     note: String,
     taken_at: DateTime<Utc>,
+    idempotency_key: Option<String>,
 }
 
 /// Deletes a snapshot.

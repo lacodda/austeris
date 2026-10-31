@@ -66,10 +66,29 @@ pub struct Trade {
     #[serde(with = "rust_decimal::serde::str_option")]
     #[schema(value_type = Option<String>, example = "-601")]
     pub money: Option<Decimal>,
+    /// The name the client that recorded it gave it - an import's, for what
+    /// it brought - so bringing it again is the same trade. Nothing for one
+    /// recorded without.
+    #[schema(example = "austeris-2025:transaction:17")]
+    pub idempotency_key: Option<String>,
     /// When it was first recorded.
     pub created_at: DateTime<Utc>,
     /// When it was last changed.
     pub updated_at: DateTime<Utc>,
+}
+
+/// A trade being recorded: what it is, and the name the client gives it.
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
+pub struct NewTradeBody {
+    /// What the trade is.
+    #[serde(flatten)]
+    pub trade: TradeBody,
+    /// A name of the client's choosing, unique among the person's trades:
+    /// recording under a name already used answers the trade recorded under
+    /// it, as it is, rather than recording a second. What an import names
+    /// what it brings by, so a file read twice is read once.
+    #[schema(example = "austeris-2025:transaction:17")]
+    pub idempotency_key: Option<String>,
 }
 
 /// A trade as a person states it - recording one, or saying what one is now.
@@ -214,6 +233,9 @@ pub struct Snapshot {
     pub note: String,
     /// When it was taken - which may be long after the moment it shows.
     pub taken_at: DateTime<Utc>,
+    /// The name the client that took it gave it, so taking it again is the
+    /// same snapshot. Nothing for one taken without.
+    pub idempotency_key: Option<String>,
     /// What it shows.
     #[serde(flatten)]
     pub valuation: Valuation,

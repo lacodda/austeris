@@ -16,13 +16,13 @@ use uuid::Uuid;
 
 use crate::MIGRATOR;
 use crate::model::{
-    AccountValue, Comparison, Difference, Holding, LineKind, Position, RevisionAction, Snapshot, SnapshotSummary, Trade, TradeBody, TradeKind, TradeRevision,
-    TradeState, Valuation, Who, WhoKind,
+    AccountValue, Comparison, Difference, Holding, LineKind, NewTradeBody, Position, RevisionAction, Snapshot, SnapshotSummary, Trade, TradeBody, TradeKind,
+    TradeRevision, TradeState, Valuation, Who, WhoKind,
 };
 use crate::repository::{self, TradeFilter};
 use crate::services::{Books, Market};
 use crate::snapshot;
-use crate::trade::{self, Refused};
+use crate::trade::{self, Recorded, Refused};
 use crate::value::{self, Unvalued};
 
 /// What every handler is handed: this service's pool, the ledger and the
@@ -94,13 +94,18 @@ async fn list_trades<B: Books + Clone + 'static, M: Market + Clone + 'static>(
 /// or came back from, which no report of spending counts. A transfer moves
 /// units to another such account and no money; its fee is in units, as a
 /// network takes it.
+///
+/// Named by an `idempotency_key` a trade was recorded under before, it records
+/// nothing and answers that trade as it is, with `200`: an import read twice,
+/// or a request retried after its answer was lost, is one trade.
 #[utoipa::path(
     post,
     path = "/api/v1/portfolio/trades",
     tag = "portfolio",
-    request_body = TradeBody,
+    request_body = NewTradeBody,
     responses(
         (status = 201, description = "The trade, its money booked", body = Trade),
+        (status = 200, description = "A trade was recorded under that key before; this is it", body = Trade),
         (status = 400, description = "Not a trade this account, instrument or fee allows", body = austeris_common::error::ErrorBody),
         (status = 409, description = "It would sell or send more than was held at the time", body = austeris_common::error::ErrorBody),
         (status = 503, description = "The ledger or the market did not answer; nothing was recorded", body = austeris_common::error::ErrorBody),
@@ -109,12 +114,22 @@ async fn list_trades<B: Books + Clone + 'static, M: Market + Clone + 'static>(
 async fn create_trade<B: Books + Clone + 'static, M: Market + Clone + 'static>(
     State(state): State<Portfolio<B, M>>,
     caller: Caller,
-    Json(body): Json<TradeBody>,
+    Json(body): Json<NewTradeBody>,
 ) -> AppResult<(StatusCode, Json<Trade>)> {
-    let trade = trade::record(&state.pool, &state.books, &state.market, caller.id(), &body)
-        .await
-        .map_err(refused)?;
-    Ok((StatusCode::CREATED, Json(trade)))
+    let recorded = trade::record(
+        &state.pool,
+        &state.books,
+        &state.market,
+        caller.id(),
+        &body.trade,
+        body.idempotency_key.as_deref(),
+    )
+    .await
+    .map_err(refused)?;
+    Ok(match recorded {
+        Recorded::New(trade) => (StatusCode::CREATED, Json(trade)),
+        Recorded::Already(trade) => (StatusCode::OK, Json(trade)),
+    })
 }
 
 #[utoipa::path(
@@ -311,10 +326,18 @@ pub struct SnapshotBody {
     /// What to write on it.
     #[serde(default)]
     pub note: String,
+    /// A name of the client's choosing, unique among the person's snapshots:
+    /// taking one under a name already used answers the snapshot taken under
+    /// it, as it was taken, rather than taking a second.
+    #[schema(example = "austeris-2025:snapshot:4")]
+    pub idempotency_key: Option<String>,
 }
 
 /// Takes a snapshot: the portfolio as it is now, or was on a day, kept as it
 /// is - what it held, at what price, worth how much.
+///
+/// Named by an `idempotency_key` a snapshot was taken under before, it takes
+/// nothing and answers that snapshot, with `200`.
 #[utoipa::path(
     post,
     path = "/api/v1/portfolio/snapshots",
@@ -322,7 +345,8 @@ pub struct SnapshotBody {
     request_body = SnapshotBody,
     responses(
         (status = 201, description = "The snapshot", body = Snapshot),
-        (status = 400, description = "The currency is not a code, or the day has not happened", body = austeris_common::error::ErrorBody),
+        (status = 200, description = "A snapshot was taken under that key before; this is it", body = Snapshot),
+        (status = 400, description = "The currency is not a code, the day has not happened, or the key is empty", body = austeris_common::error::ErrorBody),
         (status = 503, description = "The ledger or the market did not answer; nothing was taken", body = austeris_common::error::ErrorBody),
     ),
 )]
@@ -331,13 +355,30 @@ async fn take_snapshot<B: Books + Clone + 'static, M: Market + Clone + 'static>(
     caller: Caller,
     Json(body): Json<SnapshotBody>,
 ) -> AppResult<(StatusCode, Json<Snapshot>)> {
+    let key = trade::idempotency_key(body.idempotency_key.as_deref()).map_err(refused)?;
+    if let Some(key) = key
+        && let Some(taken) = repository::snapshot_by_key(&state.pool, caller.id(), key).await?
+    {
+        return Ok((StatusCode::OK, Json(taken)));
+    }
+
     let currency = currency(body.currency.as_deref())?;
     let on = snapshot::day(body.on).map_err(|why| AppError::bad_request(anyhow::anyhow!(why)))?;
     let valuation = value::valuation(&state.pool, &state.books, &state.market, caller.id(), on, &currency)
         .await
         .map_err(unvalued)?;
-    let taken = repository::save_snapshot(&state.pool, caller.id(), &valuation, body.note.trim()).await?;
-    Ok((StatusCode::CREATED, Json(taken)))
+    match repository::save_snapshot(&state.pool, caller.id(), &valuation, body.note.trim(), key).await {
+        Ok(taken) => Ok((StatusCode::CREATED, Json(taken))),
+        // Taken under the same key a moment ago, by a request racing this one.
+        Err(error) if repository::key_taken(&error, repository::SNAPSHOT_KEY_TAKEN) => {
+            let key = key.unwrap_or_default();
+            let taken = repository::snapshot_by_key(&state.pool, caller.id(), key)
+                .await?
+                .ok_or_else(|| AppError::internal(anyhow::anyhow!("a snapshot's key was taken and then not found")))?;
+            Ok((StatusCode::OK, Json(taken)))
+        }
+        Err(error) => Err(error.into()),
+    }
 }
 
 /// What a snapshot is set beside.
@@ -477,6 +518,7 @@ fn unvalued(error: Unvalued) -> AppError {
         Trade,
         TradeKind,
         TradeBody,
+        NewTradeBody,
         TradeRevision,
         TradeState,
         RevisionAction,
