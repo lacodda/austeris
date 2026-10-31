@@ -717,3 +717,90 @@ async fn a_price_said_by_hand_is_the_latest_and_goes_stale_like_any() {
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn a_history_brought_from_elsewhere_is_recorded_whole_under_its_name() {
+    let Some(pool) = pool("test_market_brought").await else { return };
+    let btc = repository::upsert_instrument(&pool, Kind::Crypto, "BTC", "Bitcoin", Some(8)).await.unwrap();
+    let eth = repository::upsert_instrument(&pool, Kind::Crypto, "ETH", "Ethereum", Some(18)).await.unwrap();
+    let history = serde_json::json!({
+        "source": "austeris-2025",
+        "prices": [
+            { "instrument_id": btc.id, "price": "84123.456789012345678", "currency": "usd", "observed_at": "2025-03-05T12:00:00Z" },
+            { "instrument_id": btc.id, "price": "86000", "currency": "USD", "observed_at": "2025-03-06T12:00:00Z" },
+            // The same moment twice in one call: the later word counts.
+            { "instrument_id": btc.id, "price": "1", "currency": "USD", "observed_at": "2025-03-07T12:00:00Z" },
+            { "instrument_id": btc.id, "price": "87000", "currency": "USD", "observed_at": "2025-03-07T12:00:00Z" },
+            { "instrument_id": eth.id, "price": "2200.5", "currency": "USD", "observed_at": "2025-03-05T12:00:00Z" },
+        ]
+    });
+    let (status, body) = call(&pool, "POST", "/market/prices", Some(&history.to_string())).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&body).unwrap()["recorded"], 4);
+
+    // Every digit, under the name it was brought under, and found "as of" a
+    // moment like any price.
+    let then = Utc.with_ymd_and_hms(2025, 3, 5, 18, 0, 0).unwrap();
+    let price = repository::price_at(&pool, btc.id, "USD", then).await.unwrap().expect("a price then");
+    assert_eq!(price.price, decimal("84123.456789012345678"));
+    assert_eq!(price.source, "austeris-2025");
+    let later = Utc.with_ymd_and_hms(2025, 3, 8, 0, 0, 0).unwrap();
+    assert_eq!(
+        repository::price_at(&pool, btc.id, "USD", later).await.unwrap().expect("a price").price,
+        decimal("87000")
+    );
+
+    // Brought again, corrected: the same observations, not a second set.
+    let corrected = serde_json::json!({ "source": "austeris-2025", "prices": [
+        { "instrument_id": btc.id, "price": "86500", "currency": "USD", "observed_at": "2025-03-06T12:00:00Z" },
+    ]});
+    let (status, _) = call(&pool, "POST", "/market/prices", Some(&corrected.to_string())).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let window = repository::price_history(
+        &pool,
+        btc.id,
+        "USD",
+        Utc.with_ymd_and_hms(2025, 3, 1, 0, 0, 0).unwrap(),
+        Utc.with_ymd_and_hms(2025, 3, 31, 0, 0, 0).unwrap(),
+    )
+    .await
+    .unwrap();
+    let prices: Vec<Decimal> = window.iter().map(|price| price.price.normalize()).collect();
+    assert_eq!(prices, [decimal("84123.456789012345678"), decimal("86500"), decimal("87000")]);
+
+    // All or nothing: one bad price, and none of the call is recorded.
+    let one_bad = |source: &str, price: &str, currency: &str, at: &str, instrument: Uuid| {
+        serde_json::json!({ "source": source, "prices": [
+            { "instrument_id": eth.id, "price": "2300", "currency": "USD", "observed_at": "2025-04-01T12:00:00Z" },
+            { "instrument_id": instrument, "price": price, "currency": currency, "observed_at": at },
+        ]})
+        .to_string()
+    };
+    for (body, why) in [
+        (one_bad("austeris-2025", "0", "USD", "2025-04-02T00:00:00Z", btc.id), "a price of nothing"),
+        (
+            one_bad("austeris-2025", "5", "dollars", "2025-04-02T00:00:00Z", btc.id),
+            "a currency that is not a code",
+        ),
+        (
+            one_bad("austeris-2025", "5", "USD", "2999-01-01T00:00:00Z", btc.id),
+            "a moment that has not happened",
+        ),
+        (
+            one_bad("austeris-2025", "5", "USD", "2025-04-02T00:00:00Z", Uuid::new_v4()),
+            "an instrument nobody knows",
+        ),
+        // A live source's history is only what it said.
+        (one_bad("coinmarketcap", "5", "USD", "2025-04-02T00:00:00Z", btc.id), "a live source's name"),
+        (one_bad("Old Tracker", "5", "USD", "2025-04-02T00:00:00Z", btc.id), "a name that is not one"),
+        (r#"{"source":"austeris-2025","prices":[]}"#.to_owned(), "nothing at all"),
+    ] {
+        let (status, answer) = call(&pool, "POST", "/market/prices", Some(&body)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{why} was recorded: {answer}");
+    }
+    let april = repository::price_at(&pool, eth.id, "USD", Utc.with_ymd_and_hms(2025, 4, 30, 0, 0, 0).unwrap())
+        .await
+        .unwrap()
+        .expect("March's price");
+    assert_eq!(april.price, decimal("2200.5"), "part of a refused call was recorded");
+}

@@ -134,6 +134,61 @@ pub async fn record_price(
     Ok(())
 }
 
+/// A price about to be recorded with others.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Observation {
+    /// What was priced.
+    pub instrument_id: Uuid,
+    /// What it is quoted in.
+    pub quote_currency: String,
+    /// When it was observed.
+    pub observed_at: DateTime<Utc>,
+    /// The price.
+    pub price: rust_decimal::Decimal,
+}
+
+/// Records several prices under one source, all or none. An observation
+/// already recorded - the same instrument, currency, moment and source - takes
+/// the price given now; of two such in one call, the later one counts.
+///
+/// # Errors
+///
+/// Returns an error when the insert fails.
+pub async fn record_prices(pool: &PgPool, observations: &[Observation], source: &str) -> Result<usize> {
+    // One row per key: an upsert touching the same row twice in one statement
+    // is refused by PostgreSQL, so the duplicates are settled here, the later
+    // one winning as it would have in two calls.
+    let mut unique: std::collections::BTreeMap<(Uuid, &str, DateTime<Utc>), rust_decimal::Decimal> = std::collections::BTreeMap::new();
+    for observation in observations {
+        unique.insert(
+            (observation.instrument_id, observation.quote_currency.as_str(), observation.observed_at),
+            observation.price,
+        );
+    }
+    let (mut ids, mut currencies, mut moments, mut prices) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for ((id, currency, at), price) in &unique {
+        ids.push(*id);
+        currencies.push((*currency).to_owned());
+        moments.push(*at);
+        prices.push(*price);
+    }
+    sqlx::query(
+        "INSERT INTO prices (instrument_id, quote_currency, observed_at, price, source)
+         SELECT id, currency, at, price, $5
+           FROM UNNEST($1::uuid[], $2::text[], $3::timestamptz[], $4::numeric[]) AS given (id, currency, at, price)
+         ON CONFLICT (instrument_id, quote_currency, observed_at, source) DO UPDATE SET price = EXCLUDED.price",
+    )
+    .bind(&ids)
+    .bind(&currencies)
+    .bind(&moments)
+    .bind(&prices)
+    .bind(source)
+    .execute(pool)
+    .await
+    .context("recording prices")?;
+    Ok(unique.len())
+}
+
 /// The price of an instrument at an instant, from the highest-priority source
 /// that has one.
 ///

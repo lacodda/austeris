@@ -46,7 +46,7 @@ pub fn router(pool: PgPool, sources: Arc<Sources>, ledger: Option<Ledger>) -> Ro
         .route("/market/instruments/{id}", get(read_instrument))
         .route("/market/instruments/{id}/sources", post(bind_source))
         .route("/market/instruments/{id}/prices", post(record_price))
-        .route("/market/prices", get(latest_prices))
+        .route("/market/prices", get(latest_prices).post(record_prices))
         .route("/market/prices/{id}/history", get(price_history))
         .route("/market/prices/refresh", post(refresh_prices))
         .route("/market/sources", get(list_sources))
@@ -220,6 +220,133 @@ async fn record_price(State(state): State<ServiceState>, Path(id): Path<Uuid>, J
         })
         .ok_or_else(|| AppError::internal(anyhow::anyhow!("the price of {} vanished once recorded", instrument.symbol)))?;
     Ok((StatusCode::CREATED, Json(latest)))
+}
+
+/// One price of a history brought from elsewhere.
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct ObservedPrice {
+    /// What was priced.
+    pub instrument_id: Uuid,
+    /// What one unit was worth, as a decimal string.
+    #[serde(with = "rust_decimal::serde::str")]
+    #[schema(value_type = String, example = "84123.45")]
+    pub price: rust_decimal::Decimal,
+    /// What it was worth it in: `USD`, `EUR`, `USDT`.
+    pub currency: String,
+    /// When it was worth that.
+    pub observed_at: DateTime<Utc>,
+}
+
+/// A history of prices brought from elsewhere, all from one place.
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct PriceHistory {
+    /// Where they came from, as the prices will say: `manual` for prices a
+    /// person states, or the name of what they were brought from, such as
+    /// `austeris-2025`. Lowercase letters, digits and dashes - and never the
+    /// name of a source this installation asks itself, whose prices are only
+    /// what it said.
+    #[schema(example = "austeris-2025")]
+    pub source: String,
+    /// The prices; five thousand at most in one call.
+    pub prices: Vec<ObservedPrice>,
+}
+
+/// What recording a history did.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct RecordedPrices {
+    /// How many observations are recorded: one per instrument, currency and
+    /// moment, whether new or a correction of one recorded before.
+    pub recorded: usize,
+}
+
+/// The most prices one call records.
+const MOST_PRICES: usize = 5_000;
+
+/// Records a history of prices observed elsewhere: a tracker used before, a
+/// file of closing prices.
+///
+/// Recorded under the name of where they came from, all or none, and like any
+/// other price - the newest is the latest, whoever said it; the price at a
+/// moment is the newest not after it. Recording the same instrument,
+/// currency, moment and source again corrects the price rather than adding
+/// one, so a history brought twice is brought once.
+#[utoipa::path(
+    post,
+    path = "/api/v1/market/prices",
+    tag = "market",
+    request_body = PriceHistory,
+    responses(
+        (status = 201, description = "Recorded", body = RecordedPrices),
+        (status = 400, description = "The source's name is not one prices can be brought under, an instrument is unknown, a price is not positive, a currency is not a code, or a moment has not happened", body = austeris_common::error::ErrorBody),
+    ),
+)]
+async fn record_prices(State(state): State<ServiceState>, Json(history): Json<PriceHistory>) -> AppResult<(StatusCode, Json<RecordedPrices>)> {
+    let source = history.source.trim();
+    let well_formed = source.len() <= 40
+        && source.starts_with(|c: char| c.is_ascii_lowercase())
+        && source.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    if !well_formed {
+        return Err(AppError::bad_request(anyhow::anyhow!(
+            "`{}` is not a source's name; lowercase letters, digits and dashes, as in austeris-2025",
+            history.source
+        )));
+    }
+    // A live source's prices are what it said; its name on prices it never
+    // said would make its history, and its freshness, a lie.
+    if state.sources.names().contains(&source) {
+        return Err(AppError::bad_request(anyhow::anyhow!(
+            "{source} is a source this installation asks itself; record prices brought from elsewhere under another name"
+        )));
+    }
+    if history.prices.is_empty() {
+        return Err(AppError::bad_request(anyhow::anyhow!("there are no prices to record")));
+    }
+    if history.prices.len() > MOST_PRICES {
+        return Err(AppError::bad_request(anyhow::anyhow!(
+            "{} prices in one call; {MOST_PRICES} at most",
+            history.prices.len()
+        )));
+    }
+
+    let mut wanted: Vec<Uuid> = history.prices.iter().map(|price| price.instrument_id).collect();
+    wanted.sort_unstable();
+    wanted.dedup();
+    let known: std::collections::HashSet<Uuid> = repository::instruments_named(&state.pool, &wanted)
+        .await?
+        .into_iter()
+        .map(|instrument| instrument.id)
+        .collect();
+    if let Some(unknown) = wanted.iter().find(|id| !known.contains(id)) {
+        return Err(AppError::bad_request(anyhow::anyhow!("no such instrument: {unknown}")));
+    }
+
+    // A minute of grace for a clock on the caller's side running ahead.
+    let latest = Utc::now() + Duration::minutes(1);
+    let mut observations = Vec::with_capacity(history.prices.len());
+    for given in &history.prices {
+        if given.price <= rust_decimal::Decimal::ZERO {
+            return Err(AppError::bad_request(anyhow::anyhow!("a price is more than nothing")));
+        }
+        let currency = given.currency.trim().to_ascii_uppercase();
+        if !(3..=5).contains(&currency.len()) || !currency.chars().all(|c| c.is_ascii_uppercase()) {
+            return Err(AppError::bad_request(anyhow::anyhow!(
+                "`{}` is not a currency code; three letters, as in USD, or an exchange's ticker, as in USDT",
+                given.currency
+            )));
+        }
+        if given.observed_at > latest {
+            return Err(AppError::bad_request(anyhow::anyhow!("a price is of a moment that has happened")));
+        }
+        observations.push(repository::Observation {
+            instrument_id: given.instrument_id,
+            quote_currency: currency,
+            observed_at: given.observed_at,
+            price: given.price,
+        });
+    }
+
+    let recorded = repository::record_prices(&state.pool, &observations, source).await?;
+    Ok((StatusCode::CREATED, Json(RecordedPrices { recorded })))
 }
 
 /// Which instruments and currency a price query is about.
@@ -428,6 +555,7 @@ async fn list_sources(State(state): State<ServiceState>) -> AppResult<Json<Vec<S
         create_instrument,
         bind_source,
         record_price,
+        record_prices,
         sync_instruments,
         latest_prices,
         price_history,
@@ -442,6 +570,9 @@ async fn list_sources(State(state): State<ServiceState>) -> AppResult<Json<Vec<S
         NewInstrument,
         NewBinding,
         NewPrice,
+        ObservedPrice,
+        PriceHistory,
+        RecordedPrices,
         Synced,
         Refreshed,
         Failure,

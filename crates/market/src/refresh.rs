@@ -51,6 +51,13 @@ impl Sources {
         &self.coinmarketcap
     }
 
+    /// Names every source this service asks, switched on or not: the names
+    /// nothing else may record a price under.
+    #[must_use]
+    pub fn names(&self) -> [&'static str; 3] {
+        [self.coinmarketcap.name(), self.bcp.name(), self.cbr.name()]
+    }
+
     /// Names the sources that are switched on.
     #[must_use]
     pub fn available(&self) -> Vec<&'static str> {
