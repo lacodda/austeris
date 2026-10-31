@@ -88,6 +88,16 @@ The same holds for a trade changed or deleted - deleting a buy that a later
 sale sold from is refused - and for two sales sent at once: positions are added
 up one write at a time, so the second finds what the first left.
 
+**A trade can be named by its client.** `idempotency_key` - a name of the
+client's choosing, up to 200 characters, unique among your trades - makes
+recording it again the same trade: the answer is `200` with the trade recorded
+under that name, as it is, and nothing is booked twice, whatever the second
+request said. Two requests racing under one name are one trade. An import names
+what it brings this way, so a file read twice is read once
+([Moving from the 2025 tracker](/austeris/reference/legacy-import/)); a trade
+answers its name as `idempotency_key`, and keeps it when it is changed. A trade
+deleted is gone, name and all: recording under its name again records it anew.
+
 Other refusals, `400`, each with its code:
 
 | Code | Why |
@@ -188,7 +198,9 @@ entry has no time - so a day is what can be shown truthfully.
 Keeps a valuation as it is - what each account held, at what price, worth how
 much - of today, or of a day past (`on`). It reads the same after a trade of its
 time is corrected or a price revised. `201` with the snapshot: the valuation,
-with `id`, `note` and `taken_at`.
+with `id`, `note`, `taken_at` and `idempotency_key`. Named by an
+`idempotency_key` a snapshot was taken under before, it takes nothing and
+answers that one, `200`, as a trade does.
 
 ### `GET /api/v1/portfolio/snapshots`
 

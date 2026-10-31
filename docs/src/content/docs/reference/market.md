@@ -112,6 +112,31 @@ answer is the instrument's latest price in that currency, as
 `GET /api/v1/market/prices` gives it. `400` for a price of nothing or less, a
 currency that is not a code, or a moment that has not happened.
 
+### `POST /api/v1/market/prices`
+
+A history of prices observed elsewhere - a tracker used before, a file of
+closing prices - recorded under the name of where it came from:
+
+```json
+{
+  "source": "austeris-2025",
+  "prices": [
+    { "instrument_id": "…", "price": "84123.45", "currency": "USD", "observed_at": "2025-03-05T14:00:00Z" }
+  ]
+}
+```
+
+All or none, five thousand at most in one call; `201` with how many observations
+are `recorded`. They are prices like any other: the newest is the latest, the
+price at a moment is the newest not after it. One recorded again - the same
+instrument, currency, moment and source - is corrected rather than added, so a
+history brought twice is brought once. `source` is lowercase letters, digits
+and dashes, and never the name of a source this installation asks itself
+(`coinmarketcap`, `bcp`, `cbr`): their prices are only what they said. `400`
+for any price of nothing or less, a currency that is not a code, a moment that
+has not happened or an instrument nobody knows - and then nothing of the call
+is recorded.
+
 ### `GET /api/v1/market/prices/{id}/history`
 
 Every observation in a window, oldest first. Takes `?currency=`, `?from=` and

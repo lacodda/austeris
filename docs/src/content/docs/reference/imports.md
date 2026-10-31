@@ -212,7 +212,9 @@ farmacia.xml: in the books - Farmacia Central, 58000 PYG on 2026-10-19
 A path is a file, or a folder whose files are each one. `--from` names an
 account, `--for` a category - by name, or by path (`living/food`) when two share
 it. The same file again is the same document: what it waited for is said, and
-it is booked.
+it is booked. A file called `legacy` is `./legacy`: `austeris import legacy`
+brings in the 2025 tracker's records instead
+([Moving from the 2025 tracker](/austeris/reference/legacy-import/)).
 
 ## Which modules run
 
