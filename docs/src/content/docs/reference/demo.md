@@ -77,7 +77,8 @@ Everything it writes is marked with the source `demo`.
   everyone on an installation, and made-up prices must never reach real books.
   Start from an empty database to see it.
 - **Duplicate anything.** Each day's entries carry a key made from the day, and
-  accounts and categories are found by name before they are created; a trade
-  already recorded at its moment is not recorded again. Running it
-  again - or restarting with the flag still set - adds the days since the last
-  run and nothing else.
+  accounts and categories are found by name before they are created; each of
+  the fifteen trades is recorded under a key of its own, so it is recorded once
+  on the day the demo first ran and never again. Running it again - or
+  restarting with the flag still set - adds the days since the last run and
+  nothing else.

@@ -800,8 +800,10 @@ const WALLET: &str = "Cold wallet";
 /// trades on them - recorded through the portfolio module itself, so their
 /// money is booked as any trade's is - and one snapshot to compare with.
 ///
-/// Idempotent like the rest: a trade already recorded at its moment is not
-/// recorded again, and a snapshot is taken only when there is none.
+/// Idempotent like the rest: each planned trade is recorded under a key of its
+/// own, so a run on a later day - whose four months start a day later, and
+/// would put every trade a day later - finds it already there; and a snapshot
+/// is taken only when there is none.
 async fn portfolio(ledger_pool: &PgPool, market_pool: &PgPool, pool: &PgPool, owner: Uuid, first: NaiveDate, today: NaiveDate) -> Result<usize> {
     let books = Local(Arc::new(austeris_ledger::grpc::Service::in_process(ledger_pool.clone())));
     let prices = Local(Arc::new(austeris_market::grpc::Service::in_process(market_pool.clone())));
@@ -816,15 +818,6 @@ async fn portfolio(ledger_pool: &PgPool, market_pool: &PgPool, pool: &PgPool, ow
             .map(|instrument| instrument.id)
     };
 
-    let done = austeris_portfolio::repository::trades(
-        pool,
-        owner,
-        &austeris_portfolio::repository::TradeFilter {
-            limit: 500,
-            ..Default::default()
-        },
-    )
-    .await?;
     let mut recorded = 0;
     for plan in planned() {
         let day = first + Days::new(plan.after_days);
@@ -833,11 +826,7 @@ async fn portfolio(ledger_pool: &PgPool, market_pool: &PgPool, pool: &PgPool, ow
             bail!("the demo's {} is not in the market", plan.symbol);
         };
         let account_id = if plan.account == BROKER { broker } else { exchange };
-        if at > Utc::now()
-            || done
-                .iter()
-                .any(|trade| trade.account_id == account_id && trade.instrument_id == instrument_id && trade.occurred_at == at)
-        {
+        if at > Utc::now() {
             continue;
         }
         // The broker is in euros, the market's own; the exchange's money is
@@ -866,10 +855,19 @@ async fn portfolio(ledger_pool: &PgPool, market_pool: &PgPool, pool: &PgPool, ow
             occurred_at: at.fixed_offset(),
             note: String::new(),
         };
-        trade::record(pool, &books, &prices, owner, &body, None)
+        // Named by what it is in the plan, never by its day: the day moves.
+        let kind = match plan.kind {
+            TradeKind::Buy => "buy",
+            TradeKind::Sell => "sell",
+            TradeKind::Transfer => "transfer",
+        };
+        let key = format!("demo:trade:{}:{}:{kind}", plan.after_days, plan.symbol);
+        let done = trade::record(pool, &books, &prices, owner, &body, Some(&key))
             .await
             .map_err(|refused| anyhow::anyhow!("the demo's {} of {} was refused: {refused}", plan.symbol, day))?;
-        recorded += 1;
+        if matches!(done, trade::Recorded::New(_)) {
+            recorded += 1;
+        }
     }
 
     if austeris_portfolio::repository::snapshots(pool, owner).await?.is_empty() {
@@ -1022,6 +1020,22 @@ mod tests {
         let accounts: Vec<&str> = value.accounts.iter().map(|account| account.name.as_str()).collect();
         assert_eq!(accounts, ["Broker", "Coin exchange", "Cold wallet"]);
         assert_eq!(austeris_portfolio::repository::snapshots(portfolio, owner).await.expect("listing").len(), 1);
+
+        // A run on a later day starts its four months later, and would put
+        // every trade a day later: each is found by its key instead. Before
+        // the keys, every restart of the stand recorded fifteen more.
+        let tomorrow = Utc::now().date_naive() + chrono::Days::new(1);
+        let later = super::portfolio(
+            &books.ledger,
+            &books.market,
+            portfolio,
+            owner,
+            tomorrow - chrono::Days::new(super::DAYS),
+            tomorrow,
+        )
+        .await
+        .expect("a run a day later");
+        assert_eq!(later, 0, "a run on a later day recorded the trades again");
 
         // Who it pays, a tag per trip, and nothing held for longer than a bank
         // takes to post it.
