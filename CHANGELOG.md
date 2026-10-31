@@ -2,6 +2,23 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.15.0] - 2026-10-31
+
+### Bug Fixes
+- Pay the household enough to end a month above nothing
+- Record each planned trade once, whatever day the demo runs
+
+### Build
+- Take minimatch 11 under eslint, for GHSA-g3hv-75wg-m249
+
+### Documentation
+- Moving from the 2025 tracker, and the keys and prices it uses
+
+### Features
+- Name a trade or a snapshot by an idempotency key
+- Record a history of prices brought from elsewhere
+- Bring the 2025 tracker's records into the books
+
 ## [0.14.0] - 2026-10-26
 
 ### Bug Fixes
