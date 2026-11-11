@@ -149,7 +149,7 @@ pub async fn set_account_closed(pool: &PgPool, owner_id: Uuid, id: Uuid, closed:
 /// Returns an error when the query fails.
 pub async fn categories(pool: &PgPool, owner_id: Uuid) -> Result<Vec<Category>> {
     sqlx::query_as(
-        "SELECT id, parent_id, flow, name, purpose FROM categories WHERE owner_id = $1
+        "SELECT id, parent_id, flow, name, purpose, module FROM categories WHERE owner_id = $1
          ORDER BY flow, parent_id NULLS FIRST, lower(name)",
     )
     .bind(owner_id)
@@ -179,7 +179,7 @@ pub async fn category_by_name(pool: &PgPool, owner_id: Uuid, name: &str) -> Resu
     }
 
     let matches: Vec<Category> = if segments.len() == 1 {
-        sqlx::query_as("SELECT id, parent_id, flow, name, purpose FROM categories WHERE owner_id = $1 AND lower(name) = $2")
+        sqlx::query_as("SELECT id, parent_id, flow, name, purpose, module FROM categories WHERE owner_id = $1 AND lower(name) = $2")
             .bind(owner_id)
             .bind(&segments[0])
             .fetch_all(pool)
@@ -188,16 +188,16 @@ pub async fn category_by_name(pool: &PgPool, owner_id: Uuid, name: &str) -> Resu
     } else {
         sqlx::query_as(
             "WITH RECURSIVE walked AS (
-                 SELECT c.id, c.parent_id, c.flow, c.name, c.purpose, 1 AS depth
+                 SELECT c.id, c.parent_id, c.flow, c.name, c.purpose, c.module, 1 AS depth
                    FROM categories c
                   WHERE c.owner_id = $1 AND c.parent_id IS NULL AND lower(c.name) = ($2::text[])[1]
                  UNION ALL
-                 SELECT c.id, c.parent_id, c.flow, c.name, c.purpose, w.depth + 1
+                 SELECT c.id, c.parent_id, c.flow, c.name, c.purpose, c.module, w.depth + 1
                    FROM categories c
                    JOIN walked w ON c.parent_id = w.id
                   WHERE c.owner_id = $1 AND lower(c.name) = ($2::text[])[w.depth + 1]
              )
-             SELECT id, parent_id, flow, name, purpose FROM walked WHERE depth = array_length($2::text[], 1)",
+             SELECT id, parent_id, flow, name, purpose, module FROM walked WHERE depth = array_length($2::text[], 1)",
         )
         .bind(owner_id)
         .bind(&segments)
@@ -225,7 +225,7 @@ pub async fn category_by_name(pool: &PgPool, owner_id: Uuid, name: &str) -> Resu
 ///
 /// Returns an error when the query fails.
 pub async fn category_for(pool: &PgPool, owner_id: Uuid, purpose: Purpose) -> Result<Option<Category>> {
-    sqlx::query_as("SELECT id, parent_id, flow, name, purpose FROM categories WHERE owner_id = $1 AND purpose = $2")
+    sqlx::query_as("SELECT id, parent_id, flow, name, purpose, module FROM categories WHERE owner_id = $1 AND purpose = $2")
         .bind(owner_id)
         .bind(purpose)
         .fetch_optional(pool)
@@ -253,7 +253,7 @@ pub enum CategoryMatch {
 pub async fn create_category(pool: &PgPool, owner_id: Uuid, parent_id: Option<Uuid>, flow: Flow, name: &str) -> Result<Category> {
     sqlx::query_as(
         "INSERT INTO categories (owner_id, parent_id, flow, name) VALUES ($1, $2, $3, $4)
-         RETURNING id, parent_id, flow, name, purpose",
+         RETURNING id, parent_id, flow, name, purpose, module",
     )
     .bind(owner_id)
     .bind(parent_id)
@@ -278,7 +278,7 @@ pub async fn create_category(pool: &PgPool, owner_id: Uuid, parent_id: Option<Uu
 /// that is money coming in, which cannot hold fees, or when a write fails.
 pub async fn purpose_category(pool: &PgPool, owner_id: Uuid, purpose: Purpose) -> Result<Category> {
     let by_purpose = || async {
-        sqlx::query_as::<_, Category>("SELECT id, parent_id, flow, name, purpose FROM categories WHERE owner_id = $1 AND purpose = $2")
+        sqlx::query_as::<_, Category>("SELECT id, parent_id, flow, name, purpose, module FROM categories WHERE owner_id = $1 AND purpose = $2")
             .bind(owner_id)
             .bind(purpose)
             .fetch_optional(pool)
@@ -296,7 +296,7 @@ pub async fn purpose_category(pool: &PgPool, owner_id: Uuid, purpose: Purpose) -
     let created: Option<Category> = sqlx::query_as(
         "INSERT INTO categories (owner_id, parent_id, flow, name, purpose) VALUES ($1, NULL, $2, $3, $4)
          ON CONFLICT DO NOTHING
-         RETURNING id, parent_id, flow, name, purpose",
+         RETURNING id, parent_id, flow, name, purpose, module",
     )
     .bind(owner_id)
     .bind(purpose.flow())
@@ -314,8 +314,8 @@ pub async fn purpose_category(pool: &PgPool, owner_id: Uuid, purpose: Purpose) -
 
     let adopted: Option<Category> = sqlx::query_as(
         "UPDATE categories SET purpose = $4, updated_at = now()
-          WHERE owner_id = $1 AND parent_id IS NULL AND lower(name) = lower($3) AND flow = $2 AND purpose IS NULL
-          RETURNING id, parent_id, flow, name, purpose",
+          WHERE owner_id = $1 AND parent_id IS NULL AND lower(name) = lower($3) AND flow = $2 AND purpose IS NULL AND module IS NULL
+          RETURNING id, parent_id, flow, name, purpose, module",
     )
     .bind(owner_id)
     .bind(purpose.flow())
@@ -327,10 +327,127 @@ pub async fn purpose_category(pool: &PgPool, owner_id: Uuid, purpose: Purpose) -
 
     adopted.ok_or_else(|| {
         anyhow::anyhow!(
-            "a root category called `{}` is money coming in; rename it so the ledger can keep its own",
+            "a root category called `{}` is money coming in, or a module's; rename it so the ledger can keep its own",
             purpose.default_name()
         )
     })
+}
+
+/// A category a module files money under, as the module names it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModuleCategory {
+    /// The module: the name it signs its entries with.
+    pub module: String,
+    /// The module's own name for the category: `fees`.
+    pub key: String,
+    /// What it is called when it is made, before anyone renames it.
+    pub name: String,
+    /// Whether it is money in or out.
+    pub flow: Flow,
+}
+
+/// Why a module's category could not be had.
+#[derive(Debug, thiserror::Error)]
+#[error("a root category called `{name}` is {held}; rename it so {module} can keep a category of its own")]
+pub struct ModuleCategoryTaken {
+    /// The name the module suggested.
+    pub name: String,
+    /// The module.
+    pub module: String,
+    /// What the person's category by that name is instead.
+    pub held: &'static str,
+}
+
+/// The category a module files under, made on first use.
+///
+/// Found by the module and its key, so a person who renamed "Trading fees" or
+/// moved it under "Finance" still has their fees land in it. On first use it is
+/// made at the root under the name the module suggests - or, when the person
+/// already has a root category by that name and flow that nothing else keeps,
+/// that one is taken for it rather than a second made beside it.
+///
+/// # Errors
+///
+/// Returns [`ModuleCategoryTaken`] when the person's root category by that
+/// name is money the other way, or kept for something else, and an error when
+/// a write fails.
+pub async fn module_category(pool: &PgPool, owner_id: Uuid, wanted: &ModuleCategory) -> Result<Category> {
+    let kept = || async {
+        sqlx::query_as::<_, Category>(
+            "SELECT id, parent_id, flow, name, purpose, module FROM categories WHERE owner_id = $1 AND module = $2 AND module_key = $3",
+        )
+        .bind(owner_id)
+        .bind(&wanted.module)
+        .bind(&wanted.key)
+        .fetch_optional(pool)
+        .await
+        .context("finding a module's category")
+    };
+
+    if let Some(found) = kept().await? {
+        return Ok(found);
+    }
+
+    // The person's own root category by that name, when it is free to take.
+    let adopted: Option<Category> = sqlx::query_as(
+        "UPDATE categories SET module = $4, module_key = $5, updated_at = now()
+          WHERE owner_id = $1 AND parent_id IS NULL AND lower(name) = lower($3) AND flow = $2 AND purpose IS NULL AND module IS NULL
+          RETURNING id, parent_id, flow, name, purpose, module",
+    )
+    .bind(owner_id)
+    .bind(wanted.flow)
+    .bind(&wanted.name)
+    .bind(&wanted.module)
+    .bind(&wanted.key)
+    .fetch_optional(pool)
+    .await
+    .context("taking a category for a module")?;
+    if let Some(adopted) = adopted {
+        return Ok(adopted);
+    }
+
+    // `ON CONFLICT DO NOTHING` without a target: the insert can collide on the
+    // name (a category by it that could not be taken above) or on the key (a
+    // concurrent entry got here first), and both are settled below.
+    let created: Option<Category> = sqlx::query_as(
+        "INSERT INTO categories (owner_id, parent_id, flow, name, module, module_key) VALUES ($1, NULL, $2, $3, $4, $5)
+         ON CONFLICT DO NOTHING
+         RETURNING id, parent_id, flow, name, purpose, module",
+    )
+    .bind(owner_id)
+    .bind(wanted.flow)
+    .bind(&wanted.name)
+    .bind(&wanted.module)
+    .bind(&wanted.key)
+    .fetch_optional(pool)
+    .await
+    .context("making a module's category")?;
+    if let Some(created) = created {
+        return Ok(created);
+    }
+    if let Some(found) = kept().await? {
+        return Ok(found);
+    }
+
+    let held: Option<(Flow, bool)> = sqlx::query_as(
+        "SELECT flow, purpose IS NOT NULL OR module IS NOT NULL FROM categories WHERE owner_id = $1 AND parent_id IS NULL AND lower(name) = lower($2)",
+    )
+    .bind(owner_id)
+    .bind(&wanted.name)
+    .fetch_optional(pool)
+    .await
+    .context("reading the category in a module's way")?;
+    Err(ModuleCategoryTaken {
+        name: wanted.name.clone(),
+        module: wanted.module.clone(),
+        held: match held {
+            Some((_, true)) => "kept for something else",
+            Some((Flow::Income, false)) => "money coming in",
+            Some((Flow::Expense, false)) => "money going out",
+            None => "in the way",
+        },
+    }
+    .into())
 }
 
 /// What a line is attributed to, as the code writing it states it.

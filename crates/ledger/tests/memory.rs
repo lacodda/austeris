@@ -844,7 +844,25 @@ async fn books_from_before_history(pool: &PgPool) -> (Books, Uuid, Uuid) {
     austeris_common::migrate::undo(pool, &MIGRATOR, 20_261_012_100_001)
         .await
         .expect("rolling back to v0.11");
-    let books = books(pool).await;
+    // Its categories written straight into the table: today's repository reads
+    // a column of theirs that schema does not have.
+    let owner = Uuid::new_v4();
+    let account = repository::create_account(pool, owner, AccountKind::Cash, "Wallet", "PYG", decimal("100000"))
+        .await
+        .expect("an account");
+    let category = |name: &'static str, flow: &'static str| {
+        sqlx::query_scalar::<_, Uuid>("INSERT INTO categories (owner_id, flow, name) VALUES ($1, $2::category_flow, $3) RETURNING id")
+            .bind(owner)
+            .bind(flow)
+            .bind(name)
+            .fetch_one(pool)
+    };
+    let books = Books {
+        owner,
+        account: account.id,
+        food: category("food", "expense").await.expect("a category"),
+        salary: category("salary", "income").await.expect("a category"),
+    };
     let mut ids = Vec::new();
     for source in [None, Some("recurring")] {
         let id: Uuid = sqlx::query_scalar(

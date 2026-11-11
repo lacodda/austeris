@@ -16,7 +16,9 @@ use austeris_common::{Actor, Config, USER_HEADER, db};
 use austeris_ledger::model::{AccountKind, Flow};
 use austeris_ledger::{MIGRATOR, grpc, repository, routes};
 use austeris_proto::ledger::v1::ledger_service_server::LedgerService as _;
-use austeris_proto::ledger::v1::{Holding, Line as ProtoLine, PostEntryRequest, RestateEntryRequest, WithdrawEntryRequest, line::Side as ProtoSide};
+use austeris_proto::ledger::v1::{
+    Holding, Line as ProtoLine, ModuleCategory, PostEntryRequest, RestateEntryRequest, WithdrawEntryRequest, line::Side as ProtoSide,
+};
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use http_body_util::BodyExt;
@@ -434,4 +436,128 @@ async fn an_installation_with_entries_migrates_to_holdings() {
         .await
         .expect_err("a schema holding a trade's money rolled back");
     assert!(format!("{error:#}").contains("kept by a module"), "{error:#}");
+}
+
+/// A line on the category a module files under by its own key.
+fn fee_line(amount: &str) -> ProtoLine {
+    ProtoLine {
+        side: Some(ProtoSide::ModuleCategory(ModuleCategory {
+            key: "fees".to_owned(),
+            name: "Trading fees".to_owned(),
+            flow: "expense".to_owned(),
+        })),
+        amount: amount.to_owned(),
+        currency: "USDT".to_owned(),
+        note: String::new(),
+    }
+}
+
+/// A purchase whose fee is spending, as the portfolio posts it.
+fn purchase_with_fee(owner: Uuid, account: Uuid, key: &str) -> PostEntryRequest {
+    PostEntryRequest {
+        idempotency_key: key.to_owned(),
+        lines: vec![account_line(account, "-601"), holding_line("600"), fee_line("1")],
+        ..purchase(owner, account, true)
+    }
+}
+
+/// The person's categories a module keeps, by name.
+async fn kept_categories(pool: &PgPool, owner: Uuid) -> Vec<(Uuid, String)> {
+    sqlx::query_as("SELECT id, name FROM categories WHERE owner_id = $1 AND module = 'portfolio' AND module_key = 'fees'")
+        .bind(owner)
+        .fetch_all(pool)
+        .await
+        .expect("reading the module's categories")
+}
+
+#[tokio::test]
+async fn a_module_files_under_a_category_of_its_own_that_stays_the_one_after_a_rename() {
+    let Some(pool) = pool("test_ledger_module_category").await else { return };
+    let (owner, account) = exchange(&pool).await;
+    let ledger = grpc::Service::in_process(pool.clone());
+
+    let first = ledger
+        .post_entry(tonic::Request::new(purchase_with_fee(owner, account, "portfolio:trade:1")))
+        .await
+        .expect("posting a purchase with a fee")
+        .into_inner();
+    let made = kept_categories(&pool, owner).await;
+    assert_eq!(made.len(), 1, "{made:?}");
+    assert_eq!(made[0].1, "Trading fees");
+
+    // The fee is spending, filed under that category; the coin is not.
+    let entry = repository::entry(&pool, owner, first.entry_id.parse().expect("an id"))
+        .await
+        .expect("reading")
+        .expect("the entry");
+    let fee = entry.lines.iter().find(|line| line.category_id.is_some()).expect("a fee line");
+    assert_eq!(fee.category_id, Some(made[0].0));
+    assert_eq!(fee.amount, decimal("1"));
+
+    // Renamed and moved by the person, it is still the one the fees go to.
+    let finance = repository::create_category(&pool, owner, None, Flow::Expense, "Finance")
+        .await
+        .expect("a parent");
+    sqlx::query("UPDATE categories SET name = 'Broker cuts', parent_id = $2 WHERE id = $1")
+        .bind(made[0].0)
+        .bind(finance.id)
+        .execute(&pool)
+        .await
+        .expect("renaming it");
+    let second = ledger
+        .post_entry(tonic::Request::new(purchase_with_fee(owner, account, "portfolio:trade:2")))
+        .await
+        .expect("posting a second purchase")
+        .into_inner();
+    let entry = repository::entry(&pool, owner, second.entry_id.parse().expect("an id"))
+        .await
+        .expect("reading")
+        .expect("the entry");
+    assert!(
+        entry.lines.iter().any(|line| line.category_id == Some(made[0].0)),
+        "the renamed category was not used"
+    );
+    assert_eq!(
+        kept_categories(&pool, owner).await.len(),
+        1,
+        "a second category was made beside the renamed one"
+    );
+    let listed: Vec<Value> = {
+        let (status, categories) = call(&pool, owner, "GET", "/ledger/categories", None).await;
+        assert_eq!(status, StatusCode::OK);
+        categories.as_array().expect("a list").clone()
+    };
+    let shown = listed.iter().find(|category| category["name"] == "Broker cuts").expect("the category");
+    assert_eq!(shown["module"], "portfolio", "{shown}");
+}
+
+#[tokio::test]
+async fn a_module_takes_the_persons_category_by_its_name_and_refuses_one_that_is_income() {
+    let Some(pool) = pool("test_ledger_module_category_taken").await else {
+        return;
+    };
+    let (owner, account) = exchange(&pool).await;
+    let ledger = grpc::Service::in_process(pool.clone());
+
+    // A category the person made by that name before is taken, not doubled.
+    let theirs = repository::create_category(&pool, owner, None, Flow::Expense, "trading fees")
+        .await
+        .expect("their category");
+    ledger
+        .post_entry(tonic::Request::new(purchase_with_fee(owner, account, "portfolio:trade:1")))
+        .await
+        .expect("posting a purchase with a fee");
+    assert_eq!(kept_categories(&pool, owner).await, vec![(theirs.id, "trading fees".to_owned())]);
+
+    // Money coming in by that name cannot hold fees, and the module is told.
+    let (other, other_account) = exchange(&pool).await;
+    repository::create_category(&pool, other, None, Flow::Income, "Trading fees")
+        .await
+        .expect("an income category");
+    let refused = ledger
+        .post_entry(tonic::Request::new(purchase_with_fee(other, other_account, "portfolio:trade:1")))
+        .await
+        .expect_err("fees were filed under money coming in");
+    assert_eq!(refused.code(), Code::FailedPrecondition, "{refused:?}");
+    assert!(refused.message().contains("money coming in"), "{refused:?}");
 }

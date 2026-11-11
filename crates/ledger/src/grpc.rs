@@ -14,9 +14,9 @@ use austeris_common::Actor;
 use austeris_proto::ledger::v1::ledger_service_server::{LedgerService, LedgerServiceServer};
 use austeris_proto::ledger::v1::{
     Account as ProtoAccount, Balance, Counterparty as ProtoCounterparty, FindCounterpartyRequest, FindCounterpartyResponse, GetBalancesRequest,
-    GetBalancesResponse, Line as ProtoLine, ListAccountsRequest, ListAccountsResponse, PostEntryRequest, PostEntryResponse, Rate as ProtoRate, RateAtRequest,
-    RateAtResponse, RateInForce as ProtoRateInForce, RecordRatesRequest, RecordRatesResponse, RestateEntryRequest, RestateEntryResponse, WithdrawEntryRequest,
-    WithdrawEntryResponse, line::Side as ProtoSide,
+    GetBalancesResponse, Line as ProtoLine, ListAccountsRequest, ListAccountsResponse, ModuleCategory as ProtoModuleCategory, PostEntryRequest,
+    PostEntryResponse, Rate as ProtoRate, RateAtRequest, RateAtResponse, RateInForce as ProtoRateInForce, RecordRatesRequest, RecordRatesResponse,
+    RestateEntryRequest, RestateEntryResponse, WithdrawEntryRequest, WithdrawEntryResponse, line::Side as ProtoSide,
 };
 use chrono::{NaiveDate, Utc};
 use rust_decimal::Decimal;
@@ -24,8 +24,10 @@ use sqlx::PgPool;
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
-use crate::model::AccountKind;
-use crate::repository::{CounterpartyChoice, NewEntry, NewFile, NewLine, NewPlace, NotKeptBy, ObservedRate, Restated, Side};
+use crate::model::{AccountKind, Flow};
+use crate::repository::{
+    CounterpartyChoice, ModuleCategory, ModuleCategoryTaken, NewEntry, NewFile, NewLine, NewPlace, NotKeptBy, ObservedRate, Restated, Side,
+};
 use crate::{attachment, balance, country, parse, repository};
 
 /// The service implementation.
@@ -71,7 +73,7 @@ impl LedgerService for Service {
         }
 
         let occurred_on = NaiveDate::from_str(&request.occurred_on).map_err(|_| Status::invalid_argument("occurred_on is not a date (YYYY-MM-DD)"))?;
-        let lines = lines_of(&request.lines)?;
+        let lines = lines_of(&self.pool, owner_id, &request.source, &request.lines).await?;
         let source = Some(request.source.trim()).filter(|source| !source.is_empty());
         if request.kept && source.is_none() {
             return Err(Status::invalid_argument(
@@ -265,7 +267,7 @@ impl LedgerService for Service {
         let restated = Restated {
             occurred_on: NaiveDate::from_str(&request.occurred_on).map_err(|_| Status::invalid_argument("occurred_on is not a date (YYYY-MM-DD)"))?,
             description: request.description.trim().to_owned(),
-            lines: lines_of(&request.lines)?,
+            lines: lines_of(&self.pool, owner_id, module, &request.lines).await?,
         };
         let entry = repository::restate_kept_entry(&self.pool, owner_id, module, key, &restated)
             .await
@@ -301,8 +303,9 @@ fn keeper<'a>(source: &'a str, key: &'a str) -> Result<(&'a str, &'a str), Statu
     Ok((source, key))
 }
 
-/// The sides a module states, checked the way a person's are.
-fn lines_of(stated: &[ProtoLine]) -> Result<Vec<NewLine>, Status> {
+/// The sides a module states, checked the way a person's are - a category the
+/// module names by its own key found, or made, for the person it posts for.
+async fn lines_of(pool: &PgPool, owner_id: Uuid, source: &str, stated: &[ProtoLine]) -> Result<Vec<NewLine>, Status> {
     if stated.len() < 2 {
         return Err(Status::invalid_argument(
             "an entry has at least two sides: money leaves somewhere and arrives somewhere",
@@ -321,6 +324,7 @@ fn lines_of(stated: &[ProtoLine]) -> Result<Vec<NewLine>, Status> {
             Some(ProtoSide::CategoryId(id)) => Side::Category(parse_id(id, "category")?),
             Some(ProtoSide::Conversion(_)) => Side::Conversion,
             Some(ProtoSide::Holding(_)) => Side::Holding,
+            Some(ProtoSide::ModuleCategory(named)) => Side::Category(module_category(pool, owner_id, source, named).await?),
             None => {
                 return Err(Status::invalid_argument(
                     "a line names an account, a category, a conversion or a holding; one that names none is money from nowhere",
@@ -336,6 +340,48 @@ fn lines_of(stated: &[ProtoLine]) -> Result<Vec<NewLine>, Status> {
         });
     }
     Ok(lines)
+}
+
+/// The person's category a module names by its own key, made on first use.
+async fn module_category(pool: &PgPool, owner_id: Uuid, source: &str, named: &ProtoModuleCategory) -> Result<Uuid, Status> {
+    let module = source.trim();
+    if module.is_empty() {
+        return Err(Status::invalid_argument(
+            "a category a module files under is the module's, and this entry gave no module's name",
+        ));
+    }
+    let key = named.key.trim();
+    if key.is_empty() || !key.starts_with(|c: char| c.is_ascii_lowercase()) || !key.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_') {
+        return Err(Status::invalid_argument(format!(
+            "`{key}` is not a module's name for a category: lower case letters, digits and `_`, as `fees`"
+        )));
+    }
+    let name = named.name.trim();
+    if name.is_empty() {
+        return Err(Status::invalid_argument(format!("{module}'s category `{key}` needs a name to be made under")));
+    }
+    let flow = match named.flow.trim() {
+        "expense" => Flow::Expense,
+        "income" => Flow::Income,
+        other => {
+            return Err(Status::invalid_argument(format!(
+                "`{other}` is not a flow; a category is `expense` or `income`"
+            )));
+        }
+    };
+    let wanted = ModuleCategory {
+        module: module.to_owned(),
+        key: key.to_owned(),
+        name: name.to_owned(),
+        flow,
+    };
+    match repository::module_category(pool, owner_id, &wanted).await {
+        Ok(category) => Ok(category.id),
+        Err(error) => match error.downcast_ref::<ModuleCategoryTaken>() {
+            Some(taken) => Err(Status::failed_precondition(taken.to_string())),
+            None => Err(internal("finding a module's category")(error)),
+        },
+    }
 }
 
 /// The counterparty a module names, as the repository finds or creates it.

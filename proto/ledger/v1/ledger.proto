@@ -232,6 +232,9 @@ message Line {
     string category_id = 2;
     Conversion conversion = 6;
     Holding holding = 7;
+    // A category the posting module files under by a name of its own,
+    // rather than by an id it would first have to ask the person for.
+    ModuleCategory module_category = 8;
   }
   // The signed amount, as a decimal string - never a double: protobuf has no
   // decimal type, and money that travels as a float is not the money anyone
@@ -249,6 +252,24 @@ message Line {
 // -590000 PYG on the conversion, and +590000 PYG on the guarani account. It
 // carries nothing - which side a line is on is the whole of what it says.
 message Conversion {}
+
+// A category of the person's that the posting module files money under, named
+// by the module's own key: the portfolio's `fees`, for what trading cost. The
+// ledger keeps which of the person's categories that is - found by the module
+// and the key, so it stays the one after the person renames or moves it. On
+// first use it is made at the root under `name`, or a root category of the
+// person's by that name and flow that nothing else keeps is taken for it rather
+// than a second made beside it. The line is then an attribution to that
+// category like any other, and is read back as one.
+message ModuleCategory {
+  // The module's own name for it: lower case letters, digits and `_`, as
+  // `fees`. One category per module and key, per person.
+  string key = 1;
+  // What it is called when it is made, before anyone renames it: `Trading fees`.
+  string name = 2;
+  // `expense` or `income`: what the category is, when it is made.
+  string flow = 3;
+}
 
 // Money that became something the posting module holds - a coin, a share - or
 // came back from one. Buying 0.01 BTC for 601 USDT is -601 USDT on the exchange

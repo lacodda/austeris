@@ -88,6 +88,24 @@ Siblings must be distinct, but the same leaf name under two parents is fine:
 `living/taxi` and `travel/taxi` are two different things to spend on. When a bare
 name means both, the one-line form asks which rather than guessing.
 
+### Categories a module files under
+
+A module that books money of its own kind - the portfolio, for what trading
+cost - files it under a category of yours that it asks for by a key of its own.
+The first time, the category is made at the root under the name the module
+gives it, or a root category of yours by that name and flow is taken for it.
+From then on it is found by the module and the key, not by its name: rename it
+or move it under another and the money goes on landing in it. `GET
+/api/v1/ledger/categories` says which module files under a category as
+`module`:
+
+```json
+{ "id": "…", "parent_id": null, "flow": "expense", "name": "Trading fees", "module": "portfolio" }
+```
+
+When the name is taken by a root category the other way - money coming in - the
+module's entry is refused, saying so, until that one is renamed.
+
 ## Entries
 
 ### `POST /api/v1/ledger/entries`

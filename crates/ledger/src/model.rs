@@ -84,6 +84,11 @@ pub struct Category {
     /// What the ledger itself files under it, when it is one the ledger made.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub purpose: Option<Purpose>,
+    /// The module that files money under it - `portfolio`, for trading fees -
+    /// when it is one a module asked for. The person may rename or move it,
+    /// and it stays the one the module files into.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub module: Option<String>,
 }
 
 /// Why the ledger keeps a category of its own.
