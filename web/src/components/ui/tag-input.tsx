@@ -101,10 +101,12 @@ export interface TagInputProps extends VariantProps<typeof tagInputVariants> {
   removeLabel: (tag: string) => string
   /** Cap on how many tags may be added. */
   max?: number
+  /** Dims the field and stops it taking input or removing tags. */
   disabled?: boolean
   /** Drawn after the input, inside the box - a counter, a hint. */
   children?: ReactNode
   className?: string
+  /** Put on the text box, so a `Field` label can point at it. */
   id?: string
 }
 

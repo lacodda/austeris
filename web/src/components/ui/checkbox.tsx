@@ -28,8 +28,11 @@ export interface CheckboxProps {
   /** The words next to the box. Omit only for a checkbox in a table cell,
    * and then give `aria-label` instead. */
   children?: ReactNode
+  /** Controlled state. Pair it with `onCheckedChange`. */
   checked?: boolean
+  /** Initial state when the checkbox is uncontrolled. */
   defaultChecked?: boolean
+  /** Called with the new state when the box is toggled. */
   onCheckedChange?: (checked: boolean) => void
   /** Some but not all of what this stands for is checked. Draws a dash;
    * clicking still checks everything. */
@@ -40,10 +43,16 @@ export interface CheckboxProps {
    * Working that out by hand is where the indeterminate state usually goes
    * wrong, so the group does it. */
   parent?: boolean
+  /** Stops the box taking input; the label dims with it. */
   disabled?: boolean
+  /** Marks the box as required for form validation. */
   required?: boolean
+  /** The field name submitted with a form. */
   name?: string
+  /** What this box contributes to the group's `value` array when checked, and
+   * what a form submits for it. */
   value?: string
+  /** The accessible name, for a checkbox with no `children`. */
   'aria-label'?: string
   className?: string
 }
@@ -127,11 +136,15 @@ export function Checkbox({
  */
 export interface CheckboxGroupProps {
   children: ReactNode
+  /** The values of the checked boxes. Controlled; pair it with `onValueChange`. */
   value?: string[]
+  /** The values checked at first, when the group is uncontrolled. */
   defaultValue?: string[]
+  /** Called with the new list of checked values. */
   onValueChange?: (value: string[]) => void
   /** Every value in the group, which is what makes a parent checkbox work. */
   allValues?: string[]
+  /** Disables every box in the group. */
   disabled?: boolean
   className?: string
 }

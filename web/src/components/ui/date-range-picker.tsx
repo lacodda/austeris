@@ -38,25 +38,36 @@ export interface DateRange {
 }
 
 export interface DateRangePickerProps {
+  /** The chosen range. Either end may be absent: a start with no end is the range while it is half made. */
   value?: DateRange
+  /** Called on both clicks, so a product sees the half-made range as well as the whole one. */
   onValueChange?: (value: DateRange) => void
   /** The words of the button that takes the range back: "Clear". Leave it out
    * and a chosen range can only be replaced, not emptied. */
   clearLabel?: string
+  /** The earliest day that can be chosen, as `YYYY-MM-DD`. */
   min?: IsoDate
+  /** The latest day that can be chosen, as `YYYY-MM-DD`. */
   max?: IsoDate
   /** What the trigger says when nothing is chosen. */
   placeholder: string
   /** Names the two month-paging buttons inside the calendar. */
   previousMonthLabel: string
+  /** Names the button that pages to the next month, for the same reason as `previousMonthLabel`. */
   nextMonthLabel: string
+  /** The language the dates and the calendar are written in. Defaults to the locale from `useLocale`. */
   locale?: string
+  /** Stops the trigger opening the calendar. */
   disabled?: boolean
   /** Put on the trigger, so a `Field` label can point at it. */
   id?: string
+  /** Names the trigger when there is no visible label. The trigger's name is this and then the date it shows. */
   'aria-label'?: string
+  /** Points the trigger at its visible label. The date it shows is added to the name. */
   'aria-labelledby'?: string
+  /** Points the trigger at a hint or an error message. */
   'aria-describedby'?: string
+  /** Marks the trigger as holding a value that is not accepted. */
   'aria-invalid'?: boolean | 'true' | 'false'
   className?: string
 }

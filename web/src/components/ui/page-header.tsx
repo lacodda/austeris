@@ -19,6 +19,7 @@ import { cn, type HeadingLevel } from 'dowel-ui'
  */
 
 export interface PageHeaderProps extends Omit<HTMLAttributes<HTMLElement>, 'title'> {
+  /** The screen's title, drawn as the page's heading. It is the one heading the screen is entitled to. */
   title: ReactNode
   /** The line under the title. One sentence: this is the screen's subtitle,
    * not its documentation. */

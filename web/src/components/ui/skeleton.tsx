@@ -72,6 +72,7 @@ export function SkeletonText({ lines = 3, className, ...props }: SkeletonTextPro
 }
 
 export interface SkeletonListProps extends HTMLAttributes<HTMLDivElement> {
+  /** How many rows of the list stand here. */
   rows?: number
   /** Draw a second, shorter line under each row - for a list whose rows carry
    * a title and something beneath it. */

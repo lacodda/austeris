@@ -105,7 +105,9 @@ interface ChipOwnProps extends Omit<VariantProps<typeof chipVariants>, 'removabl
  * or a `value`, which is how a chip says which member of a ChipGroup it is.
  */
 type Removable = {
+  /** Called when the cross is pressed. Giving it is what makes the chip removable; the press does not reach a clickable parent. */
   onRemove: () => void
+  /** The accessible name of the cross, for example "Remove tag". Required with `onRemove`, and there is no default word, so the product can translate it. */
   removeLabel: string
   pressed?: never
   defaultPressed?: never
@@ -121,10 +123,12 @@ type Pressable = {
   pressed?: boolean
   /** Whether it starts on, for a chip nobody else needs to know about. */
   defaultPressed?: boolean
+  /** Called with the new state when the chip is switched. Giving it makes the chip a switch. */
   onPressedChange?: (pressed: boolean) => void
   /** Which member of a ChipGroup this is. Inside a group the group owns the
    * state, and `pressed` is not read. */
   value?: string
+  /** Stops the chip being switched, and dims it. Only a switch can be disabled. */
   disabled?: boolean
 }
 
@@ -226,10 +230,13 @@ export interface ChipGroupProps extends Omit<HTMLAttributes<HTMLDivElement>, 'de
    * that is Base UI's shape and a single mode is a group that holds at most
    * one. */
   value?: readonly string[]
+  /** The values that start on, when the group keeps its own state. */
   defaultValue?: readonly string[]
+  /** Called with the values that are on after a chip is pressed. Always an array, in both modes. */
   onValueChange?: (value: string[]) => void
   /** Several on at once - filters - rather than one at a time - a kind. */
   multiple?: boolean
+  /** Disables every chip in the group. */
   disabled?: boolean
   children: ReactNode
 }

@@ -47,7 +47,14 @@ import { SkeletonList } from './skeleton'
  * product's - a string invented here could not be translated.
  */
 type Retry =
-  | { onRetry: () => void; retryLabel: string }
+  | {
+      /** A way out of a failure: puts a retry button on the default error
+       * screen and is handed to a custom `errorState`. Requires `retryLabel`. */
+      onRetry: () => void
+      /** What the retry button is called. Required with `onRetry`, because a
+       * string invented here could not be translated. */
+      retryLabel: string
+    }
   | { onRetry?: never; retryLabel?: never }
 
 export type QueryStateProps = QueryStateOwnProps & Retry
