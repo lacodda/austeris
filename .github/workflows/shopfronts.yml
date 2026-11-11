@@ -19,6 +19,10 @@ jobs:
       # builds the program.
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # The proto crate compiles the service contracts at build time (ADR 0003).
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       # The lyrn that wrote this workflow, from its release: a newer one comes
       # with the next version of the line's standard, by `lyrn upgrade`, not on
       # its own one morning with rules nobody here has read yet.
