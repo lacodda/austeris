@@ -60,9 +60,16 @@ so the USDT the tracker recorded is read in two ways:
   been paid for, which the tracker never saw arrive: the least that keeps the
   account's money from ever going below nothing.
 
-**What the books cannot say** is left out and named, with why: a coin received
-for nothing (a reward, an airdrop - there is no trade for that yet), a sale of
-more than the trades before it bought, a number that is not one.
+**A coin "bought" for nothing** - a reward, an airdrop, which the tracker could
+only record as a buy at a price of `0` - is units received
+([`receive`](/austeris/reference/portfolio/#what-a-trade-moves)), worth what the
+tracker said: nothing. Its lot costs nothing, and a sale of it gains all it
+brought in. Imported before 0.16, such a row was left out, with the sale that
+followed it; running the import again brings both, and nothing twice.
+
+**What the books cannot say** is left out and named, with why: a sale for
+nothing, a coin received for nothing with a fee, a sale of more than the trades
+before it bought, a number that is not one.
 
 **An account already there** - of the wallet's name, a broker's or a wallet's
 account in USDT - is used as it is, its opening balance untouched; the report
@@ -89,14 +96,14 @@ what each was worth in dollars:
                                        the tracker             the books
     BTC                                      0.025                 0.025
     ETH                                        0.6                   0.6
-    SOL                                          6                     0  - differs
-    USDT                                    717.88                739.26  - differs
-    worth, USD                             4500.13                3768.5  - less by 731.62
+    SOL                                          6                     6
+    USDT                                    717.88               1219.26  - differs
+    worth, USD                             4500.13               5001.46  - more by 501.33
 ```
 
-A difference is the import saying what it could not keep, not an error: the
-Solana received for nothing that the books leave out, USDT the tracker recorded
-as spent that the books took from a trade, money the tracker never saw. The
+A difference is the import saying what it could not keep, not an error: USDT
+the tracker recorded as spent that the books took from a trade, a sale whose
+money the tracker never recorded, money the tracker never saw. The
 tracker's side is worth what its own prices said at the end of that day; the
 books', what the books say. `--dry-run` writes nothing and needs no sign-in, and
 sets the tracker beside what the books will hold.

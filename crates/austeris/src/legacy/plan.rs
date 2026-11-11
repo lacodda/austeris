@@ -14,8 +14,10 @@
 //!   outside what the tracker saw. The books cannot date money from outside
 //!   them, so it is the account's opening balance - with whatever more the
 //!   trades needed to have been paid for, which the tracker never saw arrive;
-//! - what the books cannot say at all - a coin bought for nothing, a sale of
-//!   more than was bought - is left out, and named.
+//! - a coin "bought" at a price of nothing - a reward, an airdrop - is units
+//!   received, at the worth of nothing the tracker gave them;
+//! - what the books cannot say at all - a sale for nothing, a sale of more
+//!   than was bought - is left out, and named.
 //!
 //! The snapshots are worked out again from the trades, one a day, and set
 //! beside what the tracker said: where they part is what the report is for.
@@ -346,11 +348,10 @@ fn classify<'a>(tracker: &'a Tracker, plan: &mut Plan) -> (Vec<MoneyRow>, Vec<Ca
         let fee = transaction.fee.unwrap_or_default();
         let why = if transaction.price < Decimal::ZERO {
             Some("its price is below nothing")
-        } else if transaction.price.is_zero() {
-            Some(match transaction.side {
-                Side::Buy => "it was bought for nothing - a reward, an airdrop - and the books have no way yet to say coins arrived without money",
-                Side::Sell => "it was sold for nothing, and a sale in the books brings money",
-            })
+        } else if transaction.price.is_zero() && transaction.side == Side::Sell {
+            Some("it was sold for nothing, and a sale in the books brings money")
+        } else if transaction.price.is_zero() && !fee.is_zero() {
+            Some("it arrived for nothing with a fee, and units received cost nothing to receive")
         } else if fee < Decimal::ZERO {
             Some("its fee is below nothing")
         } else if transaction.side == Side::Sell && transaction.amount * transaction.price <= fee {
@@ -377,6 +378,8 @@ fn replay(tracker: &Tracker, mut candidates: Vec<Candidate<'_>>, zone: Zone, pla
         let symbol = asset.symbol.to_uppercase();
         let position = held.entry((wallet_id, symbol.clone())).or_default();
         let kind = match transaction.side {
+            // Bought for nothing: a reward, an airdrop - units received.
+            Side::Buy if transaction.price.is_zero() => TradeKind::Receive,
             Side::Buy => TradeKind::Buy,
             Side::Sell => TradeKind::Sell,
         };
@@ -395,7 +398,7 @@ fn replay(tracker: &Tracker, mut candidates: Vec<Candidate<'_>>, zone: Zone, pla
             });
             continue;
         }
-        *position += if kind == TradeKind::Buy { transaction.amount } else { -transaction.amount };
+        *position += if kind == TradeKind::Sell { -transaction.amount } else { transaction.amount };
         let fee = transaction.fee.unwrap_or_default();
         let money = austeris_portfolio::trade::money(kind, transaction.amount, Some(transaction.price), fee, Some(MONEY)).unwrap_or_default();
         plan.trades.push(TradePlan {
@@ -463,7 +466,8 @@ fn is_money(asset: &Asset) -> bool {
 /// Finds the USDT rows that were trades' money.
 fn pair(plan: &mut Plan, money_rows: &[MoneyRow]) {
     let mut taken = vec![false; money_rows.len()];
-    for trade in &plan.trades {
+    // Units received moved no money, and have none to find.
+    for trade in plan.trades.iter().filter(|trade| trade.kind != TradeKind::Receive) {
         // A buy's money left the wallet; a sale's arrived.
         let wanted = if trade.kind == TradeKind::Buy { Side::Sell } else { Side::Buy };
         let cost = trade.money.abs();
@@ -672,7 +676,7 @@ fn books_on(plan: &Plan, day: NaiveDate) -> BTreeMap<(i64, String), Decimal> {
         held.insert((account.wallet_id, MONEY.to_owned()), account.opening + money);
     }
     for trade in plan.trades.iter().filter(|trade| trade.day() <= day) {
-        let delta = if trade.kind == TradeKind::Buy { trade.quantity } else { -trade.quantity };
+        let delta = if trade.kind == TradeKind::Sell { -trade.quantity } else { trade.quantity };
         *held.entry((trade.wallet_id, trade.symbol.clone())).or_default() += delta;
     }
     held
@@ -768,6 +772,8 @@ mod tests {
     use chrono::{FixedOffset, NaiveDate, TimeZone, Utc};
     use rust_decimal::Decimal;
 
+    use austeris_portfolio::model::TradeKind;
+
     use super::{Plan, Zone, plan};
     use crate::legacy::tracker::{Asset, AssetPrice, Side, Snapshot, SnapshotLine, Tracker, Transaction, Wallet};
 
@@ -812,8 +818,9 @@ mod tests {
     const ASUNCION: Zone = Zone::Fixed(FixedOffset::west_opt(3 * 3600).expect("an offset"));
 
     /// An exchange where USDT came in, bought Bitcoin with its money said
-    /// both ways, bought Ether with its money said only by the trade, and a
-    /// hardware wallet where Bitcoin was "bought" with no money at all.
+    /// both ways, bought Ether with its money said only by the trade, was
+    /// given Solana for nothing and sold some, and a hardware wallet where
+    /// Bitcoin was "bought" with no money at all.
     fn tracker() -> Tracker {
         Tracker {
             assets: vec![asset(1, "BTC"), asset(2, "ETH"), asset(3, "USDT"), asset(4, "SOL")],
@@ -880,19 +887,39 @@ mod tests {
 
     #[test]
     fn a_coin_is_a_trade_and_what_the_books_cannot_say_is_left_out_with_why() {
-        let plan = planned();
-        let brought: Vec<i64> = plan.trades.iter().map(|trade| trade.legacy_id).collect();
-        assert_eq!(brought, [2, 9, 4, 5], "in the order they happened");
-        let left: Vec<(i64, bool)> = plan
-            .left_out
-            .iter()
-            .map(|left| (left.legacy_id, left.why.contains("for nothing") || left.why.contains("more than")))
-            .collect();
-        assert_eq!(left, [(7, true), (8, true)], "{:?}", plan.left_out);
-        assert!(plan.left_out[1].why.contains("4 SOL more"), "{}", plan.left_out[1].why);
-        assert_eq!(plan.trades[0].key, "austeris-2025:transaction:2");
-        assert_eq!(plan.trades[0].money, decimal("-1701.7"));
-        assert_eq!(plan.trades[0].day(), NaiveDate::from_ymd_opt(2025, 3, 5).expect("a day"));
+        let planned = planned();
+        let brought: Vec<i64> = planned.trades.iter().map(|trade| trade.legacy_id).collect();
+        assert_eq!(brought, [2, 9, 4, 5, 7, 8], "in the order they happened");
+        assert!(planned.left_out.is_empty(), "{:?}", planned.left_out);
+        assert_eq!(planned.trades[0].key, "austeris-2025:transaction:2");
+        assert_eq!(planned.trades[0].money, decimal("-1701.7"));
+        assert_eq!(planned.trades[0].day(), NaiveDate::from_ymd_opt(2025, 3, 5).expect("a day"));
+
+        // A sale of more than was bought before it is left out, by how much.
+        let mut oversold = tracker();
+        oversold.transactions.retain(|row| row.id != 7);
+        let refused = plan(&oversold, ASUNCION);
+        assert_eq!(refused.left_out.len(), 1, "{:?}", refused.left_out);
+        assert!(refused.left_out[0].why.contains("4 SOL more"), "{}", refused.left_out[0].why);
+    }
+
+    #[test]
+    fn a_coin_bought_for_nothing_is_received_and_a_sale_for_nothing_is_left_out() {
+        let planned = planned();
+        let reward = planned.trades.iter().find(|trade| trade.legacy_id == 7).expect("the reward");
+        assert_eq!(reward.kind, TradeKind::Receive);
+        assert_eq!(
+            (reward.price, reward.money),
+            (Decimal::ZERO, Decimal::ZERO),
+            "worth what the tracker said: nothing"
+        );
+
+        let mut tracker = tracker();
+        tracker.transactions.push(row(10, (4, 1), Side::Sell, ("1", "0", None), (26, 13)));
+        tracker.transactions.push(row(11, (4, 1), Side::Buy, ("1", "0", Some("0.1")), (26, 14)));
+        let more = plan(&tracker, ASUNCION);
+        let left: Vec<(i64, bool)> = more.left_out.iter().map(|left| (left.legacy_id, left.why.contains("for nothing"))).collect();
+        assert_eq!(left, [(10, true), (11, true)], "{:?}", more.left_out);
     }
 
     #[test]
@@ -909,7 +936,8 @@ mod tests {
         assert_eq!(binance.short_on, NaiveDate::from_ymd_opt(2025, 3, 10));
         assert_eq!(binance.opening, decimal("2752.75"));
         assert_eq!(binance.cash_then, decimal("717.88"));
-        assert_eq!(binance.cash_now, decimal("419.58"));
+        // With what the Solana given for nothing was sold for.
+        assert_eq!(binance.cash_now, decimal("899.58"));
 
         // A wallet with a buy and no money at all opens with what it cost.
         let nano = plan.accounts.iter().find(|account| account.name == "Ledger Nano").expect("the Nano");
@@ -951,12 +979,8 @@ mod tests {
         let plan = planned();
         assert_eq!(plan.end.day, NaiveDate::from_ymd_opt(2025, 3, 26));
         let line = |wallet: &str, symbol: &str| plan.end.lines.get(&(wallet.to_owned(), symbol.to_owned())).copied();
-        assert_eq!(
-            line("Binance", "SOL"),
-            Some((decimal("6"), Decimal::ZERO)),
-            "the tracker held what the books cannot"
-        );
-        assert_eq!(line("Binance", "USDT"), Some((decimal("717.88"), decimal("419.58"))));
+        assert_eq!(line("Binance", "SOL"), Some((decimal("6"), decimal("6"))), "received, and some sold");
+        assert_eq!(line("Binance", "USDT"), Some((decimal("717.88"), decimal("899.58"))));
         assert_eq!(line("Ledger Nano", "BTC"), Some((decimal("0.01"), decimal("0.01"))));
         assert_eq!(line("Ledger Nano", "USDT"), None, "nothing on either side is no line");
         assert_eq!(plan.end.value_then.unpriced, ["ETH", "SOL"]);

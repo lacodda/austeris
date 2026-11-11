@@ -322,7 +322,7 @@ async fn trades(api: &Api, plan: &Plan, instruments: &BTreeMap<String, String>, 
             bail!("the trade #{} has no account or instrument to be recorded on", trade.legacy_id);
         };
         let body = json!({
-            "kind": if trade.kind == austeris_portfolio::model::TradeKind::Buy { "buy" } else { "sell" },
+            "kind": trade.kind,
             "account_id": account.id,
             "instrument_id": instrument,
             "quantity": trade.quantity.to_string(),

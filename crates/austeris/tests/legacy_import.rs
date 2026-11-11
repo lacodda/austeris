@@ -172,9 +172,7 @@ async fn the_trackers_records_are_brought_once_and_where_they_part_is_said() {
     for expected in [
         "Binance: opened with 2752.75 USDT",
         "Ledger Nano: opened with 1460 USDT",
-        "Trades: 6 brought (6 new, 0 already there), 2 left out",
-        "#7 2025-04-02 Binance: buy 10 SOL - it was bought for nothing",
-        "#8 2025-04-03 Binance: sell 4 SOL - it sells 4 SOL more",
+        "Trades: 8 brought (8 new, 0 already there), 0 left out",
         "#3 sell 1701.7 USDT - the money of #2 (buy 0.02 BTC)",
         "Snapshots: 3 taken, one a day",
         "#2 is of the same day as #3",
@@ -199,14 +197,15 @@ async fn the_trackers_records_are_brought_once_and_where_they_part_is_said() {
 
     the_trades_are_the_transactions(&serving).await;
     the_books_are_worth_what_the_trades_and_prices_say(&serving).await;
+    the_sales_gained_on_the_lots_they_took(&serving).await;
 
     // Again: nothing new.
     let (again, report) = serving.run(&["import", "legacy", dump, "--offset", "-03:00"]);
     assert!(again, "{report}");
-    assert!(report.contains("Trades: 6 brought (0 new, 6 already there)"), "{report}");
+    assert!(report.contains("Trades: 8 brought (0 new, 8 already there)"), "{report}");
     assert!(report.contains("Snapshots: 3 taken, one a day (3 already there)"), "{report}");
     assert!(report.contains("Binance: already there, opening with 2752.75 USDT"), "{report}");
-    assert_eq!(serving.get("/api/v1/portfolio/trades").await.as_array().expect("trades").len(), 6);
+    assert_eq!(serving.get("/api/v1/portfolio/trades").await.as_array().expect("trades").len(), 8);
     assert_eq!(serving.get("/api/v1/portfolio/snapshots").await.as_array().expect("snapshots").len(), 3);
     assert_eq!(serving.get("/api/v1/ledger/accounts").await.as_array().expect("accounts").len(), 2);
 }
@@ -220,7 +219,7 @@ async fn the_trades_are_the_transactions(serving: &Serving) {
         .iter()
         .map(|trade| trade["idempotency_key"].as_str().expect("a key").to_owned())
         .collect();
-    let expected: std::collections::BTreeSet<String> = [2, 4, 5, 9, 10, 11].iter().map(|id| format!("austeris-2025:transaction:{id}")).collect();
+    let expected: std::collections::BTreeSet<String> = [2, 4, 5, 7, 8, 9, 10, 11].iter().map(|id| format!("austeris-2025:transaction:{id}")).collect();
     assert_eq!(keys, expected);
     let of = |id: u32| {
         trades
@@ -233,6 +232,11 @@ async fn the_trades_are_the_transactions(serving: &Serving) {
     assert_eq!(ether["occurred_on"], "2025-03-10");
     assert_eq!(number(&ether["money"]), decimal("-1051.05"));
     assert_eq!(of(10)["note"], "cold storage\\vault");
+    // The staking reward the tracker "bought" for nothing is units received,
+    // worth what it said: nothing - so the sale after it is brought too.
+    let reward = of(7);
+    assert_eq!((reward["kind"].as_str(), number(&reward["price"])), (Some("receive"), Decimal::ZERO));
+    assert_eq!(reward["money"], serde_json::Value::Null);
     // A float's sum is the decimal it was.
     assert_eq!(number(&of(11)["quantity"]), decimal("0.3"));
 
@@ -243,7 +247,7 @@ async fn the_trades_are_the_transactions(serving: &Serving) {
         .iter()
         .map(|balance| (balance["name"].as_str().unwrap_or_default().to_owned(), number(&balance["amount"])))
         .collect();
-    assert!(cash.contains(&("Binance".to_owned(), decimal("739.26"))), "{balances}");
+    assert!(cash.contains(&("Binance".to_owned(), decimal("1219.26"))), "{balances}");
     assert!(cash.contains(&("Ledger Nano".to_owned(), Decimal::ZERO)), "{balances}");
 }
 
@@ -260,8 +264,9 @@ async fn the_books_are_worth_what_the_trades_and_prices_say(serving: &Serving) {
     assert_eq!(days, ["2025-04-15", "2025-03-20", "2025-03-06"]);
 
     let value = serving.get("/api/v1/portfolio/value?on=2025-04-15&currency=USD").await;
-    // 0.025 BTC at 83000.75, 0.6 ETH at 1590.5, and 739.26 USDT at 0.9999.
-    let worth = decimal("2075.01875") + decimal("954.3") + decimal("739.186074");
+    // 0.025 BTC at 83000.75, 0.6 ETH at 1590.5, 6 SOL at 125.5, and 1219.26
+    // USDT at 0.9999.
+    let worth = decimal("2075.01875") + decimal("954.3") + decimal("753") + decimal("1219.138074");
     let total = number(&value["total"]);
     assert!((total - worth).abs() < decimal("0.01"), "the books are worth {total}: {value}");
     assert_eq!(value["unvalued"], serde_json::json!([]));
@@ -283,6 +288,39 @@ async fn the_books_are_worth_what_the_trades_and_prices_say(serving: &Serving) {
         .await;
     assert_eq!(prices.as_array().expect("prices").len(), 4);
     assert_eq!(prices[0]["source"], "austeris-2025");
+}
+
+/// The year's sales, each on the lots it took first in, first out: what was
+/// bought and received in 2025, at what it cost then.
+async fn the_sales_gained_on_the_lots_they_took(serving: &Serving) {
+    let gains = serving.get("/api/v1/portfolio/gains?from=2025-01-01&to=2025-12-31&currency=USDT").await;
+    let sales: Vec<(&str, Decimal, Decimal, Decimal)> = gains["sales"]
+        .as_array()
+        .expect("sales")
+        .iter()
+        .map(|sale| {
+            (
+                sale["symbol"].as_str().expect("a ticker"),
+                number(&sale["proceeds"]),
+                number(&sale["cost"]),
+                number(&sale["gain"]),
+            )
+        })
+        .collect();
+    assert_eq!(
+        sales,
+        [
+            // 0.2 of the 0.5 ETH bought for 1051.05, sold for 320 less 0.32.
+            ("ETH", decimal("319.68"), decimal("420.42"), decimal("-100.74")),
+            // 4 of the 10 SOL received for nothing.
+            ("SOL", decimal("480"), Decimal::ZERO, decimal("480")),
+            // 0.005 of the 0.02 BTC bought for 1701.7, sold for 420 less 0.42.
+            ("BTC", decimal("419.58"), decimal("425.425"), decimal("-5.845")),
+        ],
+        "{gains}"
+    );
+    assert_eq!(number(&gains["gain"]), decimal("373.415"));
+    assert_eq!(gains["unvalued"], serde_json::json!([]));
 }
 
 #[test]
