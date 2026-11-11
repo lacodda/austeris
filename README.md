@@ -122,9 +122,9 @@ Every endpoint, with its shape: **[the ledger reference](https://lacodda.github.
 
 v0.15.0, early, with the books open: accounts, entries, holds and exchanges
 in several currencies, receipts read from their files, a portfolio of trades
-valued and snapshotted - with the 2025 crypto tracker's records brought in by
-one command - each entry's history and a trash, from the command line, the API
-or a phone.
+valued and snapshotted, with its lots, what each sale gained and what trading
+fees took - the 2025 crypto tracker's records brought in by one command - each
+entry's history and a trash, from the command line, the API or a phone.
 Each version: [CHANGELOG](https://github.com/lacodda/austeris/blob/main/CHANGELOG.md).
 
 ## Documentation
