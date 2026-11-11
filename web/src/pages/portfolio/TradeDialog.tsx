@@ -203,7 +203,7 @@ export function TradeDialog({ trade, open, onOpenChange }: { trade?: Trade; open
                 <AmountInput value={quantity} onChange={(event) => setQuantity(event.target.value)} />
               </Field>
               {transfer ? null : receive ? (
-                <Field label={t('trade.worth')} help={t('trade.worthHelp', { currency: account?.currency ?? '' })}>
+                <Field label={t('trade.worth')} help={account ? t('trade.worthHelp', { currency: account.currency }) : t('trade.worthHelpAny')}>
                   <AmountInput value={price} onChange={(event) => setPrice(event.target.value)} placeholder={t('trade.worthPlaceholder')} />
                 </Field>
               ) : (

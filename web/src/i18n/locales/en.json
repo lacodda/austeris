@@ -531,6 +531,7 @@
     "noMoneyShort": "No money",
     "worth": "Worth of a unit",
     "worthHelp": "When it arrived, in {{currency}}. Empty takes the market's price of that moment; 0 is nothing.",
+    "worthHelpAny": "When it arrived, in the account's currency. Empty takes the market's price of that moment; 0 is nothing.",
     "worthPlaceholder": "market price",
     "noMoneyReceived": "Units received move no money: what they were worth is what they cost."
   },
