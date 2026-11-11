@@ -312,6 +312,9 @@ codes! {
     TradeNothingMoved = "trade.nothing_moved",
     /// It leaves a position below nothing. Params: `symbol`, `short`, `at`.
     TradeOversold = "trade.oversold",
+    /// Units received with no worth said, and no price the market knows for
+    /// the moment they arrived. Params: `symbol`.
+    TradeReceiveUnpriced = "trade.receive_unpriced",
     /// The ledger refused the trade's money. Params: `message`, its own
     /// sentence.
     TradeRefusedByLedger = "trade.refused_by_ledger",

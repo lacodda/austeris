@@ -1,6 +1,6 @@
 //! Reading and writing this service's schema.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDate, Utc};
@@ -10,7 +10,8 @@ use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::model::{
-    AccountValue, Holding, LineKind, Position, RevisionAction, Snapshot, SnapshotSummary, Trade, TradeKind, TradeRevision, TradeState, Valuation, Who, WhoKind,
+    AccountValue, Holding, LineKind, Method, Position, RevisionAction, Snapshot, SnapshotSummary, Trade, TradeKind, TradeRevision, TradeState, Valuation, Who,
+    WhoKind,
 };
 
 /// A trade about to be written, every field checked.
@@ -116,7 +117,7 @@ pub async fn replace_trade(transaction: &mut Transaction<'_, Postgres>, owner_id
     sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "UPDATE trades
             SET kind = $3, account_id = $4, to_account_id = $5, instrument_id = $6, quantity = $7, price = $8, currency = $9,
-                fee = $10, occurred_at = $11, occurred_on = $12, note = $13, updated_at = now(),
+                fee = $10, occurred_at = $11, occurred_on = $12, note = $13, updated_at = now(), booked_as = 2,
                 -- A transfer moves no money; whatever entry the trade had is
                 -- taken back in the same transaction.
                 entry_id = CASE WHEN $3 = 'transfer' THEN NULL ELSE entry_id END
@@ -253,7 +254,7 @@ pub async fn trades(pool: &PgPool, owner_id: Uuid, filter: &TradeFilter) -> Resu
 pub async fn positions(pool: &PgPool, owner_id: Uuid, on: Option<NaiveDate>) -> Result<Vec<Position>> {
     sqlx::query_as(
         "SELECT account_id, instrument_id, sum(delta) AS quantity
-           FROM (SELECT account_id, instrument_id, CASE WHEN kind = 'buy' THEN quantity ELSE -quantity END AS delta
+           FROM (SELECT account_id, instrument_id, CASE WHEN kind IN ('buy', 'receive') THEN quantity ELSE -quantity END AS delta
                    FROM trades WHERE owner_id = $1 AND ($2::date IS NULL OR occurred_on <= $2)
                  UNION ALL
                  SELECT to_account_id, instrument_id, quantity - fee
@@ -267,6 +268,116 @@ pub async fn positions(pool: &PgPool, owner_id: Uuid, on: Option<NaiveDate>) -> 
     .fetch_all(pool)
     .await
     .context("adding up positions")
+}
+
+/// Every trade of a person's - or those of a day and before - in the order
+/// they happened: what lots are worked out from.
+///
+/// # Errors
+///
+/// Returns an error when the query fails.
+pub async fn all_trades(pool: &PgPool, owner_id: Uuid, until: Option<NaiveDate>) -> Result<Vec<Trade>> {
+    sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT {TRADE_COLUMNS} FROM trades
+          WHERE owner_id = $1 AND ($2::date IS NULL OR occurred_on <= $2)
+          ORDER BY occurred_at, id"
+    )))
+    .bind(owner_id)
+    .bind(until)
+    .fetch_all(pool)
+    .await
+    .context("reading the trades lots are made of")
+}
+
+/// How each of a person's accounts counts the lots a sale takes; an account
+/// not listed counts first in, first out.
+///
+/// # Errors
+///
+/// Returns an error when the query fails.
+pub async fn cost_methods(pool: &PgPool, owner_id: Uuid) -> Result<HashMap<Uuid, Method>> {
+    let rows: Vec<(Uuid, Method)> = sqlx::query_as("SELECT account_id, method FROM cost_methods WHERE owner_id = $1")
+        .bind(owner_id)
+        .fetch_all(pool)
+        .await
+        .context("reading how accounts count their lots")?;
+    Ok(rows.into_iter().collect())
+}
+
+/// Says how an account counts the lots a sale takes.
+///
+/// # Errors
+///
+/// Returns an error when the write fails.
+pub async fn set_cost_method(pool: &PgPool, owner_id: Uuid, account_id: Uuid, method: Method) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO cost_methods (owner_id, account_id, method) VALUES ($1, $2, $3)
+         ON CONFLICT (owner_id, account_id) DO UPDATE SET method = EXCLUDED.method, updated_at = now()",
+    )
+    .bind(owner_id)
+    .bind(account_id)
+    .bind(method)
+    .execute(pool)
+    .await
+    .context("saying how an account counts its lots")?;
+    Ok(())
+}
+
+/// A trade whose money is booked the way it was before fees were spending,
+/// and whose it is.
+#[derive(sqlx::FromRow)]
+pub struct BookedBefore {
+    /// Whose.
+    pub owner_id: Uuid,
+    /// The trade.
+    #[sqlx(flatten)]
+    pub trade: Trade,
+}
+
+/// Trades whose money is booked the old way, a batch at a time.
+///
+/// # Errors
+///
+/// Returns an error when the query fails.
+pub async fn booked_before(pool: &PgPool, limit: i64) -> Result<Vec<BookedBefore>> {
+    sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT owner_id, {TRADE_COLUMNS} FROM trades WHERE booked_as < 2 ORDER BY owner_id, id LIMIT $1"
+    )))
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .context("finding trades booked the old way")
+}
+
+/// A trade still booked the old way, locked for the rest of the transaction;
+/// `None` when it is gone or was booked anew meanwhile.
+///
+/// # Errors
+///
+/// Returns an error when the query fails.
+pub async fn lock_booked_before(transaction: &mut Transaction<'_, Postgres>, owner_id: Uuid, id: Uuid) -> Result<Option<Trade>> {
+    sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT {TRADE_COLUMNS} FROM trades WHERE owner_id = $1 AND id = $2 AND booked_as < 2 FOR UPDATE"
+    )))
+    .bind(owner_id)
+    .bind(id)
+    .fetch_optional(&mut **transaction)
+    .await
+    .context("finding a trade booked the old way")
+}
+
+/// Writes down that a trade's money is booked the way it is now.
+///
+/// # Errors
+///
+/// Returns an error when the write fails.
+pub async fn mark_booked(transaction: &mut Transaction<'_, Postgres>, id: Uuid) -> Result<()> {
+    sqlx::query("UPDATE trades SET booked_as = 2 WHERE id = $1")
+        .bind(id)
+        .execute(&mut **transaction)
+        .await
+        .context("noting a trade booked anew")?;
+    Ok(())
 }
 
 /// A revision as it is stored.
@@ -354,8 +465,8 @@ pub async fn save_snapshot(pool: &PgPool, owner_id: Uuid, valuation: &Valuation,
     for account in &valuation.accounts {
         for holding in &account.holdings {
             sqlx::query(
-                "INSERT INTO snapshot_lines (snapshot_id, kind, account_id, account_name, instrument_id, symbol, name, quantity, price, priced_at, value, stale)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+                "INSERT INTO snapshot_lines (snapshot_id, kind, account_id, account_name, instrument_id, symbol, name, quantity, price, priced_at, value, stale, cost)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
             )
             .bind(id)
             .bind(holding.kind)
@@ -369,6 +480,7 @@ pub async fn save_snapshot(pool: &PgPool, owner_id: Uuid, valuation: &Valuation,
             .bind(holding.priced_at)
             .bind(holding.value)
             .bind(holding.stale)
+            .bind(holding.cost)
             .execute(&mut *transaction)
             .await
             .context("keeping a line of a snapshot")?;
@@ -463,6 +575,7 @@ struct SnapshotLine {
     priced_at: Option<DateTime<Utc>>,
     value: Option<Decimal>,
     stale: bool,
+    cost: Option<Decimal>,
 }
 
 /// One snapshot of this person's, as it was taken.
@@ -482,7 +595,7 @@ pub async fn snapshot(pool: &PgPool, owner_id: Uuid, id: Uuid) -> Result<Option<
         return Ok(None);
     };
     let lines: Vec<SnapshotLine> = sqlx::query_as(
-        "SELECT kind, account_id, account_name, instrument_id, symbol, name, quantity, price, priced_at, value, stale
+        "SELECT kind, account_id, account_name, instrument_id, symbol, name, quantity, price, priced_at, value, stale, cost
            FROM snapshot_lines WHERE snapshot_id = $1",
     )
     .bind(id)
@@ -508,6 +621,8 @@ pub async fn snapshot(pool: &PgPool, owner_id: Uuid, id: Uuid) -> Result<Option<
             priced_at: line.priced_at,
             value: line.value.map(|value| value.normalize()),
             stale: line.stale,
+            cost: line.cost.map(|cost| cost.normalize()),
+            gain: None,
         });
     }
     let valuation = crate::value::assemble(header.on_date, header.priced_at, header.currency, accounts.into_values().collect());

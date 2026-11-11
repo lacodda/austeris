@@ -338,6 +338,7 @@
       "fee_too_large": "The fee is as much as the trade itself.",
       "nothing_moved": "This trade moves less than one unit of {{currency}}.",
       "oversold": "That would leave {{short}} {{symbol}} fewer than were held at the time.",
+      "receive_unpriced": "Say what a unit of {{symbol}} was worth when it arrived - 0 if nothing: prices have none for that moment.",
       "refused_by_ledger": "The books refused the trade's money: {{message}}"
     },
     "portfolio": {

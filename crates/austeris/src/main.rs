@@ -323,6 +323,10 @@ fn start_imports(pool: sqlx::PgPool, peers: &Peers, tasks: &mut JoinSet<Result<(
 fn start_portfolio(pool: sqlx::PgPool, peers: &Peers) -> Result<Router> {
     let books = austeris_portfolio::services::Remote::connect_lazy(peers.grpc(Service::Ledger))?;
     let market = austeris_portfolio::services::Remote::connect_lazy(peers.grpc(Service::Market))?;
+    // Trades recorded before fees were spending have their fees filed apart
+    // once, in the background: it ends when they are done, and the module
+    // serves meanwhile - so it is not one of the tasks that stop the process.
+    tokio::spawn(austeris_portfolio::trade::book_fees_apart_in_time(pool.clone(), books.clone(), market.clone()));
     Ok(austeris_portfolio::routes::router(pool, books, market))
 }
 

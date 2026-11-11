@@ -9,6 +9,8 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub use crate::lots::Method;
+
 /// What a trade is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type, utoipa::ToSchema)]
 #[sqlx(type_name = "trade_kind", rename_all = "lowercase")]
@@ -20,6 +22,9 @@ pub enum TradeKind {
     Sell,
     /// Units left one account for another; the network took the fee.
     Transfer,
+    /// Units arrived for nothing paid - a staking reward, an airdrop, a gift.
+    /// No money moves; its price is what a unit was worth when it arrived.
+    Receive,
 }
 
 /// A trade, as it is kept.
@@ -179,6 +184,17 @@ pub struct Holding {
     /// The price is older than its kind stays current for: the last known,
     /// not today's.
     pub stale: bool,
+    /// What the units of a position cost, in the valuation's currency: each
+    /// lot at the rate of the day it was acquired. Absent for money, and when
+    /// a rate is not known.
+    #[serde(default, with = "rust_decimal::serde::str_option")]
+    #[schema(value_type = Option<String>, example = "601")]
+    pub cost: Option<Decimal>,
+    /// `value` less `cost`: what the position has gained - or lost, below
+    /// nothing - and not sold. Absent when either is.
+    #[serde(default, with = "rust_decimal::serde::str_option")]
+    #[schema(value_type = Option<String>, example = "11.345")]
+    pub gain: Option<Decimal>,
 }
 
 /// An account positions are held on, and what is on it.
@@ -222,6 +238,12 @@ pub struct Valuation {
     /// Something in the total is at a price older than its kind stays
     /// current for.
     pub stale: bool,
+    /// What every position in the total has gained and not sold. Absent when
+    /// one of them has no cost known: a sum that leaves one out looks like an
+    /// answer.
+    #[serde(default, with = "rust_decimal::serde::str_option")]
+    #[schema(value_type = Option<String>, example = "11.345")]
+    pub gain: Option<Decimal>,
 }
 
 /// A valuation kept as it was, to be compared with later.
@@ -394,4 +416,162 @@ pub struct TradeRevision {
     pub before: Option<TradeState>,
     /// The trade after; absent for its deletion.
     pub after: Option<TradeState>,
+}
+
+/// A broker's or a wallet's account, as the portfolio counts what is on it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct PortfolioAccount {
+    /// Which account, in the books.
+    pub account_id: Uuid,
+    /// What the person calls it.
+    pub name: String,
+    /// The money it is kept in: what its trades are paid in.
+    pub currency: String,
+    /// Closed: its trades are still true, and nothing new happens on it.
+    pub closed: bool,
+    /// How its sales and transfers out pick the lots they take.
+    pub cost_method: Method,
+}
+
+/// What the portfolio is told about an account.
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
+pub struct AccountBody {
+    /// How its sales and transfers out pick the lots they take: every gain on
+    /// it is counted again this way, the ones of years past as well.
+    pub cost_method: Method,
+}
+
+/// Units acquired together and still held, or what is left of them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct OpenLot {
+    /// The buy or the receive they came from.
+    pub trade_id: Uuid,
+    /// When they were acquired - on whichever account, before a transfer.
+    pub acquired_at: DateTime<Utc>,
+    /// The day they were acquired, where the person was.
+    pub acquired_on: NaiveDate,
+    /// How many are left.
+    #[serde(with = "rust_decimal::serde::str")]
+    #[schema(value_type = String, example = "0.005")]
+    pub quantity: Decimal,
+    /// What those cost, in `currency`, the buy's fee included.
+    #[serde(with = "rust_decimal::serde::str")]
+    #[schema(value_type = String, example = "300.5")]
+    pub cost: Decimal,
+    /// What a unit of them cost.
+    #[serde(with = "rust_decimal::serde::str")]
+    #[schema(value_type = String, example = "60100")]
+    pub unit_cost: Decimal,
+    /// The currency of the account they were acquired on.
+    pub currency: String,
+}
+
+/// A position, and the lots it is made of.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct PositionLots {
+    /// Where it is held.
+    pub account_id: Uuid,
+    /// What it is.
+    pub instrument_id: Uuid,
+    /// Its ticker; the id when the market no longer knows it.
+    pub symbol: String,
+    /// How the account picks the lots a sale takes.
+    pub method: Method,
+    /// Units held: what the lots add up to.
+    #[serde(with = "rust_decimal::serde::str")]
+    #[schema(value_type = String, example = "0.015")]
+    pub quantity: Decimal,
+    /// The lots, the oldest first.
+    pub lots: Vec<OpenLot>,
+}
+
+/// Part of a lot a sale took.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ClosedLot {
+    /// The buy or the receive it came from.
+    pub trade_id: Uuid,
+    /// When its units were acquired.
+    pub acquired_at: DateTime<Utc>,
+    /// The day they were acquired.
+    pub acquired_on: NaiveDate,
+    /// How many units of it the sale took.
+    #[serde(with = "rust_decimal::serde::str")]
+    #[schema(value_type = String, example = "0.005")]
+    pub quantity: Decimal,
+    /// What those cost, in `currency`.
+    #[serde(with = "rust_decimal::serde::str")]
+    #[schema(value_type = String, example = "300.5")]
+    pub cost: Decimal,
+    /// The currency they were acquired in.
+    pub currency: String,
+}
+
+/// A sale, and what it gained.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct Gain {
+    /// The sale.
+    pub trade_id: Uuid,
+    /// Where it was made.
+    pub account_id: Uuid,
+    /// What the person calls the account now.
+    pub account_name: String,
+    /// What was sold.
+    pub instrument_id: Uuid,
+    /// Its ticker; the id when the market no longer knows it.
+    pub symbol: String,
+    /// When.
+    pub occurred_at: DateTime<Utc>,
+    /// The day its money is booked under.
+    pub occurred_on: NaiveDate,
+    /// How the account picked the lots it took.
+    pub method: Method,
+    /// Units sold.
+    #[serde(with = "rust_decimal::serde::str")]
+    #[schema(value_type = String, example = "0.01")]
+    pub quantity: Decimal,
+    /// What it brought in, less its fee, in the report's currency at the rate
+    /// of its day. Absent when the rate is not known.
+    #[serde(with = "rust_decimal::serde::str_option")]
+    #[schema(value_type = Option<String>, example = "649.35")]
+    pub proceeds: Option<Decimal>,
+    /// What the units it took cost, in the report's currency: each lot at the
+    /// rate of the day it was acquired. Absent when a rate is not known.
+    #[serde(with = "rust_decimal::serde::str_option")]
+    #[schema(value_type = Option<String>, example = "601")]
+    pub cost: Option<Decimal>,
+    /// `proceeds` less `cost`: below nothing for a loss. Absent when either is.
+    #[serde(with = "rust_decimal::serde::str_option")]
+    #[schema(value_type = Option<String>, example = "48.35")]
+    pub gain: Option<Decimal>,
+    /// The lots it took, in the order it took them.
+    pub lots: Vec<ClosedLot>,
+}
+
+/// What sales over a period gained, in one currency.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct Gains {
+    /// What it is counted in.
+    pub currency: String,
+    /// The first day of the period.
+    pub from: NaiveDate,
+    /// The last day of the period.
+    pub to: NaiveDate,
+    /// Every sale of the period, the latest first.
+    pub sales: Vec<Gain>,
+    /// What the sales with a gain known brought in, less their fees.
+    #[serde(with = "rust_decimal::serde::str")]
+    #[schema(value_type = String, example = "649.35")]
+    pub proceeds: Decimal,
+    /// What the units they took cost.
+    #[serde(with = "rust_decimal::serde::str")]
+    #[schema(value_type = String, example = "601")]
+    pub cost: Decimal,
+    /// The two, one less the other: below nothing for a loss.
+    #[serde(with = "rust_decimal::serde::str")]
+    #[schema(value_type = String, example = "48.35")]
+    pub gain: Decimal,
+    /// The currencies with no rate into the report's on a day a sale or a lot
+    /// needed one. The sales that needed them are listed, and left out of the
+    /// sums: a sum that silently drops them looks like an answer.
+    pub unvalued: Vec<String>,
 }

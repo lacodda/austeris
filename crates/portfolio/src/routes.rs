@@ -7,17 +7,18 @@
 use austeris_common::{AppError, AppResult, Caller, Code, health};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::routing::get;
+use axum::routing::{get, put};
 use axum::{Json, Router};
-use chrono::NaiveDate;
+use chrono::{Datelike, Days, NaiveDate, Utc};
 use serde::Deserialize;
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::MIGRATOR;
+use crate::gains;
 use crate::model::{
-    AccountValue, Comparison, Difference, Holding, LineKind, NewTradeBody, Position, RevisionAction, Snapshot, SnapshotSummary, Trade, TradeBody, TradeKind,
-    TradeRevision, TradeState, Valuation, Who, WhoKind,
+    AccountBody, AccountValue, ClosedLot, Comparison, Difference, Gain, Gains, Holding, LineKind, Method, NewTradeBody, OpenLot, PortfolioAccount, Position,
+    PositionLots, RevisionAction, Snapshot, SnapshotSummary, Trade, TradeBody, TradeKind, TradeRevision, TradeState, Valuation, Who, WhoKind,
 };
 use crate::repository::{self, TradeFilter};
 use crate::services::{Books, Market};
@@ -45,6 +46,10 @@ pub fn router<B: Books + Clone + 'static, M: Market + Clone + 'static>(pool: PgP
         )
         .route("/portfolio/trades/{id}/history", get(trade_history::<B, M>))
         .route("/portfolio/positions", get(positions::<B, M>))
+        .route("/portfolio/accounts", get(list_accounts::<B, M>))
+        .route("/portfolio/accounts/{id}", put(set_account::<B, M>))
+        .route("/portfolio/lots", get(lots::<B, M>))
+        .route("/portfolio/gains", get(gains::<B, M>))
         .route("/portfolio/value", get(value::<B, M>))
         .route("/portfolio/snapshots", get(list_snapshots::<B, M>).post(take_snapshot::<B, M>))
         .route("/portfolio/snapshots/{id}", get(read_snapshot::<B, M>).delete(delete_snapshot::<B, M>))
@@ -262,6 +267,155 @@ async fn positions<B: Books + Clone + 'static, M: Market + Clone + 'static>(
     ))
 }
 
+/// Every broker's and wallet's account, and how each counts the lots its
+/// sales take.
+#[utoipa::path(
+    get,
+    path = "/api/v1/portfolio/accounts",
+    tag = "portfolio",
+    responses(
+        (status = 200, description = "The accounts positions are held on, open ones first", body = Vec<PortfolioAccount>),
+        (status = 503, description = "The ledger did not answer", body = austeris_common::error::ErrorBody),
+    ),
+)]
+async fn list_accounts<B: Books + Clone + 'static, M: Market + Clone + 'static>(
+    State(state): State<Portfolio<B, M>>,
+    caller: Caller,
+) -> AppResult<Json<Vec<PortfolioAccount>>> {
+    let methods = repository::cost_methods(&state.pool, caller.id()).await?;
+    let accounts = state.books.accounts(caller.id()).await.map_err(|status| unvalued(Unvalued::Ledger(status)))?;
+    Ok(Json(
+        accounts
+            .into_iter()
+            .filter(crate::services::Account::holds_positions)
+            .map(|account| PortfolioAccount {
+                cost_method: methods.get(&account.id).copied().unwrap_or_default(),
+                account_id: account.id,
+                name: account.name,
+                currency: account.currency,
+                closed: account.closed,
+            })
+            .collect(),
+    ))
+}
+
+/// Says how an account counts the lots its sales and transfers out take:
+/// `fifo`, the oldest first; `lifo`, the newest first; or `average`, a share
+/// of every lot. Every gain on the account is counted this way from then on,
+/// the ones of years past as well - the lots are worked out from the trades.
+#[utoipa::path(
+    put,
+    path = "/api/v1/portfolio/accounts/{id}",
+    tag = "portfolio",
+    params(("id" = Uuid, Path, description = "The account")),
+    request_body = AccountBody,
+    responses(
+        (status = 200, description = "The account, counted the way it now is", body = PortfolioAccount),
+        (status = 400, description = "Positions are not held on that account", body = austeris_common::error::ErrorBody),
+        (status = 404, description = "No such account", body = austeris_common::error::ErrorBody),
+        (status = 503, description = "The ledger did not answer; nothing changed", body = austeris_common::error::ErrorBody),
+    ),
+)]
+async fn set_account<B: Books + Clone + 'static, M: Market + Clone + 'static>(
+    State(state): State<Portfolio<B, M>>,
+    caller: Caller,
+    Path(id): Path<Uuid>,
+    Json(body): Json<AccountBody>,
+) -> AppResult<Json<PortfolioAccount>> {
+    let accounts = state.books.accounts(caller.id()).await.map_err(|status| unvalued(Unvalued::Ledger(status)))?;
+    let account = accounts
+        .into_iter()
+        .find(|account| account.id == id)
+        .ok_or_else(|| AppError::not_found(anyhow::anyhow!("no such account")))?;
+    if !account.holds_positions() {
+        return Err(refused(Refused::NotAHoldingAccount {
+            name: account.name,
+            kind: account.kind,
+        }));
+    }
+    repository::set_cost_method(&state.pool, caller.id(), id, body.cost_method).await?;
+    Ok(Json(PortfolioAccount {
+        account_id: account.id,
+        name: account.name,
+        currency: account.currency,
+        closed: account.closed,
+        cost_method: body.cost_method,
+    }))
+}
+
+/// Every position and the lots it is made of - each buy and receive still
+/// held, or what is left of it after the sales that took from it - now, or
+/// as of the end of a day. What each lot cost is in the currency it was
+/// acquired in, the buy's fee included.
+#[utoipa::path(
+    get,
+    path = "/api/v1/portfolio/lots",
+    tag = "portfolio",
+    params(OnQuery),
+    responses(
+        (status = 200, description = "Every position held, by account and instrument, with its lots, the oldest first", body = Vec<PositionLots>),
+        (status = 400, description = "The day has not happened", body = austeris_common::error::ErrorBody),
+        (status = 503, description = "The market did not answer", body = austeris_common::error::ErrorBody),
+    ),
+)]
+async fn lots<B: Books + Clone + 'static, M: Market + Clone + 'static>(
+    State(state): State<Portfolio<B, M>>,
+    caller: Caller,
+    Query(query): Query<OnQuery>,
+) -> AppResult<Json<Vec<PositionLots>>> {
+    let on = snapshot::day(query.on).map_err(|why| AppError::bad_request(anyhow::anyhow!(why)))?;
+    let positions = gains::open_lots(&state.pool, &state.market, caller.id(), on).await.map_err(unvalued)?;
+    Ok(Json(positions))
+}
+
+/// The period, and the currency, gains are asked for in.
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+pub struct GainsQuery {
+    /// The first day. The first of January of this year when omitted.
+    pub from: Option<NaiveDate>,
+    /// The last day. Today when omitted.
+    pub to: Option<NaiveDate>,
+    /// What to count them in. USD when omitted.
+    pub currency: Option<String>,
+}
+
+/// What the sales of a period gained: each sale's proceeds, less its fee,
+/// beside what the units it took cost - the lots its account's method picked
+/// - and the sums. In one currency: proceeds at the rate of the sale's day,
+/// each lot at the rate of the day it was acquired.
+///
+/// A sale needing a rate the books do not have is listed without its numbers,
+/// left out of the sums, and its currency named in `unvalued`.
+#[utoipa::path(
+    get,
+    path = "/api/v1/portfolio/gains",
+    tag = "portfolio",
+    params(GainsQuery),
+    responses(
+        (status = 200, description = "Every sale of the period, the latest first, and what they gained", body = Gains),
+        (status = 400, description = "The currency is not a code, or the period ends before it starts", body = austeris_common::error::ErrorBody),
+        (status = 503, description = "The ledger or the market did not answer", body = austeris_common::error::ErrorBody),
+    ),
+)]
+async fn gains<B: Books + Clone + 'static, M: Market + Clone + 'static>(
+    State(state): State<Portfolio<B, M>>,
+    caller: Caller,
+    Query(query): Query<GainsQuery>,
+) -> AppResult<Json<Gains>> {
+    let currency = currency(query.currency.as_deref())?;
+    // Today somewhere east of UTC as well.
+    let today = Utc::now().date_naive() + Days::new(1);
+    let to = query.to.unwrap_or(today);
+    let from = query.from.unwrap_or_else(|| NaiveDate::from_ymd_opt(to.year(), 1, 1).unwrap_or(to));
+    if from > to {
+        return Err(AppError::bad_request(anyhow::anyhow!("the period ends on {to}, before it starts on {from}")));
+    }
+    let report = gains::gains(&state.pool, &state.books, &state.market, caller.id(), from, to, &currency)
+        .await
+        .map_err(unvalued)?;
+    Ok(Json(report))
+}
+
 /// What a valuation is asked in, and of when.
 #[derive(Debug, Deserialize, utoipa::IntoParams)]
 pub struct ValueQuery {
@@ -472,6 +626,7 @@ fn refused(refusal: Refused) -> AppError {
         Refused::MoneyNotHolding { symbol } => AppError::bad_request(message).with_code(Code::TradeMoneyNotHolding, serde_json::json!({ "symbol": symbol })),
         Refused::FeeTooLarge => AppError::bad_request(message).with_code(Code::TradeFeeTooLarge, serde_json::json!({})),
         Refused::NothingMoved { currency } => AppError::bad_request(message).with_code(Code::TradeNothingMoved, serde_json::json!({ "currency": currency })),
+        Refused::ReceiveUnpriced { symbol } => AppError::bad_request(message).with_code(Code::TradeReceiveUnpriced, serde_json::json!({ "symbol": symbol })),
         Refused::Oversold { symbol, short, at } => {
             AppError::new(StatusCode::CONFLICT, message).with_code(Code::TradeOversold, serde_json::json!({ "symbol": symbol, "short": short, "at": at }))
         }
@@ -508,6 +663,10 @@ fn unvalued(error: Unvalued) -> AppError {
         delete_trade,
         trade_history,
         positions,
+        list_accounts,
+        set_account,
+        lots,
+        gains,
         value,
         list_snapshots,
         take_snapshot,
@@ -525,6 +684,14 @@ fn unvalued(error: Unvalued) -> AppError {
         Who,
         WhoKind,
         Position,
+        PortfolioAccount,
+        AccountBody,
+        Method,
+        PositionLots,
+        OpenLot,
+        Gains,
+        Gain,
+        ClosedLot,
         Valuation,
         AccountValue,
         Holding,
@@ -535,6 +702,6 @@ fn unvalued(error: Unvalued) -> AppError {
         Comparison,
         Difference,
     )),
-    tags((name = "portfolio", description = "Trades on brokers' and exchanges' accounts, the money they move, what they add up to, what it is worth, and snapshots of it")),
+    tags((name = "portfolio", description = "Trades on brokers' and exchanges' accounts, the money they move, what they add up to, the lots it is made of, what it is worth and gained, and snapshots of it")),
 )]
 pub struct ApiDoc;

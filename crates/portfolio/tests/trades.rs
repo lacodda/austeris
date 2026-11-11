@@ -220,7 +220,8 @@ async fn a_buy_books_what_it_cost_and_a_sale_what_it_brought_in() {
     assert_eq!(world.cash().await, decimal("399"));
 
     // The money is in the books as an entry the portfolio keeps: the account,
-    // and the holding it became - not spending.
+    // the fee - spending, under the portfolio's category for it - and the
+    // holding the price became, which is not.
     let entry_id: Uuid = bought["entry_id"].as_str().expect("an entry").parse().expect("an id");
     let entry = austeris_ledger::repository::entry(&world.ledger_pool, world.owner, entry_id)
         .await
@@ -230,14 +231,22 @@ async fn a_buy_books_what_it_cost_and_a_sale_what_it_brought_in() {
     assert_eq!(entry.source.as_deref(), Some("portfolio"));
     assert_eq!(entry.description, "Buy 0.01 BTC");
     assert_eq!(entry.occurred_on, NaiveDate::from_ymd_opt(2026, 10, 20).expect("a day"));
-    let sides: Vec<_> = entry.lines.iter().map(|line| (line.side, line.amount.normalize())).collect();
+    let mut sides: Vec<_> = entry.lines.iter().map(|line| (line.side, line.amount.normalize())).collect();
+    sides.sort_by_key(|(_, amount)| *amount);
     assert_eq!(
         sides,
         [
             (austeris_ledger::model::LineSide::Account, decimal("-601")),
-            (austeris_ledger::model::LineSide::Holding, decimal("601"))
+            (austeris_ledger::model::LineSide::Category, decimal("1")),
+            (austeris_ledger::model::LineSide::Holding, decimal("600")),
         ]
     );
+    let fees = entry.lines.iter().find_map(|line| line.category_id).expect("the fee's category");
+    let categories = austeris_ledger::repository::categories(&world.ledger_pool, world.owner)
+        .await
+        .expect("categories");
+    let category = categories.iter().find(|category| category.id == fees).expect("the category");
+    assert_eq!((category.name.as_str(), category.module.as_deref()), ("Trading fees", Some("portfolio")));
 
     let sold = world.trade(sell(world.exchange, world.btc, "0.004", "65000", "0.26", 36)).await;
     assert_eq!(number(&sold["money"]), decimal("259.74"), "a sale brings its price less its fee");
@@ -894,4 +903,230 @@ async fn a_buy_is_not_kept_without_its_money_in_the_books() {
     .expect("writing it is not yet the problem");
     let error = transaction.commit().await.expect_err("a buy was kept with no money in the books");
     assert!(error.to_string().contains("the books have no entry"), "{error}");
+}
+
+/// Units received for nothing paid, at an hour from the start of 20 October
+/// 2026 in Asunción.
+fn receive(account: Uuid, instrument: Uuid, quantity: &str, price: Option<&str>, hours: u32) -> Value {
+    let mut body = json!({
+        "kind": "receive",
+        "account_id": account,
+        "instrument_id": instrument,
+        "quantity": quantity,
+        "occurred_at": hour(hours),
+    });
+    if let Some(price) = price {
+        body["price"] = json!(price);
+    }
+    body
+}
+
+#[tokio::test]
+async fn units_received_for_nothing_move_no_money_and_are_worth_what_they_were_then() {
+    let Some(world) = World::new("portfolio_receive").await else { return };
+
+    // A staking reward, worth what the person says it was.
+    let reward = world.trade(receive(world.exchange, world.btc, "0.001", Some("61000"), 10)).await;
+    assert_eq!(reward["kind"], "receive");
+    assert_eq!(reward["money"], Value::Null, "nothing was paid");
+    assert_eq!(reward["entry_id"], Value::Null, "and nothing is in the books");
+    assert_eq!(world.cash().await, decimal("1000"));
+
+    // A gift counted as worth nothing.
+    world.trade(receive(world.exchange, world.btc, "0.002", Some("0"), 11)).await;
+
+    // Said with no worth, the market's price of that moment is taken - and
+    // with none known, the person is asked.
+    let (status, refused) = world
+        .call("POST", "/portfolio/trades", Some(receive(world.exchange, world.btc, "0.001", None, 12)))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["code"], "trade.receive_unpriced");
+    let noon = DateTime::parse_from_rfc3339("2026-10-20T11:30:00-03:00").expect("a moment").with_timezone(&Utc);
+    world.price(world.btc, "USDT", noon, "60500").await;
+    let priced = world.trade(receive(world.exchange, world.btc, "0.001", None, 12)).await;
+    assert_eq!(number(&priced["price"]), decimal("60500"), "{priced}");
+
+    // Received units cost nothing to receive.
+    let mut with_fee = receive(world.exchange, world.btc, "0.001", Some("1"), 13);
+    with_fee["fee"] = json!("0.0001");
+    let (status, _) = world.call("POST", "/portfolio/trades", Some(with_fee)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // What arrived can be sold, and the sale gains on what it was worth.
+    world.trade(sell(world.exchange, world.btc, "0.004", "65000", "0", 20)).await;
+    let (status, gains) = world.call("GET", "/portfolio/gains?currency=USDT&from=2026-10-01&to=2026-10-31", None).await;
+    assert_eq!(status, StatusCode::OK, "{gains}");
+    assert_eq!(number(&gains["proceeds"]), decimal("260"));
+    assert_eq!(number(&gains["cost"]), decimal("121.5"), "61 + 0 + 60.5");
+    assert_eq!(number(&gains["gain"]), decimal("138.5"));
+}
+
+#[tokio::test]
+async fn a_sale_gains_on_the_lots_its_accounts_method_picks() {
+    let Some(world) = World::new("portfolio_methods").await else { return };
+    world.trade(buy(world.exchange, world.btc, "0.01", "60000", "1", 10)).await;
+    world.trade(buy(world.exchange, world.btc, "0.01", "70000", "1", 20)).await;
+    let sale = world.trade(sell(world.exchange, world.btc, "0.01", "80000", "0.8", 30)).await;
+    let period = "from=2026-10-01&to=2026-10-31&currency=USDT";
+
+    let (_, accounts) = world.call("GET", "/portfolio/accounts", None).await;
+    assert_eq!(accounts[0]["cost_method"], "fifo", "first in, first out until said otherwise: {accounts}");
+
+    for (method, cost, gain) in [("fifo", "601", "198.2"), ("lifo", "701", "98.2"), ("average", "651", "148.2")] {
+        let (status, account) = world
+            .call(
+                "PUT",
+                &format!("/portfolio/accounts/{}", world.exchange),
+                Some(json!({ "cost_method": method })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{account}");
+        assert_eq!(account["cost_method"], method);
+        let (_, gains) = world.call("GET", &format!("/portfolio/gains?{period}"), None).await;
+        let only = &gains["sales"][0];
+        assert_eq!(only["trade_id"], sale["id"]);
+        assert_eq!(only["method"], method);
+        assert_eq!(number(&only["proceeds"]), decimal("799.2"), "{method}: its price less its fee");
+        assert_eq!(number(&only["cost"]), decimal(cost), "{method}: {gains}");
+        assert_eq!(number(&only["gain"]), decimal(gain), "{method}");
+        assert_eq!(number(&gains["gain"]), decimal(gain), "{method}");
+    }
+
+    // What is left is the lots the method left: half of each, on average.
+    let (status, lots) = world.call("GET", "/portfolio/lots", None).await;
+    assert_eq!(status, StatusCode::OK, "{lots}");
+    assert_eq!(lots[0]["method"], "average");
+    assert_eq!(number(&lots[0]["quantity"]), decimal("0.01"));
+    let costs: Vec<Decimal> = lots[0]["lots"].as_array().expect("lots").iter().map(|lot| number(&lot["cost"])).collect();
+    assert_eq!(costs, [decimal("300.5"), decimal("350.5")]);
+
+    // Counted in dollars, a sale needs the stablecoin's rate on its day and on
+    // each lot's; without them it is listed and left out, by name.
+    let (_, in_dollars) = world.call("GET", "/portfolio/gains?from=2026-10-01&to=2026-10-31&currency=USD", None).await;
+    assert_eq!(in_dollars["sales"][0]["gain"], Value::Null, "{in_dollars}");
+    assert_eq!(in_dollars["unvalued"], json!(["USDT"]));
+    assert_eq!(number(&in_dollars["gain"]), Decimal::ZERO);
+    let day = NaiveDate::from_ymd_opt(2026, 10, 1).expect("a day");
+    austeris_ledger::repository::record_rate(&world.ledger_pool, "USDT", "USD", day, decimal("0.999"), "manual")
+        .await
+        .expect("a rate");
+    let (_, in_dollars) = world.call("GET", "/portfolio/gains?from=2026-10-01&to=2026-10-31&currency=USD", None).await;
+    assert_eq!(number(&in_dollars["sales"][0]["gain"]), decimal("148.05"), "{in_dollars}");
+
+    // The period is the person's: a sale outside it is not in it.
+    let (_, november) = world.call("GET", "/portfolio/gains?from=2026-11-01&to=2026-11-30&currency=USDT", None).await;
+    assert_eq!(november["sales"], json!([]));
+    let (status, _) = world.call("GET", "/portfolio/gains?from=2026-11-01&to=2026-10-01", None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Only an account positions are held on counts lots.
+    let bank = world.account(AccountKind::Bank, "Bank", "USD").await;
+    let (status, _) = world
+        .call("PUT", &format!("/portfolio/accounts/{bank}"), Some(json!({ "cost_method": "lifo" })))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = world
+        .call(
+            "PUT",
+            &format!("/portfolio/accounts/{}", Uuid::new_v4()),
+            Some(json!({ "cost_method": "lifo" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_position_says_what_it_cost_and_what_it_has_gained() {
+    let Some(world) = World::new("portfolio_cost").await else { return };
+    world.trade(buy(world.exchange, world.btc, "0.01", "60000", "1", 10)).await;
+    world.price(world.btc, "USDT", Utc::now() - chrono::Duration::minutes(5), "65000").await;
+
+    let (status, value) = world.call("GET", "/portfolio/value?currency=USDT", None).await;
+    assert_eq!(status, StatusCode::OK, "{value}");
+    let coin = &value["accounts"][0]["holdings"][1];
+    assert_eq!(coin["symbol"], "BTC");
+    assert_eq!(number(&coin["cost"]), decimal("601"), "its price and its fee");
+    assert_eq!(number(&coin["gain"]), decimal("49"));
+    assert_eq!(value["accounts"][0]["holdings"][0]["cost"], Value::Null, "money has no cost");
+    assert_eq!(number(&value["gain"]), decimal("49"));
+
+    // A snapshot keeps what it cost then.
+    let (status, taken) = world.call("POST", "/portfolio/snapshots", Some(json!({ "currency": "USDT" }))).await;
+    assert_eq!(status, StatusCode::CREATED, "{taken}");
+    let (_, read) = world
+        .call("GET", &format!("/portfolio/snapshots/{}", taken["id"].as_str().expect("an id")), None)
+        .await;
+    assert_eq!(number(&read["snapshot"]["accounts"][0]["holdings"][1]["cost"]), decimal("601"), "{read}");
+    assert_eq!(number(&read["snapshot"]["gain"]), decimal("49"));
+
+    // In a currency the cost cannot be converted into, the position is worth
+    // what it is and its gain is not known.
+    world.price(world.btc, "USD", Utc::now() - chrono::Duration::minutes(5), "65100").await;
+    let (_, in_dollars) = world.call("GET", "/portfolio/value?currency=USD", None).await;
+    assert_eq!(in_dollars["accounts"][0]["holdings"][1]["gain"], Value::Null, "{in_dollars}");
+    assert_eq!(in_dollars["gain"], Value::Null);
+}
+
+#[tokio::test]
+async fn trades_booked_before_fees_were_spending_are_booked_anew_once() {
+    let Some(world) = World::new("portfolio_rebook").await else { return };
+    let bought = world.trade(buy(world.exchange, world.btc, "0.01", "60000", "1", 10)).await;
+    world.trade(buy(world.exchange, world.btc, "0.01", "60000", "0", 11)).await;
+    let id: Uuid = bought["id"].as_str().expect("an id").parse().expect("an id");
+
+    // As the previous build booked it: the fee inside the holding.
+    let line = |side, amount: &str| austeris_proto::ledger::v1::Line {
+        side: Some(side),
+        amount: amount.to_owned(),
+        currency: "USDT".to_owned(),
+        note: String::new(),
+    };
+    world
+        .books()
+        .restate(RestateEntryRequest {
+            owner_id: world.owner.to_string(),
+            idempotency_key: austeris_portfolio::trade::key(id),
+            source: "portfolio".to_owned(),
+            occurred_on: "2026-10-20".to_owned(),
+            description: "Buy 0.01 BTC".to_owned(),
+            lines: vec![
+                line(austeris_proto::ledger::v1::line::Side::AccountId(world.exchange.to_string()), "-601"),
+                line(austeris_proto::ledger::v1::line::Side::Holding(austeris_proto::ledger::v1::Holding {}), "601"),
+            ],
+        })
+        .await
+        .expect("restating the old way");
+    let mut transaction = Actor::module(Some("portfolio")).begin(&world.pool).await.expect("a transaction");
+    sqlx::query("UPDATE trades SET booked_as = 1")
+        .execute(&mut *transaction)
+        .await
+        .expect("marking them old");
+    transaction.commit().await.expect("committing");
+
+    let restated = austeris_portfolio::trade::book_fees_apart(&world.pool, &world.books(), &world.market())
+        .await
+        .expect("booking anew");
+    assert_eq!(restated, 1, "only the trade with a fee changes in the books");
+    let entry_id: Uuid = bought["entry_id"].as_str().expect("an entry").parse().expect("an id");
+    let entry = austeris_ledger::repository::entry(&world.ledger_pool, world.owner, entry_id)
+        .await
+        .expect("reading")
+        .expect("the entry");
+    assert!(
+        entry.lines.iter().any(|line| line.category_id.is_some() && line.amount == decimal("1")),
+        "{:?}",
+        entry.lines
+    );
+    assert_eq!(world.cash().await, decimal("-201"), "the account moved as much as before");
+
+    let waiting: i64 = sqlx::query_scalar("SELECT count(*) FROM trades WHERE booked_as < 2")
+        .fetch_one(&world.pool)
+        .await
+        .expect("counting");
+    assert_eq!(waiting, 0);
+    let again = austeris_portfolio::trade::book_fees_apart(&world.pool, &world.books(), &world.market())
+        .await
+        .expect("asked again");
+    assert_eq!(again, 0, "nothing is booked twice");
 }

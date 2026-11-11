@@ -9,12 +9,17 @@
 //! answered. Should the commit itself fail after that, the ledger is asked to
 //! undo what it did - the one moment the two can part, said in the log when
 //! even that fails.
+//!
+//! A fee is money spent - what the broker or the exchange took - and the entry
+//! files it under a category the portfolio keeps in the books for it, by its
+//! own key: the holding is the price alone (ADR 0017). What a coin cost, for
+//! its lot, is still the price and the fee together.
 
 use std::str::FromStr;
 
 use austeris_common::Actor;
 use austeris_ledger::currency;
-use austeris_proto::ledger::v1::{Holding, Line, PostEntryRequest, RestateEntryRequest, line::Side};
+use austeris_proto::ledger::v1::{Holding, Line, ModuleCategory, PostEntryRequest, RestateEntryRequest, line::Side};
 use chrono::{Duration, NaiveDate, Utc};
 use rust_decimal::Decimal;
 use sqlx::PgPool;
@@ -24,6 +29,7 @@ use uuid::Uuid;
 use crate::model::{Trade, TradeBody, TradeKind};
 use crate::repository::{self, NewTrade};
 use crate::services::{Account, Books, Instrument, Market};
+use crate::value;
 
 /// Why a trade was not recorded, changed or deleted.
 #[derive(Debug, thiserror::Error)]
@@ -73,6 +79,13 @@ pub enum Refused {
         /// The account's currency.
         currency: String,
     },
+    /// Units received with no worth said, and none the market knows for the
+    /// moment they arrived.
+    #[error("say what a unit of {symbol} was worth when it arrived - 0 for nothing; the market has no price for that moment")]
+    ReceiveUnpriced {
+        /// The instrument's ticker.
+        symbol: String,
+    },
     /// It leaves a position below nothing at some moment.
     #[error("that leaves {short} {symbol} fewer than were held at {at}")]
     Oversold {
@@ -114,7 +127,7 @@ pub fn money(kind: TradeKind, quantity: Decimal, price: Option<Decimal>, fee: De
     let signed = match kind {
         TradeKind::Buy => -(gross + fee),
         TradeKind::Sell => gross - fee,
-        TradeKind::Transfer => return None,
+        TradeKind::Transfer | TradeKind::Receive => return None,
     };
     Some(currency::round(signed, currency).normalize())
 }
@@ -130,10 +143,20 @@ pub fn with_money(mut trade: Trade) -> Trade {
     trade
 }
 
+/// The key of the category a trade's fee is filed under, among the
+/// portfolio's own in the books.
+pub const FEES_KEY: &str = "fees";
+
+/// What that category is called when it is made, before anyone renames it.
+pub const FEES_NAME: &str = "Trading fees";
+
 /// What a trade's money is in the ledger's terms.
 struct Leg {
     account_id: Uuid,
     amount: Decimal,
+    /// What the broker or the exchange took, rounded as the account's money
+    /// is; nothing when it rounds to nothing.
+    fee: Decimal,
     currency: String,
     occurred_on: NaiveDate,
     description: String,
@@ -143,32 +166,49 @@ impl Leg {
     /// The trade's money, when it moves any.
     fn of(trade: &Trade, symbol: &str) -> Option<Self> {
         let amount = money(trade.kind, trade.quantity, trade.price, trade.fee, trade.currency.as_deref())?;
+        let currency = trade.currency.clone()?;
         let verb = if trade.kind == TradeKind::Buy { "Buy" } else { "Sell" };
         Some(Self {
             account_id: trade.account_id,
             amount,
-            currency: trade.currency.clone()?,
+            fee: currency::round(trade.fee, &currency).normalize(),
+            currency,
             occurred_on: trade.occurred_on,
             description: format!("{verb} {} {symbol}", trade.quantity.normalize()),
         })
     }
 
-    /// The account's side and the holding's.
+    /// The account's side, the fee's, and the holding's - which is what is
+    /// left, so the entry balances however the account's money rounds.
     fn lines(&self) -> Vec<Line> {
-        vec![
-            Line {
-                side: Some(Side::AccountId(self.account_id.to_string())),
-                amount: self.amount.to_string(),
+        let mut lines = vec![Line {
+            side: Some(Side::AccountId(self.account_id.to_string())),
+            amount: self.amount.to_string(),
+            currency: self.currency.clone(),
+            note: String::new(),
+        }];
+        if !self.fee.is_zero() {
+            lines.push(Line {
+                side: Some(Side::ModuleCategory(ModuleCategory {
+                    key: FEES_KEY.to_owned(),
+                    name: FEES_NAME.to_owned(),
+                    flow: "expense".to_owned(),
+                })),
+                amount: self.fee.to_string(),
                 currency: self.currency.clone(),
                 note: String::new(),
-            },
-            Line {
+            });
+        }
+        let holding = -self.amount - self.fee;
+        if !holding.is_zero() {
+            lines.push(Line {
                 side: Some(Side::Holding(Holding {})),
-                amount: (-self.amount).to_string(),
+                amount: holding.normalize().to_string(),
                 currency: self.currency.clone(),
                 note: String::new(),
-            },
-        ]
+            });
+        }
+        lines
     }
 }
 
@@ -194,6 +234,17 @@ async fn check<B: Books, M: Market>(books: &B, market: &M, owner: Uuid, body: &T
             }
             if body.to_account_id.is_some() {
                 return Err(Refused::Malformed("a buy or a sale happens on one account; only a transfer goes to another"));
+            }
+        }
+        TradeKind::Receive => {
+            if body.price.is_some_and(|price| price < Decimal::ZERO) {
+                return Err(Refused::Malformed("what a unit was worth is not below nothing"));
+            }
+            if !fee.is_zero() {
+                return Err(Refused::Malformed("units received cost nothing to receive; a fee is a buy's or a transfer's"));
+            }
+            if body.to_account_id.is_some() {
+                return Err(Refused::Malformed("units are received on one account; only a transfer goes to another"));
             }
         }
         TradeKind::Transfer => {
@@ -241,6 +292,13 @@ async fn check<B: Books, M: Market>(books: &B, market: &M, owner: Uuid, body: &T
     if body.kind == TradeKind::Sell && body.price.is_some_and(|price| body.quantity * price <= fee) {
         return Err(Refused::FeeTooLarge);
     }
+    // A reward is worth what the market said at the moment it arrived, unless
+    // the person says otherwise - and a price the market only knew long
+    // before is not that.
+    let price = match (body.kind, body.price) {
+        (TradeKind::Receive, None) => Some(worth_on_arrival(books, market, &instrument, &account.currency, body).await?),
+        (_, said) => said,
+    };
     if let Some(moved) = money(body.kind, body.quantity, body.price, fee, currency.as_deref())
         && moved.is_zero()
     {
@@ -256,7 +314,7 @@ async fn check<B: Books, M: Market>(books: &B, market: &M, owner: Uuid, body: &T
             to_account_id: body.to_account_id,
             instrument_id: body.instrument_id,
             quantity: body.quantity,
-            price: body.price,
+            price,
             currency,
             fee,
             occurred_at,
@@ -265,6 +323,25 @@ async fn check<B: Books, M: Market>(books: &B, market: &M, owner: Uuid, body: &T
         },
         instrument,
     })
+}
+
+/// What a unit received was worth when it arrived, in the account's currency,
+/// as the market priced it then.
+async fn worth_on_arrival<B: Books, M: Market>(books: &B, market: &M, instrument: &Instrument, currency: &str, body: &TradeBody) -> Result<Decimal, Refused> {
+    let at = body.occurred_at.with_timezone(&Utc);
+    let prices = value::prices_in(books, market, &[instrument.id], currency, Some(at), body.occurred_at.date_naive())
+        .await
+        .map_err(|why| {
+            tracing::error!(%why, "the worth of units received could not be looked up");
+            Refused::MarketUnavailable
+        })?;
+    prices
+        .get(&instrument.id)
+        .filter(|price| !price.stale)
+        .map(|price| price.price)
+        .ok_or_else(|| Refused::ReceiveUnpriced {
+            symbol: instrument.symbol.clone(),
+        })
 }
 
 /// The account a trade names, when positions can be held on it.
@@ -429,6 +506,88 @@ pub async fn delete<B: Books, M: Market>(pool: &PgPool, books: &B, market: &M, o
     Ok(())
 }
 
+/// How many trades are booked anew in one go.
+const REBOOK_BATCH: i64 = 100;
+
+/// Books the money of the trades recorded before fees were spending the way
+/// it is booked now: each buy's and sale's entry restated with its fee filed
+/// under the portfolio's category for fees, and the holding its price alone.
+/// Answers how many entries it restated.
+///
+/// Each trade is locked while it is done, and done once: a trade a person
+/// changed meanwhile was booked anew by the change. Asked again after a
+/// failure, it goes on from where it stopped.
+///
+/// # Errors
+///
+/// Returns [`Refused`] when the ledger or the market does not answer, or the
+/// ledger refuses an entry.
+pub async fn book_fees_apart<B: Books, M: Market>(pool: &PgPool, books: &B, market: &M) -> Result<usize, Refused> {
+    let mut restated = 0;
+    loop {
+        let waiting = repository::booked_before(pool, REBOOK_BATCH).await?;
+        if waiting.is_empty() {
+            return Ok(restated);
+        }
+        let mut ids: Vec<Uuid> = waiting.iter().map(|waiting| waiting.trade.instrument_id).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        let symbols: std::collections::HashMap<Uuid, String> = market
+            .instruments(&ids)
+            .await
+            .map_err(|status| {
+                tracing::error!(%status, "the market did not say what instruments are");
+                Refused::MarketUnavailable
+            })?
+            .into_iter()
+            .map(|instrument| (instrument.id, instrument.symbol))
+            .collect();
+
+        for repository::BookedBefore { owner_id, trade } in waiting {
+            let mut transaction = Actor::module(Some(crate::SOURCE)).begin(pool).await?;
+            let Some(trade) = repository::lock_booked_before(&mut transaction, owner_id, trade.id).await? else {
+                continue;
+            };
+            let symbol = symbols.get(&trade.instrument_id).cloned().unwrap_or_else(|| trade.instrument_id.to_string());
+            // A trade with no fee was booked the same either way.
+            if let Some(leg) = Leg::of(&trade, &symbol).filter(|leg| !leg.fee.is_zero()) {
+                settle(books, owner_id, trade.id, Some(&leg), Some(&leg))
+                    .await
+                    .map_err(|status| refused_by_ledger(&status))?;
+                restated += 1;
+            }
+            repository::mark_booked(&mut transaction, trade.id).await?;
+            // Should this fail after the ledger restated, the trade is still
+            // waiting and is restated again - to the same lines.
+            transaction
+                .commit()
+                .await
+                .map_err(|error| anyhow::Error::new(error).context("booking a trade anew"))?;
+        }
+    }
+}
+
+/// Books the old trades anew in the background, trying again a while later
+/// when the ledger or the market is not answering yet - in one process they
+/// come up side by side - and saying in the log what it did.
+pub async fn book_fees_apart_in_time<B: Books, M: Market>(pool: PgPool, books: B, market: M) {
+    let mut wait = std::time::Duration::from_secs(5);
+    loop {
+        match book_fees_apart(&pool, &books, &market).await {
+            Ok(0) => return,
+            Ok(restated) => {
+                tracing::info!(restated, "trades recorded before fees were spending have their fees filed apart now");
+                return;
+            }
+            Err(why) => {
+                tracing::warn!(%why, retry_in = ?wait, "trades recorded before fees were spending could not be booked anew yet");
+                tokio::time::sleep(wait).await;
+                wait = (wait * 2).min(std::time::Duration::from_secs(600));
+            }
+        }
+    }
+}
+
 /// Brings the ledger from what a trade's money was to what it is: posted,
 /// restated, taken back, or left alone. Answers the entry it is under now.
 async fn settle<B: Books>(books: &B, owner: Uuid, id: Uuid, before: Option<&Leg>, after: Option<&Leg>) -> Result<Option<Uuid>, Status> {
@@ -542,6 +701,48 @@ mod tests {
         let sale = money(TradeKind::Sell, decimal("0.01"), Some(decimal("65000")), decimal("0.65"), Some("USDT"));
         assert_eq!(sale, Some(decimal("649.35")));
         assert_eq!(money(TradeKind::Transfer, decimal("0.01"), None, decimal("0.0001"), None), None);
+    }
+
+    #[test]
+    fn a_fee_is_filed_apart_and_the_holding_is_the_price_alone() {
+        use austeris_proto::ledger::v1::line::Side;
+
+        let trade = crate::model::Trade {
+            id: uuid::Uuid::new_v4(),
+            kind: TradeKind::Sell,
+            account_id: uuid::Uuid::new_v4(),
+            to_account_id: None,
+            instrument_id: uuid::Uuid::new_v4(),
+            quantity: decimal("0.01"),
+            price: Some(decimal("65000")),
+            currency: Some("USDT".to_owned()),
+            fee: decimal("0.65"),
+            occurred_at: chrono::Utc::now(),
+            occurred_on: chrono::Utc::now().date_naive(),
+            note: String::new(),
+            entry_id: None,
+            money: None,
+            idempotency_key: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+        let lines = super::Leg::of(&trade, "BTC").expect("a sale moves money").lines();
+        let amount = |wanted: fn(&Side) -> bool| {
+            lines
+                .iter()
+                .find(|line| line.side.as_ref().is_some_and(wanted))
+                .map(|line| decimal(&line.amount))
+                .expect("the line")
+        };
+        assert_eq!(amount(|side| matches!(side, Side::AccountId(_))), decimal("649.35"));
+        assert_eq!(
+            amount(|side| matches!(side, Side::ModuleCategory(category) if category.key == "fees")),
+            decimal("0.65")
+        );
+        assert_eq!(amount(|side| matches!(side, Side::Holding(_))), decimal("-650"));
+
+        let free = crate::model::Trade { fee: Decimal::ZERO, ..trade };
+        assert_eq!(super::Leg::of(&free, "BTC").expect("a sale").lines().len(), 2, "no fee, no line for it");
     }
 
     #[test]

@@ -122,6 +122,8 @@ mod tests {
             priced_at: None,
             value: Some(decimal(value)),
             stale: false,
+            cost: None,
+            gain: None,
         }
     }
 

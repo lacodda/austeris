@@ -6,6 +6,10 @@
 //! the market (ADR 0015). What has no price or rate in the currency asked for
 //! is shown with its quantity and left out of the total, by name: a total that
 //! silently drops it looks like an answer.
+//!
+//! Beside what a position is worth, what it cost: its lots (ADR 0017), each in
+//! the currency asked for at the rate of the day it was acquired - what the
+//! money that bought it was worth then - and what it has gained since.
 
 use std::collections::HashMap;
 
@@ -15,6 +19,7 @@ use sqlx::PgPool;
 use tonic::Status;
 use uuid::Uuid;
 
+use crate::lots::{self, Lot};
 use crate::model::{AccountValue, Holding, LineKind, Valuation};
 use crate::repository;
 use crate::services::{Books, Market, Price};
@@ -60,6 +65,8 @@ pub async fn valuation<B: Books, M: Market>(
     });
     let accounts = books.accounts(owner).await.map_err(Unvalued::Ledger)?;
     let positions = repository::positions(pool, owner, on).await?;
+    let trades = repository::all_trades(pool, owner, on).await?;
+    let book = lots::work_out(&trades, &repository::cost_methods(pool, owner).await?);
 
     let mut ids: Vec<Uuid> = positions.iter().map(|position| position.instrument_id).collect();
     ids.sort_unstable();
@@ -71,8 +78,17 @@ pub async fn valuation<B: Books, M: Market>(
         .into_iter()
         .map(|instrument| (instrument.id, instrument))
         .collect();
-    let day = on.unwrap_or_else(|| now.date_naive());
+    // Now is every trade, and the money they moved is booked under the day
+    // each happened where the person was - a day ahead of UTC's, east of it.
+    // The money beside them is the books' as of the latest of those days, so
+    // a trade made this morning in Moscow is not counted twice: once in the
+    // coins it bought, and again in the money not yet gone.
+    let day = on.unwrap_or_else(|| {
+        let today = now.date_naive();
+        trades.iter().map(|trade| trade.occurred_on).max().map_or(today, |latest| latest.max(today))
+    });
     let prices = prices_in(books, market, &ids, currency, on.map(|_| moment), day).await?;
+    let costs = costs_in(books, &book.open, currency).await?;
     let cash: HashMap<Uuid, _> = books
         .cash(owner, day, currency)
         .await
@@ -103,6 +119,8 @@ pub async fn valuation<B: Books, M: Market>(
                 },
                 value: value.map(|value| value.normalize()),
                 stale: !same && money.stale,
+                cost: None,
+                gain: None,
             });
         }
         for position in positions.iter().filter(|position| position.account_id == account.id) {
@@ -120,6 +138,8 @@ pub async fn valuation<B: Books, M: Market>(
                 priced_at: price.map(|price| price.observed_at),
                 value: price.map(|price| (position.quantity * price.price).normalize()),
                 stale: price.is_some_and(|price| price.stale),
+                cost: costs.get(&(account.id, position.instrument_id)).copied().flatten(),
+                gain: None,
             });
         }
         // A closed account with nothing on it is history, not a holding.
@@ -148,7 +168,7 @@ const REFERENCE_CURRENCIES: [&str; 2] = ["USD", "EUR"];
 /// currency sources do quote in, at the ledger's rate for the day: the one
 /// place money changes currency (ADR 0009). Either being stale makes the
 /// price stale.
-async fn prices_in<B: Books, M: Market>(
+pub(crate) async fn prices_in<B: Books, M: Market>(
     books: &B,
     market: &M,
     ids: &[Uuid],
@@ -187,6 +207,58 @@ async fn prices_in<B: Books, M: Market>(
     Ok(prices)
 }
 
+/// What the open lots of each position cost in `currency`: each lot at the
+/// ledger's rate of the day it was acquired. `None` for a position one of
+/// whose lots is in a currency with no rate into it on that day.
+async fn costs_in<B: Books>(books: &B, open: &[Lot], currency: &str) -> Result<HashMap<(Uuid, Uuid), Option<Decimal>>, Unvalued> {
+    let mut rates = Rates::default();
+    let mut costs: HashMap<(Uuid, Uuid), Option<Decimal>> = HashMap::new();
+    for lot in open {
+        let converted = rates.convert(books, lot.cost, &lot.currency, currency, lot.acquired_on).await?;
+        let cost = costs.entry((lot.account_id, lot.instrument_id)).or_insert(Some(Decimal::ZERO));
+        *cost = match (*cost, converted) {
+            (Some(sum), Some(more)) => Some(sum + more),
+            _ => None,
+        };
+    }
+    Ok(costs
+        .into_iter()
+        .map(|(position, cost)| (position, cost.map(|cost| currency_round(cost, currency))))
+        .collect())
+}
+
+/// A cost or a gain written to the digits of the currency it is in - the
+/// ones it has, or all of them for a currency nobody standardised.
+fn currency_round(amount: Decimal, currency: &str) -> Decimal {
+    austeris_ledger::currency::round(amount, currency).normalize()
+}
+
+/// The ledger's rates, each asked for once: a report of a year's sales asks
+/// for the same day's rate many times over.
+#[derive(Default)]
+pub(crate) struct Rates {
+    known: HashMap<(String, String, NaiveDate), Option<Decimal>>,
+}
+
+impl Rates {
+    /// `amount` of `from` in `to` at the rate in force on `day`; `None` when
+    /// the ledger knows none.
+    pub(crate) async fn convert<B: Books>(&mut self, books: &B, amount: Decimal, from: &str, to: &str, day: NaiveDate) -> Result<Option<Decimal>, Unvalued> {
+        if from == to || amount.is_zero() {
+            return Ok(Some(amount));
+        }
+        let key = (from.to_owned(), to.to_owned(), day);
+        let rate = if let Some(rate) = self.known.get(&key) {
+            *rate
+        } else {
+            let rate = books.rate(from, to, day).await.map_err(Unvalued::Ledger)?.map(|rate| rate.rate);
+            self.known.insert(key, rate);
+            rate
+        };
+        Ok(rate.map(|rate| amount * rate))
+    }
+}
+
 /// The prices of these instruments in `currency`: the latest, or the last
 /// observed by `by`.
 async fn priced<M: Market>(market: &M, ids: &[Uuid], currency: &str, by: Option<DateTime<Utc>>) -> Result<Vec<Price>, Unvalued> {
@@ -209,6 +281,8 @@ pub fn assemble(on: NaiveDate, at: DateTime<Utc>, currency: String, mut accounts
     let mut unvalued: Vec<String> = Vec::new();
     let mut stale = false;
     let mut total = Decimal::ZERO;
+    let mut gain = Some(Decimal::ZERO);
+    let mut valued_positions = 0_usize;
     for account in &mut accounts {
         account.holdings.sort_by(|a, b| {
             a.kind
@@ -217,11 +291,24 @@ pub fn assemble(on: NaiveDate, at: DateTime<Utc>, currency: String, mut accounts
                 .then_with(|| a.instrument_id.cmp(&b.instrument_id))
         });
         account.total = account.holdings.iter().filter_map(|holding| holding.value).sum::<Decimal>().normalize();
-        for holding in &account.holdings {
+        for holding in &mut account.holdings {
+            holding.gain = match (holding.value, holding.cost) {
+                (Some(value), Some(cost)) if holding.kind == LineKind::Position => Some((value - cost).normalize()),
+                _ => None,
+            };
             match holding.value {
                 Some(_) => stale |= holding.stale,
                 None if !unvalued.contains(&holding.symbol) => unvalued.push(holding.symbol.clone()),
                 None => {}
+            }
+            // A position in the total whose cost is not known leaves the
+            // total's gain unknown, rather than smaller than it is.
+            if holding.kind == LineKind::Position && holding.value.is_some() {
+                valued_positions += 1;
+                gain = match (gain, holding.gain) {
+                    (Some(sum), Some(more)) => Some(sum + more),
+                    _ => None,
+                };
             }
         }
         total += account.total;
@@ -236,6 +323,7 @@ pub fn assemble(on: NaiveDate, at: DateTime<Utc>, currency: String, mut accounts
         total: total.normalize(),
         unvalued,
         stale,
+        gain: if valued_positions == 0 { None } else { gain.map(|gain| gain.normalize()) },
     }
 }
 
@@ -265,6 +353,8 @@ mod tests {
             priced_at: None,
             value: value.map(decimal),
             stale,
+            cost: None,
+            gain: None,
         }
     }
 
@@ -286,6 +376,29 @@ mod tests {
         assert!(!valuation.stale);
         let order: Vec<&str> = valuation.accounts[0].holdings.iter().map(|holding| holding.symbol.as_str()).collect();
         assert_eq!(order, ["USDT", "BTC", "ETH"], "money first, then positions by ticker");
+    }
+
+    #[test]
+    fn a_gain_is_the_value_less_the_cost_and_the_total_has_one_only_when_every_position_does() {
+        let mut btc = holding(LineKind::Position, "BTC", Some("650"), false);
+        btc.cost = Some(decimal("601"));
+        let mut eth = holding(LineKind::Position, "ETH", Some("100"), false);
+        eth.cost = Some(decimal("120"));
+        let cash = holding(LineKind::Cash, "USDT", Some("50"), false);
+        let account = AccountValue {
+            account_id: Uuid::new_v4(),
+            name: "Exchange".to_owned(),
+            holdings: vec![btc, eth, cash],
+            total: Decimal::ZERO,
+        };
+        let valuation = assemble(Utc::now().date_naive(), Utc::now(), "USDT".to_owned(), vec![account.clone()]);
+        let gains: Vec<Option<Decimal>> = valuation.accounts[0].holdings.iter().map(|holding| holding.gain).collect();
+        assert_eq!(gains, [None, Some(decimal("49")), Some(decimal("-20"))], "money first, then BTC and ETH");
+        assert_eq!(valuation.gain, Some(decimal("29")));
+
+        let mut uncosted = account;
+        uncosted.holdings[1].cost = None;
+        assert_eq!(assemble(Utc::now().date_naive(), Utc::now(), "USDT".to_owned(), vec![uncosted]).gain, None);
     }
 
     #[test]

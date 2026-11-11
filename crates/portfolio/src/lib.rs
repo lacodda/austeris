@@ -7,10 +7,13 @@
 //! module keeps (ADR 0015): the account moves, and the other side is the
 //! holding the money became, which no report of spending counts. The coins and
 //! shares are this module's: a position is what the trades add up to, valued
-//! at the market's prices.
+//! at the market's prices, and its lots are what each purchase cost and which
+//! of them a sale took (ADR 0017).
 //!
 //! A module like any other, it can be switched off: `AUSTERIS_PORTFOLIO=off`.
 
+pub mod gains;
+pub mod lots;
 pub mod model;
 pub mod repository;
 pub mod routes;
