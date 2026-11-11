@@ -21,8 +21,7 @@ export const POSSIBLE_DUPLICATE = 'entry.possible_duplicate'
 const QUANTITIES = ['short']
 
 /** The facts of an error, its numbers in the interface's language. */
-function localised(params: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
-  if (!params) return params
+function localised(params: Record<string, unknown>): Record<string, unknown> {
   const format = new Intl.NumberFormat(i18n.language, { maximumFractionDigits: 18 })
   const out = { ...params }
   for (const name of QUANTITIES) {
