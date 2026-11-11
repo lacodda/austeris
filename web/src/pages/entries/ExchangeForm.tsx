@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState, type FormEvent } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
+import type { TFunction } from 'i18next'
 import { useTranslation } from 'react-i18next'
 import { useLocale } from 'dowel-ui'
 import { ScanText } from 'lucide-react'
@@ -255,7 +256,7 @@ function SlipSaid({ reading }: { reading: SlipReading | null }) {
 
 /** What an exchange came to, in one line: the rate it was done at, the day's
  * rate it is measured against, and what the difference cost. */
-export function describe(summary: ConversionSummary, locale: string, t: (key: string, options?: Record<string, unknown>) => string): string {
+export function describe(summary: ConversionSummary, locale: string, t: TFunction): string {
   const parts = [
     t('exchange.deal', { base: summary.deal.base, rate: formatRate(summary.deal.rate, locale), quote: summary.deal.quote }),
   ]
