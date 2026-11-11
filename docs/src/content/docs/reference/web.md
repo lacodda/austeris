@@ -166,21 +166,32 @@ bookmarked, reloaded or sent to the next tab.
 
 What you hold at brokers and on exchanges, and what it is worth
 ([Portfolio](/austeris/reference/portfolio/)), shown while the installation runs
-the module. Four parts:
+the module. Five parts:
 
 - **Holdings** - each brokerage and crypto wallet account: its money first,
   then every position, with its price and value in one currency, and what the
   account and everything add up to. The currency is remembered in this browser;
   until you choose, it is the one most of your accounts are in. What has no
   price is named under the total and left out of it; a price older than it
-  stays current for is marked `*`, and says when it is from.
+  stays current for is marked `*`, and says when it is from. Beside a
+  position's value, what it has gained and not sold - with its sign, a loss
+  below nothing - over what its lots cost; under the total, the gain of all of
+  them.
 - **Trades** - every trade, the latest first, with what it moved the account's
-  money by. **Record a trade** opens the form: buy, sell or transfer, the
-  account, the instrument, how many, the price per unit in the account's
+  money by. **Record a trade** opens the form: buy, sell, transfer or receive,
+  the account, the instrument, how many, the price per unit in the account's
   currency, the fee and when - and, before it is saved, what the money on the
-  account will move by. A transfer's fee is in units of what was sent. Opened, a
-  trade is changed or deleted in the same form, with its history under it; its
-  money moves with it.
+  account will move by. A transfer's fee is in units of what was sent. A
+  receive - a staking reward, an airdrop, a gift - has no fee, and its worth per
+  unit when it arrived may be left empty for the market's price of that moment.
+  Opened, a trade is changed or deleted in the same form, its numbers written as
+  your language writes them, with its history under it; its money moves with it.
+- **Gains** - a year's sales: what each brought in less its fee, what the lots
+  it took cost, and the gain, in the currency the holdings are read in; then how
+  each account counts which lots a sale takes - first in first out, last in
+  first out, or the average cost - which you can change, every gain on the
+  account counted again; and the lots still held, each with when it was
+  acquired and what it cost.
 - **Instruments** - what can be priced, with its latest price and how old it is.
   **Price it** records a price by hand; **Add an instrument** adds a coin, a
   share, a fund, or something priced by hand only.
@@ -190,7 +201,7 @@ the module. Four parts:
   worth, and the change.
 
 A trade's money is on the Entries screen like any entry, with a **Holdings**
-line beside the account's. It says it is kept by the portfolio: it is not
+line beside the account's and its fee under **Trading fees**. It says it is kept by the portfolio: it is not
 deleted, repeated or moved to another day there, and its tags, counterparty and
 place are still yours.
 

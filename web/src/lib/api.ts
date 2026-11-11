@@ -20,7 +20,9 @@ import type {
   EntryFilter,
   EntryPatch,
   Exchange,
+  CostMethod,
   Flow,
+  Gains,
   Identity,
   ImportDocument,
   DocumentState,
@@ -33,7 +35,9 @@ import type {
   NewInstrument,
   NewPrice,
   Place,
+  PortfolioAccount,
   Position,
+  PositionLots,
   Preview,
   QuickLine,
   RateInForce,
@@ -246,6 +250,15 @@ export const api = {
   deleteTrade: (id: string) => request<void>(`${PORTFOLIO}/trades/${id}`, { method: 'DELETE' }),
   tradeHistory: (id: string) => request<TradeRevision[]>(`${PORTFOLIO}/trades/${id}/history`),
   positions: (on?: IsoDate) => request<Position[]>(`${PORTFOLIO}/positions${query({ on })}`),
+  /** Each broker's and wallet's account, and how it counts its lots. */
+  portfolioAccounts: () => request<PortfolioAccount[]>(`${PORTFOLIO}/accounts`),
+  /** How an account's sales pick their lots: every gain on it is counted
+   * again this way. */
+  setCostMethod: (id: string, method: CostMethod) => request<PortfolioAccount>(`${PORTFOLIO}/accounts/${id}`, json('PUT', { cost_method: method })),
+  /** Every position and its lots, the oldest first. */
+  lots: () => request<PositionLots[]>(`${PORTFOLIO}/lots`),
+  /** What the sales of a period gained, in a currency. */
+  gains: (from: IsoDate, to: IsoDate, currency: string) => request<Gains>(`${PORTFOLIO}/gains${query({ from, to, currency })}`),
   /** What every broker's and wallet's account holds, worth what, in a currency. */
   value: (currency: string, on?: IsoDate) => request<Valuation>(`${PORTFOLIO}/value${query({ currency, on })}`),
   snapshots: () => request<SnapshotSummary[]>(`${PORTFOLIO}/snapshots`),

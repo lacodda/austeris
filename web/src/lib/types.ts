@@ -85,6 +85,8 @@ export interface Category {
   name: string
   parent_id?: string | null
   purpose?: 'exchange_fees' | null
+  /** The module that files money under it - `portfolio`, for trading fees. */
+  module?: string | null
 }
 
 export type CounterpartyKind = 'shop' | 'service' | 'person' | 'organisation'
@@ -449,9 +451,9 @@ export interface NewPrice {
  * The portfolio: trades, what they add up to, and what it is worth.
  */
 
-export type TradeKind = 'buy' | 'sell' | 'transfer'
+export type TradeKind = 'buy' | 'sell' | 'transfer' | 'receive'
 
-export const TRADE_KINDS: readonly TradeKind[] = ['buy', 'sell', 'transfer']
+export const TRADE_KINDS: readonly TradeKind[] = ['buy', 'sell', 'transfer', 'receive']
 
 export interface Trade {
   id: string
@@ -460,7 +462,8 @@ export interface Trade {
   to_account_id?: string | null
   instrument_id: string
   quantity: Decimal
-  /** In `currency`; a transfer has none. */
+  /** In `currency`; a transfer has none. Units received: what one was worth
+   * when it arrived. */
   price?: Decimal | null
   currency?: string | null
   /** In `currency` for a buy or a sale, in units for a transfer. */
@@ -509,6 +512,11 @@ export interface Holding {
   priced_at?: string | null
   value?: Decimal | null
   stale: boolean
+  /** What a position's lots cost, in the valuation's currency; absent for
+   * money, and when a rate is not known. */
+  cost?: Decimal | null
+  /** `value` less `cost`: gained, or lost below nothing, and not sold. */
+  gain?: Decimal | null
 }
 
 export interface AccountValue {
@@ -527,6 +535,9 @@ export interface Valuation {
   /** Left out of the total for want of a price, by ticker or currency. */
   unvalued: string[]
   stale: boolean
+  /** What every position in the total has gained; absent when one has no
+   * cost known. */
+  gain?: Decimal | null
 }
 
 export interface Snapshot extends Valuation {
@@ -586,4 +597,81 @@ export interface TradeRevision {
   who: Who
   before?: TradeState | null
   after?: TradeState | null
+}
+
+/** How an account's sales pick the lots they take. */
+export type CostMethod = 'fifo' | 'lifo' | 'average'
+
+export const COST_METHODS: readonly CostMethod[] = ['fifo', 'lifo', 'average']
+
+/** A broker's or a wallet's account, as the portfolio counts what is on it. */
+export interface PortfolioAccount {
+  account_id: string
+  name: string
+  currency: string
+  closed: boolean
+  cost_method: CostMethod
+}
+
+/** Units acquired together and still held. */
+export interface OpenLot {
+  trade_id: string
+  acquired_at: string
+  acquired_on: IsoDate
+  quantity: Decimal
+  /** In `currency`, the buy's fee included. */
+  cost: Decimal
+  unit_cost: Decimal
+  currency: string
+}
+
+/** A position, and the lots it is made of. */
+export interface PositionLots {
+  account_id: string
+  instrument_id: string
+  symbol: string
+  method: CostMethod
+  quantity: Decimal
+  lots: OpenLot[]
+}
+
+/** Part of a lot a sale took. */
+export interface ClosedLot {
+  trade_id: string
+  acquired_at: string
+  acquired_on: IsoDate
+  quantity: Decimal
+  cost: Decimal
+  currency: string
+}
+
+/** A sale, and what it gained, in the report's currency. */
+export interface Gain {
+  trade_id: string
+  account_id: string
+  account_name: string
+  instrument_id: string
+  symbol: string
+  occurred_at: string
+  occurred_on: IsoDate
+  method: CostMethod
+  quantity: Decimal
+  /** Absent when a rate is not known. */
+  proceeds?: Decimal | null
+  cost?: Decimal | null
+  gain?: Decimal | null
+  lots: ClosedLot[]
+}
+
+/** What the sales of a period gained, in one currency. */
+export interface Gains {
+  currency: string
+  from: IsoDate
+  to: IsoDate
+  sales: Gain[]
+  proceeds: Decimal
+  cost: Decimal
+  gain: Decimal
+  /** Currencies with no rate on a day a sale or a lot needed one. */
+  unvalued: string[]
 }

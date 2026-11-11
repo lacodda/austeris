@@ -50,7 +50,17 @@ describe('a trade on the screen', () => {
       created_at: '2026-10-20T17:30:00Z',
       updated_at: '2026-10-20T17:30:00Z',
     }
-    expect(draftOf(trade)).toMatchObject({ kind: 'sell', quantity: '0.004', price: '65000', fee: '0.26', at: '2026-10-20T14:30' })
+    expect(draftOf(trade, 'en')).toMatchObject({ kind: 'sell', quantity: '0.004', price: '65000', fee: '0.26', at: '2026-10-20T14:30' })
+    // In the language's own notation, as it would be typed there - and read
+    // back to the same decimal.
+    expect(draftOf({ ...trade, price: '65453.04' }, 'ru')).toMatchObject({ quantity: '0,004', price: '65453,04', fee: '0,26' })
+  })
+
+  it('sends units received with no fee, and their worth only when it is said', () => {
+    const draft = { kind: 'receive' as const, accountId: 'a1', instrumentId: 'i1', quantity: '10', fee: '1', at: '2026-10-20T14:30', note: '' }
+    expect(tradeBody(draft)).toMatchObject({ kind: 'receive', price: null, fee: null, to_account_id: null })
+    expect(tradeBody({ ...draft, price: '0' }).price).toBe('0')
+    expect(tradeMoney('receive', '10', '5', '0', 'USDT')).toBeNull()
   })
 })
 

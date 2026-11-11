@@ -10,10 +10,11 @@ import { QueryState } from '@/components/ui/query-state'
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow, TableScroll } from '@/components/ui/table'
 import { formatMoment } from '@/lib/dates'
-import { formatRate } from '@/lib/money'
+import { formatMoney, formatRate } from '@/lib/money'
 import { useAccounts } from '@/lib/ledger'
 import { formatQuantity, holdingAccounts, useValue, useValueCurrency } from '@/lib/portfolio'
 import type { AccountValue, Holding } from '@/lib/types'
+import { Gains, Signed } from '@/pages/portfolio/Gains'
 import { Instruments } from '@/pages/portfolio/Instruments'
 import { SnapshotView, Snapshots, TakeSnapshot } from '@/pages/portfolio/Snapshots'
 import { RecordTrade } from '@/pages/portfolio/TradeDialog'
@@ -23,6 +24,7 @@ import { Trades } from '@/pages/portfolio/Trades'
 const PARTS = [
   { id: 'holdings', path: '/portfolio' },
   { id: 'trades', path: '/portfolio/trades' },
+  { id: 'gains', path: '/portfolio/gains' },
   { id: 'instruments', path: '/portfolio/instruments' },
   { id: 'snapshots', path: '/portfolio/snapshots' },
 ] as const
@@ -31,8 +33,8 @@ const PARTS = [
  * What a person holds at brokers and on exchanges, and what it is worth.
  *
  * The holdings first - the question the screen is opened with - then the
- * trades they add up from, the instruments and their prices, and snapshots
- * to compare with.
+ * trades they add up from, what the sales gained and the lots behind it, the
+ * instruments and their prices, and snapshots to compare with.
  */
 export function Portfolio() {
   const { t } = useTranslation()
@@ -58,6 +60,7 @@ export function Portfolio() {
       <Routes>
         <Route index element={<Holdings />} />
         <Route path="trades" element={<Trades />} />
+        <Route path="gains" element={<Gains />} />
         <Route path="instruments" element={<Instruments />} />
         <Route path="snapshots" element={<Snapshots />} />
         <Route path="snapshots/:id" element={<SnapshotView />} />
@@ -98,6 +101,11 @@ function Holdings() {
                 <span className="text-sm text-warn">{t('portfolio.unvalued', { symbols: value.data.unvalued.join(', ') })}</span>
               ) : null}
               {value.data.stale ? <span className="text-sm text-dim">{t('portfolio.stale')}</span> : null}
+              {value.data.gain ? (
+                <span className="text-sm text-dim">
+                  {t('portfolio.gained')} <Signed amount={value.data.gain} currency={value.data.currency} />
+                </span>
+              ) : null}
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <Select items={choices} value={currency} onValueChange={(code) => setCurrency(code as string)}>
@@ -142,21 +150,24 @@ function AccountPanel({ account, currency, locale }: { account: AccountValue; cu
             <TableHead>
               <TableRow>
                 <TableHeader>{t('portfolio.what')}</TableHeader>
-                <TableHeader numeric className="w-[30%] sm:w-[22%]">
+                <TableHeader numeric className="w-[30%] sm:w-[18%]">
                   {t('portfolio.quantity')}
                 </TableHeader>
-                <TableHeader numeric className="hidden w-[22%] sm:table-cell">
+                <TableHeader numeric className="hidden w-[18%] sm:table-cell">
                   {t('portfolio.price', { currency })}
                 </TableHeader>
-                <TableHeader numeric className="w-[30%] sm:w-[22%]">
+                <TableHeader numeric className="w-[30%] sm:w-[18%]">
                   {t('portfolio.value', { currency })}
+                </TableHeader>
+                <TableHeader numeric className="hidden w-[18%] sm:table-cell">
+                  {t('portfolio.gain', { currency })}
                 </TableHeader>
               </TableRow>
             </TableHead>
             <TableBody>
               {account.holdings.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={4} className="text-dim">
+                  <TableCell colSpan={5} className="text-dim">
                     {t('portfolio.nothingHeld')}
                   </TableCell>
                 </TableRow>
@@ -207,6 +218,24 @@ function HoldingRow({ holding, currency, locale }: { holding: Holding; currency:
         ) : (
           <span className="text-warn">{t('portfolio.noPrice')}</span>
         )}
+        {/* No room for a column of its own on a phone: under the value. */}
+        {holding.gain ? (
+          <div className="text-xs sm:hidden">
+            <Signed amount={holding.gain} currency={currency} />
+          </div>
+        ) : null}
+      </TableCell>
+      <TableCell numeric className="hidden sm:table-cell">
+        {holding.gain ? (
+          <span title={holding.cost ? t('portfolio.costOf', { cost: formatMoney(holding.cost, currency, locale) }) : undefined}>
+            <Signed amount={holding.gain} currency={currency} />
+          </span>
+        ) : null}
+        {holding.cost ? (
+          <div className="text-xs text-faint">
+            {t('portfolio.cost')} <Money amount={holding.cost} currency={currency} />
+          </div>
+        ) : null}
       </TableCell>
     </TableRow>
   )

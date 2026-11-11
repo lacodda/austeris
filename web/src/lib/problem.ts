@@ -16,11 +16,27 @@ import type { Reason } from '@/lib/types'
 /** The code the server answers a second press with. */
 export const POSSIBLE_DUPLICATE = 'entry.possible_duplicate'
 
+/** Facts the server sends as numbers of units - `0.955` short of a sale -
+ * which a sentence writes the way its language writes numbers. */
+const QUANTITIES = ['short']
+
+/** The facts of an error, its numbers in the interface's language. */
+function localised(params: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  if (!params) return params
+  const format = new Intl.NumberFormat(i18n.language, { maximumFractionDigits: 18 })
+  const out = { ...params }
+  for (const name of QUANTITIES) {
+    const value = out[name]
+    if (typeof value === 'string' && /^-?\d+(\.\d+)?$/.test(value)) out[name] = format.format(value as Intl.StringNumericLiteral)
+  }
+  return out
+}
+
 /** The sentence for an error, in the interface's language when it can be. */
 export function problem(error: Error, t: TFunction): string {
   if (error instanceof ApiError && error.code) {
     const key = `errors.${error.code}`
-    if (i18n.exists(key)) return t(key, error.params)
+    if (i18n.exists(key)) return t(key, localised(error.params))
   }
   return error.message
 }

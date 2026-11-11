@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import { currencyDigits, negate, roundTo, sum, times } from '@/lib/decimal'
+import { currencyDigits, decimalSeparator, negate, roundTo, sum, times } from '@/lib/decimal'
 import { keys as ledgerKeys } from '@/lib/ledger'
-import type { Account, Decimal, Trade, TradeBody, TradeKind } from '@/lib/types'
+import type { Account, Decimal, IsoDate, Trade, TradeBody, TradeKind } from '@/lib/types'
 
 /*
  * The portfolio and the market, as the screens read them.
@@ -18,6 +18,9 @@ export const keys = {
   portfolio: ['portfolio'] as const,
   trades: ['portfolio', 'trades'] as const,
   value: (currency: string) => ['portfolio', 'value', currency] as const,
+  accounts: ['portfolio', 'accounts'] as const,
+  lots: ['portfolio', 'lots'] as const,
+  gains: (from: IsoDate, to: IsoDate, currency: string) => ['portfolio', 'gains', from, to, currency] as const,
   snapshots: ['portfolio', 'snapshots'] as const,
   snapshot: (id: string, against: string | undefined) => ['portfolio', 'snapshot', id, against ?? null] as const,
   history: (id: string) => ['portfolio', 'history', id] as const,
@@ -30,6 +33,10 @@ export const useTrades = () => useQuery({ queryKey: keys.trades, queryFn: api.tr
 export const useValue = (currency: string | undefined) =>
   useQuery({ queryKey: keys.value(currency ?? ''), queryFn: () => api.value(currency ?? 'USD'), enabled: currency !== undefined })
 export const useSnapshots = () => useQuery({ queryKey: keys.snapshots, queryFn: api.snapshots })
+export const usePortfolioAccounts = () => useQuery({ queryKey: keys.accounts, queryFn: api.portfolioAccounts })
+export const useLots = () => useQuery({ queryKey: keys.lots, queryFn: api.lots })
+export const useGains = (from: IsoDate, to: IsoDate, currency: string | undefined) =>
+  useQuery({ queryKey: keys.gains(from, to, currency ?? ''), queryFn: () => api.gains(from, to, currency ?? 'USD'), enabled: currency !== undefined })
 export const useComparison = (id: string, against?: string) =>
   useQuery({ queryKey: keys.snapshot(id, against), queryFn: () => api.snapshot(id, against) })
 export const useTradeHistory = (id: string) => useQuery({ queryKey: keys.history(id), queryFn: () => api.tradeHistory(id) })
@@ -43,6 +50,13 @@ export function useTradesChanged() {
   const queries = useQueryClient()
   return () =>
     Promise.all([queries.invalidateQueries({ queryKey: keys.portfolio }), queries.invalidateQueries({ queryKey: ledgerKeys.all })])
+}
+
+/** After an account was set to count its lots another way: everything the
+ * portfolio says about what it cost and gained. */
+export function useCostMethodChanged() {
+  const queries = useQueryClient()
+  return () => queries.invalidateQueries({ queryKey: keys.portfolio })
 }
 
 /** After an instrument was added or priced: the market, and what the
@@ -69,7 +83,7 @@ export function holdingAccounts(accounts: readonly Account[] | undefined, chosen
  * transfer moves none.
  */
 export function tradeMoney(kind: TradeKind, quantity: Decimal, price: Decimal, fee: Decimal, currency: string): Decimal | null {
-  if (kind === 'transfer') return null
+  if (kind === 'transfer' || kind === 'receive') return null
   const gross = times(quantity, price)
   const signed = kind === 'buy' ? negate(sum([gross, fee])) : sum([gross, negate(fee)])
   const places = currencyDigits(currency)
@@ -113,7 +127,8 @@ export interface TradeDraft {
 }
 
 /** What a trade form sends: a transfer with no price, a buy or a sale with no
- * destination - the server refuses either way round. */
+ * destination, units received with no fee - the server refuses otherwise. A
+ * receive's price may be left out: the market's of that moment is taken. */
 export function tradeBody(draft: TradeDraft): TradeBody {
   const transfer = draft.kind === 'transfer'
   return {
@@ -123,22 +138,31 @@ export function tradeBody(draft: TradeDraft): TradeBody {
     instrument_id: draft.instrumentId,
     quantity: draft.quantity,
     price: transfer ? null : (draft.price ?? null),
-    fee: draft.fee ?? null,
+    fee: draft.kind === 'receive' ? null : (draft.fee ?? null),
     occurred_at: withOffset(draft.at),
     note: draft.note.trim(),
   }
 }
 
-/** A trade as its form starts out when it is changed. */
-export function draftOf(trade: Trade): TradeDraft {
+/** A decimal as an amount field of a language holds it: its decimal
+ * separator, every digit, no grouping - `65453,04` in Russian - so a trade
+ * opened to be changed reads as one typed in that language would. */
+export function fieldAmount(amount: Decimal, locale: string): string {
+  const point = decimalSeparator(locale)
+  return point === '.' ? amount : amount.replace('.', point)
+}
+
+/** A trade as its form starts out when it is changed: its numbers as the
+ * form's fields hold them in the interface's language. */
+export function draftOf(trade: Trade, locale: string): TradeDraft {
   return {
     kind: trade.kind,
     accountId: trade.account_id,
     toAccountId: trade.to_account_id ?? undefined,
     instrumentId: trade.instrument_id,
-    quantity: trade.quantity,
-    price: trade.price ?? undefined,
-    fee: trade.fee,
+    quantity: fieldAmount(trade.quantity, locale),
+    price: trade.price ? fieldAmount(trade.price, locale) : undefined,
+    fee: fieldAmount(trade.fee, locale),
     at: localMoment(new Date(trade.occurred_at)),
     note: trade.note,
   }

@@ -2,7 +2,7 @@ import { render, screen, within } from '@testing-library/react'
 import { Route, Routes } from 'react-router'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
-import type { Comparison, Valuation } from '@/lib/types'
+import type { Comparison, Gains, Valuation } from '@/lib/types'
 import { Portfolio } from '@/pages/Portfolio'
 import { app, failure, json, signedIn } from '@/test/server'
 
@@ -148,5 +148,109 @@ describe('Portfolio', () => {
     expect(within(row).getByText('0.005')).toBeTruthy()
     expect(within(row).getByText('0.01')).toBeTruthy()
     expect(plain(within(row).getByText(/320/).textContent)).toBe('+$320.00')
+  })
+})
+
+describe('Portfolio gains', () => {
+  const GAINS: Gains = {
+    currency: 'USD',
+    from: `${new Date().getFullYear()}-01-01`,
+    to: `${new Date().getFullYear()}-12-31`,
+    sales: [
+      {
+        trade_id: 't3',
+        account_id: 'a1',
+        account_name: 'Exchange',
+        instrument_id: 'i1',
+        symbol: 'BTC',
+        occurred_at: '2026-10-21T13:00:00Z',
+        occurred_on: '2026-10-21',
+        method: 'fifo',
+        quantity: '0.01',
+        proceeds: '799.2',
+        cost: '601',
+        gain: '198.2',
+        lots: [],
+      },
+      {
+        trade_id: 't4',
+        account_id: 'a1',
+        account_name: 'Exchange',
+        instrument_id: 'i2',
+        symbol: 'ETH',
+        occurred_at: '2026-10-22T13:00:00Z',
+        occurred_on: '2026-10-22',
+        method: 'fifo',
+        quantity: '0.1',
+        proceeds: '250',
+        cost: '300',
+        gain: '-50',
+        lots: [],
+      },
+    ],
+    proceeds: '1049.2',
+    cost: '901',
+    gain: '148.2',
+    unvalued: [],
+  }
+  const PORTFOLIO_ACCOUNTS = [{ account_id: 'a1', name: 'Exchange', currency: 'USDT', closed: false, cost_method: 'fifo' }]
+  const LOTS = [
+    {
+      account_id: 'a1',
+      instrument_id: 'i1',
+      symbol: 'BTC',
+      method: 'fifo',
+      quantity: '0.01',
+      lots: [{ trade_id: 't2', acquired_at: '2026-10-20T13:00:00Z', acquired_on: '2026-10-20', quantity: '0.01', cost: '701', unit_cost: '70100', currency: 'USDT' }],
+    },
+  ]
+
+  it('says what each sale gained - a loss with its sign - and counts an account another way when told', async () => {
+    const requests = signedIn({
+      ...BOOKS,
+      '/api/v1/portfolio/trades': json([]),
+      '/api/v1/portfolio/gains': json(GAINS),
+      '/api/v1/portfolio/accounts': json(PORTFOLIO_ACCOUNTS),
+      '/api/v1/portfolio/lots': json(LOTS),
+      'PUT /api/v1/portfolio/accounts/a1': json({ ...PORTFOLIO_ACCOUNTS[0], cost_method: 'average' }),
+    })
+    render(screenAt('/portfolio/gains'))
+
+    const sales = await screen.findByRole('region', { name: 'Sales' })
+    const rows = within(sales).getAllByRole('row')
+    expect(plain(within(rows[1]!).getAllByText(/198/)[0]!.textContent)).toBe('+$198.20')
+    // A loss says so in its sign, not only in its colour.
+    expect(plain(within(rows[2]!).getAllByText(/50/).at(-1)!.textContent)).toBe('-$50.00')
+    expect(requests.find((sent) => sent.path.startsWith('/api/v1/portfolio/gains'))?.path).toContain(`from=${GAINS.from}`)
+
+    const lots = await screen.findByRole('region', { name: 'Lots held' })
+    expect(within(lots).getByText('BTC')).toBeTruthy()
+
+    await userEvent.click(screen.getByRole('combobox', { name: 'How Exchange counts' }))
+    await userEvent.click(await screen.findByRole('option', { name: 'Average cost' }))
+    const sent = requests.find((request) => request.method === 'PUT')
+    expect(sent).toMatchObject({ path: '/api/v1/portfolio/accounts/a1', body: { cost_method: 'average' } })
+  })
+
+  it('receives units with no fee, and leaves their worth to the market when none is said', async () => {
+    const requests = signedIn({
+      ...BOOKS,
+      '/api/v1/portfolio/trades': json([]),
+      'POST /api/v1/portfolio/trades': json({}, 201),
+    })
+    render(screenAt('/portfolio/trades'))
+    await userEvent.click((await screen.findAllByRole('button', { name: 'Record a trade' }))[0]!)
+    const dialog = await screen.findByRole('dialog')
+    await userEvent.click(within(dialog).getByRole('radio', { name: 'Receive' }))
+    expect(within(dialog).queryByLabelText(/^Fee/)).toBeNull()
+    await userEvent.click(within(dialog).getByRole('combobox', { name: 'Account' }))
+    await userEvent.click(await screen.findByRole('option', { name: /Exchange/ }))
+    await userEvent.click(within(dialog).getByRole('combobox', { name: 'Instrument' }))
+    await userEvent.click(await screen.findByRole('option', { name: /ETH/ }))
+    await userEvent.type(within(dialog).getByLabelText(/^Quantity/), '0.05')
+    expect(within(dialog).getByText(/Units received move no money/)).toBeTruthy()
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Record a trade' }))
+    const sent = requests.find((request) => request.method === 'POST' && request.path === '/api/v1/portfolio/trades')
+    expect(sent?.body).toMatchObject({ kind: 'receive', quantity: '0.05', price: null, fee: null })
   })
 })

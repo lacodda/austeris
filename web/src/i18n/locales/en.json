@@ -458,7 +458,8 @@
       "holdings": "Holdings",
       "trades": "Trades",
       "instruments": "Instruments",
-      "snapshots": "Snapshots"
+      "snapshots": "Snapshots",
+      "gains": "Gains"
     },
     "emptyTitle": "Nothing held yet",
     "emptyBody": "Open a brokerage or a crypto wallet account on the Accounts screen - its balance is the money trades there are paid in - then record a trade.",
@@ -474,7 +475,11 @@
     "nothingHeld": "Nothing on this account.",
     "stalePrice": "The last price known, from {{moment}}",
     "money": "Money",
-    "noPrice": "No price"
+    "noPrice": "No price",
+    "gained": "Gained, not sold:",
+    "gain": "Gain, {{currency}}",
+    "cost": "cost",
+    "costOf": "Its lots cost {{cost}}"
   },
   "trade": {
     "record": "Record a trade",
@@ -484,7 +489,8 @@
     "kinds": {
       "buy": "Buy",
       "sell": "Sell",
-      "transfer": "Transfer"
+      "transfer": "Transfer",
+      "receive": "Receive"
     },
     "account": "Account",
     "from": "From",
@@ -522,7 +528,11 @@
     "what": "Trade",
     "money": "Money",
     "fromTo": "{{from}} → {{to}}",
-    "noMoneyShort": "No money"
+    "noMoneyShort": "No money",
+    "worth": "Worth of a unit",
+    "worthHelp": "When it arrived, in {{currency}}. Empty takes the market's price of that moment; 0 is nothing.",
+    "worthPlaceholder": "market price",
+    "noMoneyReceived": "Units received move no money: what they were worth is what they cost."
   },
   "instrument": {
     "instrument": "Instrument",
@@ -581,5 +591,29 @@
     "deleteTitle": "Delete this snapshot?",
     "deleteBody": "It is gone for good; the trades are not touched.",
     "deleted": "Snapshot deleted."
+  },
+  "gains": {
+    "sales": "Sales",
+    "year": "Year",
+    "gain": "Gain",
+    "proceeds": "Proceeds",
+    "cost": "Cost",
+    "noRate": "No rate",
+    "noSalesTitle": "No sales in {{year}}",
+    "noSalesBody": "A sale shows here with what it brought in and what the lots it took cost.",
+    "unvalued": "Left out of the sums, for want of a rate into {{currency}}: {{symbols}}",
+    "feesIncluded": "Fees are in already: a lot costs its buy's fee as well, and proceeds are net of the sale's. Their category (Trading fees) counts the same fees as spending.",
+    "methods": "How each account counts",
+    "methodsHelp": "Which lots a sale takes. Changing it counts every gain on the account again, past years too.",
+    "methodOf": "How {{account}} counts",
+    "methodSaved": "{{account}} counts by {{method}} now.",
+    "method": {
+      "fifo": "First in, first out",
+      "lifo": "Last in, first out",
+      "average": "Average cost"
+    },
+    "lots": "Lots held",
+    "acquired": "Acquired",
+    "unitCost": "Per unit"
   }
 }

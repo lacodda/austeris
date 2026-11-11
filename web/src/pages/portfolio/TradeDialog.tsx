@@ -61,7 +61,7 @@ export function TradeDialog({ trade, open, onOpenChange }: { trade?: Trade; open
   const changed = useTradesChanged()
   const accounts = useAccounts()
   const instruments = useInstruments()
-  const start = useMemo(() => (trade ? draftOf(trade) : undefined), [trade])
+  const start = useMemo(() => (trade ? draftOf(trade, locale) : undefined), [trade, locale])
   const [kind, setKind] = useState<TradeKind>(start?.kind ?? 'buy')
   const [accountId, setAccountId] = useState(start?.accountId ?? '')
   const [toAccountId, setToAccountId] = useState(start?.toAccountId ?? '')
@@ -78,11 +78,14 @@ export function TradeDialog({ trade, open, onOpenChange }: { trade?: Trade; open
   const tradable = (instruments.data ?? []).filter((instrument) => instrument.kind !== 'fx')
   const instrument = tradable.find((each) => each.id === instrumentId)
   const transfer = kind === 'transfer'
+  // Units received: no fee, and a worth that may be left to the market.
+  const receive = kind === 'receive'
+  const unpriced = receive && price.trim() === ''
 
   const units = parseAmount(quantity, locale)
-  const each = transfer ? undefined : parseAmount(price, locale)
-  const cost = fee.trim() === '' ? '0' : parseAmount(fee, locale, transfer ? undefined : account?.currency)
-  const money = !transfer && account && units && each && cost ? tradeMoney(kind, units, each, cost, account.currency) : null
+  const each = transfer || unpriced ? undefined : parseAmount(price, locale)
+  const cost = receive || fee.trim() === '' ? '0' : parseAmount(fee, locale, transfer ? undefined : account?.currency)
+  const money = !transfer && !receive && account && units && each && cost ? tradeMoney(kind, units, each, cost, account.currency) : null
 
   const save = useMutation({
     mutationFn: () => {
@@ -124,7 +127,7 @@ export function TradeDialog({ trade, open, onOpenChange }: { trade?: Trade; open
       setFailure(t('trade.incomplete'))
       return
     }
-    if (units === null || (!transfer && each === null) || cost === null) {
+    if (units === null || each === null || cost === null) {
       setFailure(t('form.notAnAmount'))
       return
     }
@@ -199,17 +202,23 @@ export function TradeDialog({ trade, open, onOpenChange }: { trade?: Trade; open
               <Field label={t('trade.quantity')} help={instrument?.symbol} required>
                 <AmountInput value={quantity} onChange={(event) => setQuantity(event.target.value)} />
               </Field>
-              {transfer ? null : (
+              {transfer ? null : receive ? (
+                <Field label={t('trade.worth')} help={t('trade.worthHelp', { currency: account?.currency ?? '' })}>
+                  <AmountInput value={price} onChange={(event) => setPrice(event.target.value)} placeholder={t('trade.worthPlaceholder')} />
+                </Field>
+              ) : (
                 <Field label={t('trade.price')} help={account ? t('trade.perUnitIn', { currency: account.currency }) : undefined} required>
                   <AmountInput value={price} onChange={(event) => setPrice(event.target.value)} />
                 </Field>
               )}
-              <Field
-                label={t('trade.fee')}
-                help={transfer ? t('trade.networkFee', { symbol: instrument?.symbol ?? '' }) : account ? account.currency : undefined}
-              >
-                <AmountInput value={fee} onChange={(event) => setFee(event.target.value)} placeholder="0" />
-              </Field>
+              {receive ? null : (
+                <Field
+                  label={t('trade.fee')}
+                  help={transfer ? t('trade.networkFee', { symbol: instrument?.symbol ?? '' }) : account ? account.currency : undefined}
+                >
+                  <AmountInput value={fee} onChange={(event) => setFee(event.target.value)} placeholder="0" />
+                </Field>
+              )}
               <Field label={t('trade.when')} required>
                 <Input type="datetime-local" required value={at} onChange={(event) => setAt(event.target.value)} />
               </Field>
@@ -223,6 +232,8 @@ export function TradeDialog({ trade, open, onOpenChange }: { trade?: Trade; open
               </p>
             ) : transfer ? (
               <p className="text-sm text-dim">{t('trade.noMoney')}</p>
+            ) : receive ? (
+              <p className="text-sm text-dim">{t('trade.noMoneyReceived')}</p>
             ) : null}
             {failure ? (
               <Alert tone="bad" role="alert">
