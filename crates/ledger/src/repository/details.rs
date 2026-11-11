@@ -55,7 +55,7 @@ pub async fn counterparty(pool: &PgPool, owner_id: Uuid, id: Uuid) -> Result<Opt
 /// Returns an error when the query fails.
 pub async fn counterparty_by_name(pool: &PgPool, owner_id: Uuid, typed: &str) -> Result<Option<Counterparty>> {
     sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "SELECT {COUNTERPARTY} FROM counterparties WHERE owner_id = $1 AND key = counterparty_key($2)"
+        "SELECT {COUNTERPARTY} FROM counterparties WHERE owner_id = $1 AND key = typed_key($2)"
     )))
     .bind(owner_id)
     .bind(typed)
@@ -75,7 +75,7 @@ pub async fn counterparty_as_named(pool: &PgPool, owner_id: Uuid, name: &str, ta
     // printed as "CASA RICA S.A." is one shop once either has the number.
     sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT {COUNTERPARTY} FROM counterparties
-          WHERE owner_id = $1 AND (tax_id = $3 OR key = counterparty_key($2))
+          WHERE owner_id = $1 AND (tax_id = $3 OR key = typed_key($2))
           ORDER BY (tax_id IS NOT DISTINCT FROM $3) DESC
           LIMIT 1"
     )))
@@ -204,7 +204,7 @@ pub(super) async fn choose_counterparty(transaction: &mut Transaction<'_, Postgr
             // the shop, whatever this receipt calls it.
             let id: Uuid = sqlx::query_scalar(
                 "SELECT id FROM counterparties
-                  WHERE owner_id = $1 AND (tax_id = $3 OR key = counterparty_key($2))
+                  WHERE owner_id = $1 AND (tax_id = $3 OR key = typed_key($2))
                   ORDER BY (tax_id IS NOT DISTINCT FROM $3) DESC
                   LIMIT 1",
             )

@@ -88,6 +88,11 @@ Siblings must be distinct, but the same leaf name under two parents is fine:
 `living/taxi` and `travel/taxi` are two different things to spend on. When a bare
 name means both, the one-line form asks which rather than guessing.
 
+A typed line finds a category the way it finds a counterparty: by its name in
+lower case, without spaces or punctuation. A line is read word by word, so
+"Eating out" is typed `eatingout` or `eating-out`, and `food/eating-out` finds
+it under "Food".
+
 ### Categories a module files under
 
 A module that books money of its own kind - the portfolio, for what trading

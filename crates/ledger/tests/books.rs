@@ -2751,3 +2751,37 @@ async fn an_installation_with_entries_migrates_to_templates() {
         .expect_err("a schema with a template rolled back");
     assert!(format!("{error:#}").contains("templates are recorded"), "{error:#}");
 }
+
+#[tokio::test]
+async fn a_category_of_two_words_is_named_in_a_line_as_one() {
+    let Some(pool) = pool("test_ledger_category_key").await else { return };
+    let books = books(&pool).await;
+    let eating_out = repository::create_category(&pool, books.owner, Some(books.food), Flow::Expense, "Eating out")
+        .await
+        .expect("a category of two words");
+    let groceries = repository::create_category(&pool, books.owner, None, Flow::Expense, "Еда дома")
+        .await
+        .expect("a category in another alphabet");
+
+    // A line is read word by word: the name is typed as the one word its key
+    // is, however it is spelt - and as a path, part by part.
+    for typed in ["eatingout", "Eating-Out", "eating_out", "food/eating-out"] {
+        let (status, recorded) = quick(&pool, books.owner, &format!(r#"{{"text":"1500 {typed}","allow_duplicate":true}}"#)).await;
+        assert_eq!(status, StatusCode::CREATED, "{typed}: {recorded}");
+        let category = recorded["entry"]["lines"]
+            .as_array()
+            .expect("lines")
+            .iter()
+            .find(|line| line["side"] == "category")
+            .expect("a category line")["category_id"]
+            .clone();
+        assert_eq!(category, eating_out.id.to_string(), "{typed}");
+    }
+    let (status, recorded) = quick(&pool, books.owner, r#"{"text":"9000 еда-дома","allow_duplicate":true}"#).await;
+    assert_eq!(status, StatusCode::CREATED, "{recorded}");
+    assert!(recorded["entry"]["lines"].to_string().contains(&groceries.id.to_string()), "{recorded}");
+
+    // Punctuation alone names nothing, rather than a category that has no key.
+    let (status, refused) = quick(&pool, books.owner, r#"{"text":"1500 --"}"#).await;
+    assert_ne!(status, StatusCode::CREATED, "{refused}");
+}

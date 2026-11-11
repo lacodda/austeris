@@ -166,20 +166,30 @@ pub async fn categories(pool: &PgPool, owner_id: Uuid) -> Result<Vec<Category>> 
 /// apart, and a bare name matching both returns neither - answering with one of
 /// them silently files the money in the wrong place.
 ///
+/// Each part is matched by the key a typed name is - lower case, without
+/// spaces or punctuation, as `@casarica` finds "Casa Rica" - because a line is
+/// read word by word: `eatingout`, `eating-out` and `Eating out` are one
+/// category, and "Eating out" can be named in a line at all.
+///
 /// # Errors
 ///
 /// Returns an error when the query fails.
 pub async fn category_by_name(pool: &PgPool, owner_id: Uuid, name: &str) -> Result<CategoryMatch> {
     // A path is resolved by walking it: `living/food` is `food` whose parent is
     // `living`. Done in one query with a recursive CTE, because doing it in
-    // Rust would be a round trip per segment.
-    let segments: Vec<String> = name.split('/').map(|part| part.trim().to_lowercase()).filter(|part| !part.is_empty()).collect();
+    // Rust would be a round trip per segment. A part with no letter or digit
+    // in it has no key, and would otherwise find a category that has none.
+    let segments: Vec<String> = name
+        .split('/')
+        .map(|part| part.trim().to_owned())
+        .filter(|part| part.chars().any(char::is_alphanumeric))
+        .collect();
     if segments.is_empty() {
         return Ok(CategoryMatch::None);
     }
 
     let matches: Vec<Category> = if segments.len() == 1 {
-        sqlx::query_as("SELECT id, parent_id, flow, name, purpose, module FROM categories WHERE owner_id = $1 AND lower(name) = $2")
+        sqlx::query_as("SELECT id, parent_id, flow, name, purpose, module FROM categories WHERE owner_id = $1 AND typed_key(name) = typed_key($2)")
             .bind(owner_id)
             .bind(&segments[0])
             .fetch_all(pool)
@@ -190,12 +200,12 @@ pub async fn category_by_name(pool: &PgPool, owner_id: Uuid, name: &str) -> Resu
             "WITH RECURSIVE walked AS (
                  SELECT c.id, c.parent_id, c.flow, c.name, c.purpose, c.module, 1 AS depth
                    FROM categories c
-                  WHERE c.owner_id = $1 AND c.parent_id IS NULL AND lower(c.name) = ($2::text[])[1]
+                  WHERE c.owner_id = $1 AND c.parent_id IS NULL AND typed_key(c.name) = typed_key(($2::text[])[1])
                  UNION ALL
                  SELECT c.id, c.parent_id, c.flow, c.name, c.purpose, c.module, w.depth + 1
                    FROM categories c
                    JOIN walked w ON c.parent_id = w.id
-                  WHERE c.owner_id = $1 AND lower(c.name) = ($2::text[])[w.depth + 1]
+                  WHERE c.owner_id = $1 AND typed_key(c.name) = typed_key(($2::text[])[w.depth + 1])
              )
              SELECT id, parent_id, flow, name, purpose, module FROM walked WHERE depth = array_length($2::text[], 1)",
         )
