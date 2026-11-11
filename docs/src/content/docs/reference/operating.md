@@ -17,7 +17,7 @@ AUSTERIS_STAND_DIR=/srv/austeris
 ## Moving to a new version
 
 ```console
-$ ./tools/stand/update.sh v0.7.0
+$ ./tools/stand/update.sh vX.Y.Z
 ```
 
 Checks the image exists, dumps the database aside on the stand, writes the

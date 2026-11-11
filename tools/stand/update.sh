@@ -6,7 +6,7 @@
 # anything looks wrong, the migration has run - and a migration that has
 # shipped is frozen, so the only way back is the copy.
 #
-#   ./tools/stand/update.sh v0.7.0     # a release
+#   ./tools/stand/update.sh vX.Y.Z     # a release
 #   ./tools/stand/update.sh edge       # the image built by hand before a tag
 #   ./tools/stand/update.sh            # whatever this checkout is tagged at
 #
@@ -34,7 +34,7 @@ dir=$AUSTERIS_STAND_DIR
 # the tag has been built. A release is written with its `v`; the image tag is
 # the number. Anything else (`edge`, `sha-1a2b3c4`) is an image tag as it is.
 wanted=${1:-$(git -C "$here" describe --tags --exact-match 2>/dev/null || true)}
-[ -n "$wanted" ] || die "name the version to move to (v0.7.0, or edge), or run this from a tagged checkout"
+[ -n "$wanted" ] || die "name the version to move to (vX.Y.Z, or edge), or run this from a tagged checkout"
 case "$wanted" in
     v[0-9]*) tag=${wanted#v} ;;
     *) tag=$wanted ;;
