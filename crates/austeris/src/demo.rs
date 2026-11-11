@@ -753,8 +753,9 @@ struct Planned {
 }
 
 /// The demo's trades: an index fund bought a little every fortnight on the
-/// broker; a coin bought monthly on an exchange paid in a stablecoin, some
-/// sold, and some sent on to a wallet of its own.
+/// broker; a coin bought monthly on an exchange paid in a stablecoin, a
+/// little more of it received as a reward for staking, some sold, and some
+/// sent on to a wallet of its own.
 fn planned() -> Vec<Planned> {
     let mut out: Vec<Planned> = (0..9)
         .map(|n| Planned {
@@ -772,6 +773,13 @@ fn planned() -> Vec<Planned> {
         kind: TradeKind::Buy,
         quantity: "0.02",
     }));
+    out.push(Planned {
+        after_days: 60,
+        symbol: "DMC",
+        account: EXCHANGE,
+        kind: TradeKind::Receive,
+        quantity: "0.001",
+    });
     out.push(Planned {
         after_days: 75,
         symbol: "DMC",
@@ -846,8 +854,10 @@ async fn portfolio(ledger_pool: &PgPool, market_pool: &PgPool, pool: &PgPool, ow
             quantity,
             price: (plan.kind != TradeKind::Transfer).then_some(price),
             // A euro and a half a fund order; a tenth of a percent on the
-            // exchange; what the network takes, in coins, to send them.
+            // exchange; what the network takes, in coins, to send them; and
+            // nothing to receive a reward, which is worth the day's price.
             fee: Some(match (plan.kind, plan.account) {
+                (TradeKind::Receive, _) => Decimal::ZERO,
                 (TradeKind::Transfer, _) => Decimal::new(2, 4),
                 (_, BROKER) => Decimal::new(15, 1),
                 _ => (quantity * price / Decimal::from(1000)).round_dp(2),
@@ -860,6 +870,7 @@ async fn portfolio(ledger_pool: &PgPool, market_pool: &PgPool, pool: &PgPool, ow
             TradeKind::Buy => "buy",
             TradeKind::Sell => "sell",
             TradeKind::Transfer => "transfer",
+            TradeKind::Receive => "receive",
         };
         let key = format!("demo:trade:{}:{}:{kind}", plan.after_days, plan.symbol);
         let done = trade::record(pool, &books, &prices, owner, &body, Some(&key))
@@ -989,7 +1000,7 @@ mod tests {
         let second = seed(&books).await.expect("seeding again");
         assert!(!second.created, "a second run created a second household");
         assert_eq!(second.entries, 0, "a second run on the same day posted entries again");
-        assert_eq!(first.trades, 15, "four months of investing is fifteen trades");
+        assert_eq!(first.trades, 16, "four months of investing is sixteen trades, a reward among them");
         assert_eq!(second.trades, 0, "a second run recorded trades again");
 
         // Every account the demo made has a balance someone would believe: the

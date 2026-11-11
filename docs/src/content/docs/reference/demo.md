@@ -62,9 +62,10 @@ Either way it prints how to sign in:
   the coin's price this hour, so it is current when the demo has just started.
   Their names are invented on purpose: a demo price can never be mistaken for a
   real one.
-- **Fifteen trades**, recorded through the portfolio itself so their money is
+- **Sixteen trades**, recorded through the portfolio itself so their money is
   booked as any trade's is: the index fund bought every fortnight on the
-  broker, the coin bought monthly on the exchange, some of it sold and some
+  broker, the coin bought monthly on the exchange, a little more of it received
+  as a staking reward, some of it sold - so there is a gain to see - and some
   sent on to the cold wallet. A USDT rate for every day values the exchange's
   money, and a snapshot six weeks in gives *now* something to be compared with.
 
@@ -78,7 +79,7 @@ Everything it writes is marked with the source `demo`.
   Start from an empty database to see it.
 - **Duplicate anything.** Each day's entries carry a key made from the day, and
   accounts and categories are found by name before they are created; each of
-  the fifteen trades is recorded under a key of its own, so it is recorded once
+  the sixteen trades is recorded under a key of its own, so it is recorded once
   on the day the demo first ran and never again. Running it again - or
   restarting with the flag still set - adds the days since the last run and
   nothing else.
