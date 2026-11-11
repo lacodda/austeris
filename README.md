@@ -120,7 +120,7 @@ Every endpoint, with its shape: **[the ledger reference](https://lacodda.github.
 
 ## Status
 
-v0.15.0, early, with the books open: accounts, entries, holds and exchanges
+v0.16.0, early, with the books open: accounts, entries, holds and exchanges
 in several currencies, receipts read from their files, a portfolio of trades
 valued and snapshotted, with its lots, what each sale gained and what trading
 fees took - the 2025 crypto tracker's records brought in by one command - each

@@ -2,6 +2,37 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.16.0] - 2026-11-11
+
+### Bug Fixes
+- Find a category of two words typed as one
+- Describe an exchange with i18next's own TFunction
+- Hand i18next 27 the facts of an error as the record it always is
+- Name the account's currency in a receive's help only once there is one
+
+### Build
+- Take dowel-ui 0.43 and its overlay scrollbars
+- Let furca's release engine drive a release
+- Take dowel-ui 0.43's copies of its primitives
+
+### CI
+- Install protoc for the shopfronts check, which builds the binary
+- Install Tesseract from another mirror when Ubuntu's do not answer
+
+### Dependencies
+- Take the latest crates and packages
+
+### Documentation
+- Quote the paths in the import examples
+- Say the portfolio counts lots, gains and fees
+
+### Features
+- Let a module file money under a category of its own
+- Count lots, what they cost and what each sale gained
+- Bring a coin the tracker bought for nothing as units received
+- Receive a staking reward, so a sale has a gain to see
+- Show what sales gained, the lots held, and units received
+
 ## [0.15.0] - 2026-10-31
 
 ### Bug Fixes
