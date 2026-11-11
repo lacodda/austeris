@@ -197,15 +197,15 @@ left alone after that.
 ## From a terminal
 
 ```console
-$ austeris import Downloads/factura.xml
+$ austeris import "Downloads/factura.xml"
 factura.xml: booked - Supermercado Sol, 32950 PYG on 2026-10-18
 
-$ austeris import Receipts/
+$ austeris import "Receipts/"
 farmacia.xml: waiting - Farmacia Central, 58000 PYG on 2026-10-19; say which account paid (--from) and what it was for (--for)
 pedido.xml: not read into the books - this XML document is not an electronic document issued through SIFEN
 1 booked, 1 waiting, 1 not read
 
-$ austeris import Receipts/farmacia.xml --from "Visa Debit" --for health
+$ austeris import "Receipts/farmacia.xml" --from "Visa Debit" --for health
 farmacia.xml: in the books - Farmacia Central, 58000 PYG on 2026-10-19
 ```
 
