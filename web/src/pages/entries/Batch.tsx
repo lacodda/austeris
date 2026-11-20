@@ -196,7 +196,7 @@ function BatchForm({ kind, entries, from, onDone }: { kind: BatchKind; entries: 
         ) : null}
       </DialogBody>
       <DialogActions>
-        <Button render={<DialogClose />}>{t('common.cancel')}</Button>
+        <Button type="button" render={<DialogClose />}>{t('common.cancel')}</Button>
         <Button type="submit" variant="primary" disabled={batch.isPending}>
           {t(`batch.${kind}`)}
         </Button>

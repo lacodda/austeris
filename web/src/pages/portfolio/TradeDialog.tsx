@@ -263,7 +263,7 @@ export function TradeDialog({ trade, open, onOpenChange }: { trade?: Trade; open
               ) : null
             }
           >
-            <Button render={<DialogClose />}>{t('common.cancel')}</Button>
+            <Button type="button" render={<DialogClose />}>{t('common.cancel')}</Button>
             <Button type="submit" variant="primary" disabled={save.isPending}>
               {t(trade ? 'trade.save' : 'trade.record')}
             </Button>

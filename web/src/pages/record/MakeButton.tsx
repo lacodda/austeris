@@ -74,7 +74,7 @@ export function MakeButton({ entry, suggested, open, onOpenChange }: MakeButtonP
             ) : null}
           </DialogBody>
           <DialogActions>
-            <Button render={<DialogClose />}>{t('common.cancel')}</Button>
+            <Button type="button" render={<DialogClose />}>{t('common.cancel')}</Button>
             <Button type="submit" variant="primary" disabled={make.isPending || name.trim() === ''}>
               {t('template.make')}
             </Button>

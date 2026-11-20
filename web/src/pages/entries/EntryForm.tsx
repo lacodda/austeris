@@ -175,7 +175,7 @@ export function EntryForm({ onDone, defaultAccount }: { onDone: () => void; defa
   return (
     <DrawerPopup side="right" size="lg">
       <form onSubmit={submit} className="flex min-h-0 flex-1 flex-col">
-        <DrawerHeader action={<Button variant="icon" size="icon-sm" render={<DrawerClose />} aria-label={t('common.close')}><X aria-hidden /></Button>}>
+        <DrawerHeader action={<Button variant="icon" size="icon-sm" type="button" render={<DrawerClose />} aria-label={t('common.close')}><X aria-hidden /></Button>}>
           <DrawerTitle>{t('entry.newTitle')}</DrawerTitle>
         </DrawerHeader>
         <DrawerBody className="flex flex-col gap-4">
@@ -299,7 +299,7 @@ export function EntryForm({ onDone, defaultAccount }: { onDone: () => void; defa
           ) : null}
         </DrawerBody>
         <DrawerActions>
-          <Button render={<DrawerClose />}>{t('common.cancel')}</Button>
+          <Button type="button" render={<DrawerClose />}>{t('common.cancel')}</Button>
           <Button type="submit" variant="primary" disabled={record.isPending}>
             {t('entry.record')}
           </Button>

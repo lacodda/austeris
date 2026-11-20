@@ -219,7 +219,7 @@ export function ExchangeForm({ onDone }: { onDone: () => void }) {
           ) : null}
         </DialogBody>
         <DialogActions>
-          <Button render={<DialogClose />}>{t('common.cancel')}</Button>
+          <Button type="button" render={<DialogClose />}>{t('common.cancel')}</Button>
           <Button type="submit" variant="primary" disabled={record.isPending}>
             {t('exchange.record')}
           </Button>

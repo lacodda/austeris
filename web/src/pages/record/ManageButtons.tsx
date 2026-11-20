@@ -64,7 +64,7 @@ export function ManageButtons({ templates }: { templates: Template[] }) {
     <DrawerPopup side="right" size="md">
       <DrawerHeader
         action={
-          <Button variant="icon" size="icon-sm" render={<DrawerClose />} aria-label={t('common.close')}>
+          <Button variant="icon" size="icon-sm" type="button" render={<DrawerClose />} aria-label={t('common.close')}>
             <X aria-hidden />
           </Button>
         }

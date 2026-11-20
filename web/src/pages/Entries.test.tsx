@@ -272,6 +272,28 @@ describe('Entries', () => {
     expect(requests.find((each) => each.path === '/api/v1/ledger/entries/batch')?.body).toEqual({ ids: ['e1', 'e2'], categorize: 'c2' })
   })
 
+  it('has one submit button in each form, its own action, so Enter does not press cancel', async () => {
+    // A cancel that is a submit button comes first in the form and is its
+    // default button: Enter in any field pressed it, and the form closed with
+    // nothing recorded.
+    signedIn({ ...LISTS, '/api/v1/ledger/entries': json([HELD]) })
+    render(app(<Entries />, '/entries'))
+    await screen.findByRole('button', { name: 'Weekly shop' })
+    const submits = (scope: HTMLElement) =>
+      [...scope.querySelectorAll('button')].filter((button) => button.type === 'submit').map((button) => button.textContent)
+
+    await userEvent.keyboard('j')
+    await userEvent.keyboard('c')
+    const batch = await screen.findByRole('dialog')
+    expect(submits(batch)).toEqual(['Categorize'])
+    await userEvent.click(within(batch).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+
+    await userEvent.click(screen.getByRole('button', { name: 'New entry' }))
+    const form = await screen.findByRole('dialog')
+    expect(submits(form)).toEqual(['Record'])
+  })
+
   it('walks the list with J and K, and chooses with X', async () => {
     const second = { ...HELD, id: 'e2', description: 'Pharmacy' }
     signedIn({ ...LISTS, '/api/v1/ledger/entries': json([HELD, second]) })

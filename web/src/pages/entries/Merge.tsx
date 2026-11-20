@@ -91,7 +91,7 @@ function MergeForm({ counterparty, onMerged }: { counterparty: Counterparty; onM
         ) : null}
       </DialogBody>
       <DialogActions>
-        <Button render={<DialogClose />}>{t('common.cancel')}</Button>
+        <Button type="button" render={<DialogClose />}>{t('common.cancel')}</Button>
         <Button type="submit" variant="primary" disabled={merge.isPending}>
           {t('merge.confirm')}
         </Button>

@@ -169,7 +169,7 @@ export function PhoneFilters({ filter, onFilterChange }: Omit<FiltersProps, 'sta
         </DrawerHeader>
         <DrawerBody>
           <Filters filter={filter} onFilterChange={onFilterChange} stacked />
-          <Button variant="primary" className="mt-4 w-full" render={<DrawerClose />}>
+          <Button variant="primary" className="mt-4 w-full" type="button" render={<DrawerClose />}>
             {t('filters.show')}
           </Button>
         </DrawerBody>

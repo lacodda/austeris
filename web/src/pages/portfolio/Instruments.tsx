@@ -208,7 +208,7 @@ function NewInstrument() {
             ) : null}
           </DialogBody>
           <DialogActions>
-            <Button render={<DialogClose />}>{t('common.cancel')}</Button>
+            <Button type="button" render={<DialogClose />}>{t('common.cancel')}</Button>
             <Button type="submit" variant="primary" disabled={create.isPending}>
               {t('instrument.create')}
             </Button>
@@ -286,7 +286,7 @@ function PriceDialog({ instrument, currency, onOpenChange }: { instrument: Instr
             ) : null}
           </DialogBody>
           <DialogActions>
-            <Button render={<DialogClose />}>{t('common.cancel')}</Button>
+            <Button type="button" render={<DialogClose />}>{t('common.cancel')}</Button>
             <Button type="submit" variant="primary" disabled={record.isPending}>
               {t('instrument.recordPrice')}
             </Button>

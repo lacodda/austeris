@@ -152,7 +152,7 @@ export function TakeSnapshot({ currency }: { currency: string }) {
             ) : null}
           </DialogBody>
           <DialogActions>
-            <Button render={<DialogClose />}>{t('common.cancel')}</Button>
+            <Button type="button" render={<DialogClose />}>{t('common.cancel')}</Button>
             <Button type="submit" variant="primary" disabled={take.isPending}>
               {t('snapshot.take')}
             </Button>
