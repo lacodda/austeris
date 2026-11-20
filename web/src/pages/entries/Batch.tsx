@@ -61,7 +61,9 @@ export function BatchBar({ count, movable, onAct, onClear }: BatchBarProps) {
       aria-label={t('batch.label')}
       className="mt-3 flex-wrap gap-y-2 rounded-b-md px-1"
     >
-      <span className="text-sm font-medium text-text" aria-live="polite">
+      {/* A line of its own on a phone, so the actions wrap together rather
+          than one of them left behind under the count. */}
+      <span className="w-full text-sm font-medium text-text sm:w-auto" aria-live="polite">
         {t('batch.chosen', { count })}
       </span>
       <ActionBarSpacer />
