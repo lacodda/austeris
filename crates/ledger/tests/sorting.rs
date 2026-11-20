@@ -606,8 +606,11 @@ async fn the_schema_rolls_back_over_drafts_only_once_they_are_sorted() {
         .execute(&pool)
         .await
         .expect("forgetting the draft's history");
-    austeris_common::migrate::undo(&pool, &MIGRATOR, BEFORE_DRAFTS)
+    // At once: the refused rollback let go of the migrations' lock rather
+    // than leaving it with a connection back in the pool.
+    tokio::time::timeout(Duration::from_secs(30), austeris_common::migrate::undo(&pool, &MIGRATOR, BEFORE_DRAFTS))
         .await
+        .expect("the refused rollback kept the migrations locked")
         .expect("rolling back with no drafts left");
     austeris_common::migrate::run(&pool, &MIGRATOR).await.expect("migrating again");
     post(&pool, &books, &spend(books.wallet, Side::Unsorted, "1", day(19))).await;

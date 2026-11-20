@@ -10,8 +10,9 @@
 //! backup and losing everything written since.
 
 use anyhow::{Context, Result, bail};
-use sqlx::PgPool;
-use sqlx::migrate::{Migrate, Migrator};
+use sqlx::migrate::{Migrate, MigrateError, Migrator};
+use sqlx::pool::PoolConnection;
+use sqlx::{Connection, PgPool, Postgres};
 
 /// What a migration run would do, or did.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,8 +72,27 @@ pub async fn plan(pool: &PgPool, schema: &str, migrator: &Migrator) -> Result<Pl
 /// Returns an error when a migration fails; sqlx runs each in its own
 /// transaction, so a failure leaves the earlier ones applied and this one not.
 pub async fn run(pool: &PgPool, migrator: &Migrator) -> Result<()> {
-    migrator.run(pool).await.context("applying migrations")?;
+    let mut connection = pool.acquire().await.context("acquiring a connection to migrate")?;
+    let applied = migrator.run(&mut *connection).await;
+    let_go_after(connection, &applied).await;
+    applied.context("applying migrations")?;
     Ok(())
+}
+
+/// Hands a connection a migration ran on back - or closes it when the run
+/// failed.
+///
+/// sqlx holds a session-wide advisory lock while it migrates, and a step that
+/// fails returns before letting go of it. Back in the pool, the connection
+/// would keep the lock, and the next run on any other connection - a retry, a
+/// rollback after a refused one - would wait for it until the pool happened to
+/// close that connection. Closed, it takes the lock with it.
+async fn let_go_after(connection: PoolConnection<Postgres>, outcome: &Result<(), MigrateError>) {
+    if outcome.is_err()
+        && let Err(error) = connection.detach().close().await
+    {
+        tracing::warn!(%error, "closing the connection a failed migration ran on");
+    }
 }
 
 /// Rolls the schema back to `target`, undoing every migration newer than it.
@@ -100,6 +120,9 @@ pub async fn undo(pool: &PgPool, migrator: &Migrator, target: i64) -> Result<()>
         bail!("migrations {irreversible:?} have no .down.sql; rolling back to {target} would be irreversible");
     }
 
-    migrator.undo(pool, target).await.context("undoing migrations")?;
+    let mut connection = pool.acquire().await.context("acquiring a connection to roll back")?;
+    let undone = migrator.undo(&mut *connection, target).await;
+    let_go_after(connection, &undone).await;
+    undone.context("undoing migrations")?;
     Ok(())
 }
