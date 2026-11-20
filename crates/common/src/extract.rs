@@ -19,7 +19,7 @@ use crate::{AppError, Code};
 
 /// A rejection of axum's turned into an error with a code: its status is kept,
 /// and the reason it gave travels as `why`.
-fn malformed(status: StatusCode, why: String) -> AppError {
+fn malformed(status: StatusCode, why: &str) -> AppError {
     AppError::refused(status, Code::RequestMalformed, anyhow::anyhow!("the request could not be read: {why}")).with_params(serde_json::json!({ "why": why }))
 }
 
@@ -42,7 +42,7 @@ where
                 Code::RequestNotJson,
                 anyhow::anyhow!("{}", rejection.body_text()),
             )),
-            Err(rejection) => Err(malformed(rejection.status(), rejection.body_text())),
+            Err(rejection) => Err(malformed(rejection.status(), &rejection.body_text())),
         }
     }
 }
@@ -68,7 +68,7 @@ where
         axum::extract::Query::<T>::from_request_parts(parts, state)
             .await
             .map(|axum::extract::Query(value)| Self(value))
-            .map_err(|rejection: QueryRejection| malformed(rejection.status(), rejection.body_text()))
+            .map_err(|rejection: QueryRejection| malformed(rejection.status(), &rejection.body_text()))
     }
 }
 
@@ -87,6 +87,6 @@ where
         axum::extract::Path::<T>::from_request_parts(parts, state)
             .await
             .map(|axum::extract::Path(value)| Self(value))
-            .map_err(|rejection: PathRejection| malformed(rejection.status(), rejection.body_text()))
+            .map_err(|rejection: PathRejection| malformed(rejection.status(), &rejection.body_text()))
     }
 }
