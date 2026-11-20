@@ -255,7 +255,7 @@ pub async fn use_template(
         }),
         pending: template.pending,
         account,
-        category,
+        category: Some(category),
     };
     let (entry, conversion) = payment.priced(&pool).await?.entry(&pool, owner_id, body.allow_duplicate).await?;
     let posted = repository::post_entry(&pool, owner_id, &caller.into(), &entry)
@@ -353,7 +353,7 @@ pub async fn repeat(State(pool): State<PgPool>, caller: Caller, Path(id): Path<U
             place,
             pending,
             account,
-            category,
+            category: Some(category),
         };
         payment.priced(&pool).await?.entry(&pool, owner_id, body.allow_duplicate).await?
     } else {
@@ -366,6 +366,8 @@ pub async fn repeat(State(pool): State<PgPool>, caller: Caller, Path(id): Path<U
                 let side = match (line.side, line.account_id, line.category_id) {
                     (LineSide::Account, Some(account), _) => Side::Account(account),
                     (LineSide::Category, _, Some(category)) => Side::Category(category),
+                    // A draft recorded again is a draft again.
+                    (LineSide::Unsorted, ..) => Side::Unsorted,
                     _ => return None,
                 };
                 Some(NewLine {

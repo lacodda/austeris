@@ -1,0 +1,15 @@
+-- Money recorded before it is said what it was for: a draft.
+--
+-- At a till there is time for the amount and the account, not for the
+-- category; until now an entry without one was refused, and the payment was
+-- not recorded at all - or recorded under whatever category came first, which
+-- is worse, because nothing says it was a guess. So a fifth side, `unsorted`:
+-- money spent or earned, on what not yet said. It names nothing, as a
+-- conversion does not, and it balances like any other line. Sorting it is
+-- giving it a category: the line becomes a category line, and the entry stops
+-- being a draft.
+--
+-- A side of its own rather than a category line with no category: a report
+-- reading category lines cannot count a draft as spending on nothing in
+-- particular by accident, and a client reading the line is told what it is.
+ALTER TYPE line_side ADD VALUE IF NOT EXISTS 'unsorted';

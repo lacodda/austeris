@@ -31,6 +31,7 @@ mod history;
 mod holds;
 mod payment;
 mod quick;
+mod sorting;
 mod templates;
 
 /// Builds the service's router.
@@ -44,6 +45,8 @@ pub fn router(pool: PgPool) -> Router {
         .route("/ledger/entries", get(list_entries).post(create_entry))
         .route("/ledger/entries/quick", post(quick::quick_entry))
         .route("/ledger/entries/quick/preview", post(quick::preview))
+        .route("/ledger/entries/unsorted", get(sorting::unsorted))
+        .route("/ledger/entries/batch", post(sorting::batch))
         .route("/ledger/entries/{id}", get(read_entry).patch(holds::change_entry).delete(delete_entry))
         .route("/ledger/entries/{id}/clear", post(holds::clear_entry))
         .route("/ledger/entries/{id}/repeat", post(templates::repeat))
@@ -73,6 +76,7 @@ pub fn router(pool: PgPool) -> Router {
                 .patch(details::change_counterparty)
                 .delete(details::delete_counterparty),
         )
+        .route("/ledger/counterparties/{id}/merge", post(sorting::merge))
         .route("/ledger/places", get(details::list_places))
         .route("/ledger/places/{id}", patch(details::change_place))
         .route("/ledger/tags", get(details::list_tags))
@@ -250,6 +254,10 @@ pub struct NewEntryLine {
     /// conversion lines take one currency in and give another out.
     #[serde(default)]
     pub conversion: bool,
+    /// This line is money spent or earned on what is not said yet: the entry
+    /// is a draft, sorted later by giving the line a category.
+    #[serde(default)]
+    pub unsorted: bool,
     /// The signed amount, as a decimal string: negative leaves, positive
     /// arrives (ADR 0004).
     #[serde(with = "rust_decimal::serde::str")]
@@ -394,14 +402,15 @@ fn validate_lines(lines: Vec<NewEntryLine>) -> AppResult<Vec<NewLine>> {
 
     let mut out = Vec::with_capacity(lines.len());
     for line in lines {
-        let side = match (line.account_id, line.category_id, line.conversion) {
-            (Some(account), None, false) => Side::Account(account),
-            (None, Some(category), false) => Side::Category(category),
-            (None, None, true) => Side::Conversion,
+        let side = match (line.account_id, line.category_id, line.conversion, line.unsorted) {
+            (Some(account), None, false, false) => Side::Account(account),
+            (None, Some(category), false, false) => Side::Category(category),
+            (None, None, true, false) => Side::Conversion,
+            (None, None, false, true) => Side::Unsorted,
             _ => {
                 return Err(AppError::bad_request(
                     Code::EntryLineSide,
-                    anyhow::anyhow!("a line names an account, a category or a conversion - exactly one of them"),
+                    anyhow::anyhow!("a line names an account, a category, a conversion or money not yet sorted - exactly one of them"),
                 ));
             }
         };
@@ -587,6 +596,9 @@ pub struct EntryQuery {
     pub place: Option<Uuid>,
     /// Only held entries (`pending`), or only posted ones (`cleared`).
     pub status: Option<EntryStatus>,
+    /// Only drafts - entries with money not yet sorted - when `true`; only
+    /// sorted ones when `false`.
+    pub unsorted: Option<bool>,
     /// How many to return. Fifty when omitted, two hundred at most.
     pub limit: Option<i64>,
     /// How many to skip.
@@ -622,6 +634,7 @@ async fn list_entries(State(pool): State<PgPool>, caller: Caller, Query(query): 
         counterparty_id: query.counterparty,
         place_id: query.place,
         status: query.status,
+        unsorted: query.unsorted,
         // Bounded rather than trusted: an unbounded page is a way to pull a
         // decade of entries into a Raspberry Pi's memory with one request.
         limit: query.limit.unwrap_or(50).clamp(1, 200),
@@ -1064,6 +1077,9 @@ const RESTRICT_VIOLATION: &str = "23001";
         details::create_counterparty,
         details::change_counterparty,
         details::delete_counterparty,
+        sorting::unsorted,
+        sorting::batch,
+        sorting::merge,
         details::list_places,
         details::change_place,
         details::list_tags,
@@ -1130,6 +1146,13 @@ const RESTRICT_VIOLATION: &str = "23001";
         details::CounterpartyPatch,
         details::TagRename,
         details::Totals,
+        sorting::Unsorted,
+        sorting::BatchBody,
+        sorting::MoveBody,
+        sorting::TagBody,
+        sorting::Batched,
+        sorting::MergeBody,
+        sorting::Merged,
         GroupBy,
         Group,
         Flowed,
@@ -1150,6 +1173,7 @@ mod tests {
             account_id: Some(Uuid::new_v4()),
             category_id: None,
             conversion: false,
+            unsorted: false,
             amount: Decimal::from_str(amount).expect("a decimal"),
             currency: currency.to_owned(),
             note: String::new(),
@@ -1234,6 +1258,26 @@ mod tests {
         assert!(
             validate_lines(vec![conversion, line("-100", "USD")]).is_ok(),
             "a plain conversion line was refused"
+        );
+
+        // A draft's money names nothing yet; with a category as well it would
+        // be sorted and not sorted at once.
+        let unsorted = NewEntryLine {
+            account_id: None,
+            unsorted: true,
+            ..line("100", "USD")
+        };
+        let lines = validate_lines(vec![unsorted, line("-100", "USD")]).expect("a draft's line was refused");
+        assert_eq!(lines[0].side, crate::repository::Side::Unsorted);
+        let sorted_and_not = NewEntryLine {
+            account_id: None,
+            category_id: Some(Uuid::new_v4()),
+            unsorted: true,
+            ..line("100", "USD")
+        };
+        assert!(
+            validate_lines(vec![sorted_and_not, line("-100", "USD")]).is_err(),
+            "a line both sorted and not was accepted"
         );
     }
 

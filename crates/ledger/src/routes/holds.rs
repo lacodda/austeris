@@ -208,6 +208,9 @@ async fn reposted(pool: &PgPool, owner_id: Uuid, entry: &Entry, amount: Decimal,
         };
         let other_side = match (other.side, other.category_id) {
             (LineSide::Category, Some(category)) => Side::Category(category),
+            // A draft held at the till posts for what it came to, still a
+            // draft.
+            (LineSide::Unsorted, _) => Side::Unsorted,
             _ => {
                 return Err(AppError::bad_request(
                     Code::EntryRepostNotPayment,

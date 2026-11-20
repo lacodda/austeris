@@ -25,8 +25,8 @@ pub struct Payment {
     pub occurred_on: NaiveDate,
     /// The account it left or arrived in.
     pub account: Account,
-    /// What it was for.
-    pub category: Category,
+    /// What it was for; `None` for a draft, sorted later.
+    pub category: Option<Category>,
     /// Which way it went.
     pub flow: Flow,
     /// How much, always positive, in `currency`.
@@ -63,6 +63,12 @@ pub struct Priced {
 }
 
 impl Payment {
+    /// The side its money is filed on: its category, or not sorted yet.
+    #[must_use]
+    pub fn filed(&self) -> Side {
+        self.category.as_ref().map_or(Side::Unsorted, |category| Side::Category(category.id))
+    }
+
     /// Works the payment out against the rates, writing nothing.
     ///
     /// The category keeps the amount as it was charged - a 10 USD subscription
@@ -139,20 +145,8 @@ impl Payment {
             currency: foreign,
         };
         let (given, got, from, to, moves) = match self.flow {
-            Flow::Expense => (
-                in_account_money,
-                foreign_money,
-                Side::Account(self.account.id),
-                Side::Category(self.category.id),
-                -in_account,
-            ),
-            Flow::Income => (
-                foreign_money,
-                in_account_money,
-                Side::Category(self.category.id),
-                Side::Account(self.account.id),
-                in_account,
-            ),
+            Flow::Expense => (in_account_money, foreign_money, Side::Account(self.account.id), self.filed(), -in_account),
+            Flow::Income => (foreign_money, in_account_money, self.filed(), Side::Account(self.account.id), in_account),
         };
         let plan = plan(pool, given, got, self.occurred_on).await?;
         Ok(Priced {
@@ -180,6 +174,7 @@ impl Priced {
     /// Returns an error when the fee category cannot be had.
     pub async fn entry(self, pool: &PgPool, owner_id: Uuid, allow_duplicate: bool) -> AppResult<(NewEntry, Option<Summary>)> {
         let payment = self.payment;
+        let filed = payment.filed();
         let (lines, summary) = match self.conversion {
             None => {
                 // The signs: money spent leaves the account and lands on the
@@ -193,7 +188,7 @@ impl Priced {
                         note: String::new(),
                     },
                     NewLine {
-                        side: Side::Category(payment.category.id),
+                        side: filed,
                         amount: -self.moves,
                         currency: payment.account.currency.clone(),
                         note: payment.note.clone(),
@@ -204,7 +199,7 @@ impl Priced {
             Some((plan, from, to)) => {
                 let mut lines = conversion_lines(pool, owner_id, &plan, from, to).await?;
                 for line in &mut lines {
-                    if line.side == Side::Category(payment.category.id) {
+                    if line.side == filed {
                         line.note.clone_from(&payment.note);
                     }
                 }

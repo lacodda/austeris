@@ -156,6 +156,7 @@ fn moved(snapshot: &Snapshot) -> Vec<Moved> {
                 LineSide::Category => 1,
                 LineSide::Conversion => 2,
                 LineSide::Holding => 3,
+                LineSide::Unsorted => 4,
             };
             (
                 rank,

@@ -17,6 +17,7 @@ use crate::model::{
 mod attachments;
 mod details;
 mod history;
+mod sorting;
 mod templates;
 mod totals;
 mod trash;
@@ -24,6 +25,7 @@ mod trash;
 pub use attachments::*;
 pub use details::*;
 pub use history::*;
+pub use sorting::*;
 pub use templates::*;
 pub use totals::*;
 pub use trash::*;
@@ -474,6 +476,8 @@ pub enum Side {
     Conversion,
     /// Money that became something a module holds, or came back from one.
     Holding,
+    /// Money spent or earned, on what not yet said.
+    Unsorted,
 }
 
 impl Side {
@@ -485,6 +489,7 @@ impl Side {
             Self::Category(_) => LineSide::Category,
             Self::Conversion => LineSide::Conversion,
             Self::Holding => LineSide::Holding,
+            Self::Unsorted => LineSide::Unsorted,
         }
     }
 
@@ -496,6 +501,7 @@ impl Side {
             (LineSide::Category, _, Some(category)) => Some(Self::Category(category)),
             (LineSide::Conversion, ..) => Some(Self::Conversion),
             (LineSide::Holding, ..) => Some(Self::Holding),
+            (LineSide::Unsorted, ..) => Some(Self::Unsorted),
             _ => None,
         }
     }
@@ -789,6 +795,7 @@ fn movement(lines: impl Iterator<Item = (Side, Decimal, String)>) -> Vec<(u8, Op
                 Side::Category(id) => (1, Some(id)),
                 Side::Conversion => (2, None),
                 Side::Holding => (3, None),
+                Side::Unsorted => (4, None),
             };
             (rank, id, currency, amount.normalize())
         })
@@ -1174,6 +1181,9 @@ pub struct EntryFilter {
     pub place_id: Option<Uuid>,
     /// Only entries in this state.
     pub status: Option<EntryStatus>,
+    /// Only drafts - entries with money not yet sorted - when true; only
+    /// sorted ones when false.
+    pub unsorted: Option<bool>,
     /// How many to return.
     pub limit: i64,
     /// How many to skip.
@@ -1202,6 +1212,8 @@ pub async fn entries(pool: &PgPool, owner_id: Uuid, filter: &EntryFilter) -> Res
             AND ($7::uuid IS NULL OR e.counterparty_id = $7)
             AND ($8::uuid IS NULL OR e.place_id = $8)
             AND ($9::entry_status IS NULL OR e.status = $9)
+            AND ($12::boolean IS NULL
+                 OR $12 = EXISTS (SELECT 1 FROM entry_lines l WHERE l.entry_id = e.id AND l.side = 'unsorted'))
           ORDER BY e.occurred_on DESC, e.created_at DESC, e.id DESC
           LIMIT $10 OFFSET $11"
     ))
@@ -1216,6 +1228,7 @@ pub async fn entries(pool: &PgPool, owner_id: Uuid, filter: &EntryFilter) -> Res
     .bind(filter.status)
     .bind(filter.limit)
     .bind(filter.offset)
+    .bind(filter.unsorted)
     .fetch_all(pool)
     .await
     .context("listing entries")?;
@@ -1224,6 +1237,22 @@ pub async fn entries(pool: &PgPool, owner_id: Uuid, filter: &EntryFilter) -> Res
     let mut lines = lines_of(pool, &ids).await?;
 
     Ok(headers.into_iter().map(|header| header.with_lines(&mut lines)).collect())
+}
+
+/// How many drafts a person has: entries with money not yet sorted.
+///
+/// # Errors
+///
+/// Returns an error when the query fails.
+pub async fn unsorted_count(pool: &PgPool, owner_id: Uuid) -> Result<i64> {
+    sqlx::query_scalar(
+        "SELECT count(DISTINCT l.entry_id) FROM entry_lines l JOIN entries e ON e.id = l.entry_id
+          WHERE l.side = 'unsorted' AND e.owner_id = $1",
+    )
+    .bind(owner_id)
+    .fetch_one(pool)
+    .await
+    .context("counting the drafts")
 }
 
 /// A row of `entry_lines` as it comes back: the entry it belongs to, then the

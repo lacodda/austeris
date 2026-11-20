@@ -1527,21 +1527,40 @@ async fn a_counterparty_is_found_however_its_name_is_typed() {
 }
 
 #[tokio::test]
-async fn a_line_naming_only_a_counterparty_needs_one_that_says_what_it_is_for() {
+async fn a_line_that_says_nothing_it_was_for_records_a_draft() {
     let Some(pool) = pool("test_ledger_counterparty_usual").await else { return };
     let books = books(&pool).await;
     repository::create_counterparty(&pool, books.owner, "Kiosk", None, None, None)
         .await
         .expect("creating a counterparty");
+    let unsorted = |body: &serde_json::Value| {
+        body["entry"]["lines"]
+            .as_array()
+            .expect("lines")
+            .iter()
+            .filter(|line| line["side"] == "unsorted")
+            .count()
+    };
 
+    // A counterparty with no usual category, an amount alone, a name never
+    // used: the money is recorded now, on no category, to be sorted later.
     let (status, body) = quick(&pool, books.owner, r#"{"text":"5000 @kiosk"}"#).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-    assert!(body.to_string().contains("no usual category"), "{body}");
-
-    // A name never used, and nothing to file under: refused, and nothing is
-    // created by the refusal.
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(unsorted(&body), 1, "{body}");
+    assert_eq!(body["entry"]["counterparty"]["name"], "Kiosk", "{body}");
+    let (status, body) = quick(&pool, books.owner, r#"{"text":"7000"}"#).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(unsorted(&body), 1, "{body}");
     let (status, body) = quick(&pool, books.owner, r#"{"text":"5000 @nobody"}"#).await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(unsorted(&body), 1, "{body}");
+    assert!(
+        body["new_counterparty"]["default_category_id"].is_null(),
+        "a draft gave its counterparty a usual category: {body}"
+    );
+
+    // A word that names no category is still refused: it was said, and meant
+    // something - and nothing is created by the refusal.
     let (status, body) = quick(&pool, books.owner, r#"{"text":"5000 yachts @marina"}"#).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
     let names: Vec<String> = repository::counterparties(&pool, books.owner)
@@ -1550,7 +1569,8 @@ async fn a_line_naming_only_a_counterparty_needs_one_that_says_what_it_is_for() 
         .into_iter()
         .map(|counterparty| counterparty.name)
         .collect();
-    assert_eq!(names, ["Kiosk"], "a refused line left a counterparty behind");
+    assert_eq!(names, ["Kiosk", "nobody"], "a refused line left a counterparty behind");
+    assert_eq!(repository::unsorted_count(&pool, books.owner).await.expect("counting"), 3);
 }
 
 #[tokio::test]

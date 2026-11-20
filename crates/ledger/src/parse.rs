@@ -71,9 +71,6 @@ pub enum ParseError {
     /// An amount of nothing.
     #[error("an entry of zero records nothing")]
     ZeroAmount,
-    /// An amount but nothing to attribute it to.
-    #[error("`{0}` needs something it was for, as in `{0} food`, or who it was paid to, as in `{0} @shop`")]
-    NoCategory(String),
     /// A preposition with nothing after it.
     #[error("`{0}` names no account")]
     DanglingAccount(String),
@@ -106,9 +103,9 @@ const ACCOUNT_WORDS: [&str; 2] = ["from", "to"];
 ///
 /// # Errors
 ///
-/// Returns [`ParseError`] when the line has no amount, says neither a category
-/// nor a counterparty, names an account without saying which, or says a rate or
-/// a counterparty twice.
+/// Returns [`ParseError`] when the line has no amount, names an account
+/// without saying which, or says a rate or a counterparty twice. A line that
+/// says nothing it was for is read: it records a draft, sorted later.
 pub fn line(input: &str) -> Result<Spoken, ParseError> {
     let mut words = input.split_whitespace();
 
@@ -140,7 +137,7 @@ pub fn line(input: &str) -> Result<Spoken, ParseError> {
     if amount.is_zero() {
         return Err(ParseError::ZeroAmount);
     }
-    let head = Head { amount, flow, pending, first };
+    let head = Head { amount, flow, pending };
 
     // A currency may follow the amount: `10 usd food`. Only an ISO 4217 code
     // counts, and only when something follows it to be the category. Since an
@@ -166,16 +163,15 @@ pub fn line(input: &str) -> Result<Spoken, ParseError> {
 }
 
 /// What the first word of a line said.
-struct Head<'a> {
+struct Head {
     amount: Decimal,
     flow: Flow,
     pending: bool,
-    first: &'a str,
 }
 
 /// Reads what follows the amount and its currency: the category, the account,
 /// a rate, a counterparty, tags and the note.
-fn read(head: &Head<'_>, currency: Option<String>, rest: &[&str]) -> Result<Spoken, ParseError> {
+fn read(head: &Head, currency: Option<String>, rest: &[&str]) -> Result<Spoken, ParseError> {
     // Everything but the category and the note may be said anywhere: `45000
     // food from cash lunch` and `45000 food lunch from cash` say the same
     // thing, and a person typing quickly does not think about which.
@@ -219,10 +215,6 @@ fn read(head: &Head<'_>, currency: Option<String>, rest: &[&str]) -> Result<Spok
             None => category = Some(word),
             Some(_) => note_words.push(word),
         }
-    }
-
-    if category.is_none() && counterparty.is_none() {
-        return Err(ParseError::NoCategory(head.first.to_owned()));
     }
 
     Ok(Spoken {
@@ -608,9 +600,21 @@ mod tests {
         assert_eq!(line(""), Err(ParseError::Empty));
         assert_eq!(line("   "), Err(ParseError::Empty));
         assert!(matches!(line("food lunch"), Err(ParseError::NoAmount(_))));
-        assert!(matches!(line("45000"), Err(ParseError::NoCategory(_))));
         assert_eq!(line("0 food"), Err(ParseError::ZeroAmount));
         assert!(matches!(line("45000 food from"), Err(ParseError::DanglingAccount(_))));
+    }
+
+    #[test]
+    fn an_amount_that_says_nothing_it_was_for_is_a_draft_rather_than_a_refusal() {
+        // At a till there is time for the amount and not for the category: the
+        // line is read, with nothing to file it under, and sorted later.
+        let draft = line("45000 from cash #trip").expect("a draft");
+        assert_eq!(draft.amount, decimal("45000"));
+        assert_eq!(draft.category, None);
+        assert_eq!(draft.counterparty, None);
+        assert_eq!(draft.account.as_deref(), Some("cash"));
+        assert_eq!(draft.tags, vec!["trip".to_owned()]);
+        assert_eq!(line("45000").expect("a draft").category, None);
     }
 
     #[test]

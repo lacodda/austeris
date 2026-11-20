@@ -251,6 +251,13 @@ pub struct Entry {
 }
 
 impl Entry {
+    /// A draft: money recorded before it was said what it was for - a line of
+    /// it is not sorted yet.
+    #[must_use]
+    pub fn unsorted(&self) -> bool {
+        self.lines.iter().any(|line| line.side == LineSide::Unsorted)
+    }
+
     /// What the entry is "for", as a person would state it.
     ///
     /// The positive lines of one currency: the money that arrived somewhere.
@@ -294,6 +301,10 @@ pub enum LineSide {
     /// back from one. Which thing is the module's to know; an entry with one
     /// is kept by the module that posted it.
     Holding,
+    /// Money spent or earned, on what not yet said: a draft's other side,
+    /// recorded at the till and sorted later. Given a category, it becomes a
+    /// category line.
+    Unsorted,
 }
 
 /// One side of a movement.

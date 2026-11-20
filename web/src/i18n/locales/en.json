@@ -103,7 +103,12 @@
     "more": "Show more",
     "emptyTitle": "Nothing recorded yet",
     "emptyBody": "Type a line above - 45000 food lunch - or open a full entry.",
-    "noneMatch": "No entries match these filters."
+    "noneMatch": "No entries match these filters.",
+    "unsortedBadge": "Unsorted",
+    "unsortedCount_one": "{{count}} entry to sort",
+    "unsortedCount_other": "{{count}} entries to sort",
+    "noneUnsorted": "Everything is sorted.",
+    "sort": "Sort"
   },
   "quick": {
     "label": "Record an entry in one line",
@@ -135,7 +140,8 @@
     "allStatuses": "All",
     "held": "Held",
     "posted": "Posted",
-    "clear": "Clear filters"
+    "clear": "Clear filters",
+    "unsorted": "Unsorted"
   },
   "entry": {
     "title": "Entry",
@@ -200,7 +206,8 @@
     "repeat": "Record again today",
     "holding": "Holdings",
     "keptNote": "This is a trade's money, kept by {{module}}: its day, description and amounts change with the trade, and it is deleted with it.",
-    "keptLink": "Open the trades"
+    "keptLink": "Open the trades",
+    "sortLater": "Leave a category empty to sort it later: the entry is recorded as unsorted."
   },
   "exchange": {
     "title": "Exchange money",
@@ -300,7 +307,6 @@
       "empty": "There is nothing here to record.",
       "no_amount": "“{{word}}” is not an amount; a line starts with one, as in 45000 food lunch.",
       "zero_amount": "An entry of zero records nothing.",
-      "no_category": "What was {{amount}} for? Add a category, as in {{amount}} food, or who was paid, as in {{amount}} @shop.",
       "dangling_account": "“{{word}}” names no account.",
       "bad_rate": "“{{word}}” is not a rate; write it as @5965.",
       "bare_at": "@ names nothing: @5965 is a rate, @shop is who was paid.",
@@ -310,8 +316,6 @@
       "unknown_account": "You have no account called “{{name}}”.",
       "no_open_account": "There is no open account to record this against; open one first.",
       "which_account": "Which account? Choose one, or write from {{example}} - you have {{accounts}}.",
-      "no_usual_category": "“{{counterparty}}” has no usual category; say what this was for, as in {{amount}} food @{{key}}.",
-      "unknown_counterparty": "Nobody is called “{{name}}” yet; say what this was for, as in {{amount}} food @{{name}}, and it is created with that as its usual category.",
       "unknown_category": "You have no category called “{{name}}”; create it first.",
       "ambiguous_category": "“{{name}}” is more than one category ({{names}}); say which, as in living/{{name}}.",
       "rate_without_currency": "A rate converts an amount in another currency; this one is already in {{currency}}.",
@@ -391,7 +395,9 @@
       "transfer_to_self": "A transfer goes to another account than it left.",
       "in_future": "A trade is of a moment that has happened.",
       "key_empty": "An idempotency key cannot be empty.",
-      "key_too_long": "An idempotency key is {{limit}} characters at most."
+      "key_too_long": "An idempotency key is {{limit}} characters at most.",
+      "not_in_trash": "That trade is not in the trash any more.",
+      "key_taken": "A trade recorded since under the same key, {{key}}, stands for this one."
     },
     "portfolio": {
       "ledger_unavailable": "The books are not answering; nothing was changed. Try again in a moment.",
@@ -433,7 +439,9 @@
       "bad_tax_id": "“{{tax_id}}” is not a tax number; letters and digits, as in 80012345-6.",
       "tax_id_taken": "Another of your counterparties has that tax number.",
       "name_taken": "You have a counterparty typed the same way as “{{name}}”.",
-      "untypeable": "“{{name}}” has no letter or digit in it, so it could never be typed."
+      "untypeable": "“{{name}}” has no letter or digit in it, so it could never be typed.",
+      "merge_itself": "A counterparty is merged into another, not into itself.",
+      "merge_tax_ids": "One carries the tax number {{from}} and the other {{into}}: two businesses, not one typed two ways."
     },
     "place": {
       "bad_country": "“{{country}}” is not a country code; two letters, as in PY or BR (the United Kingdom is GB).",
@@ -476,6 +484,18 @@
     },
     "snapshot": {
       "not_found": "There is no such snapshot."
+    },
+    "batch": {
+      "empty": "Choose at least one entry.",
+      "too_large": "One change reaches {{limit}} entries at most; {{count}} are chosen.",
+      "one_change": "Say one change: a category, an account to move to, or labels.",
+      "no_tags": "Say which labels to put on or take off.",
+      "missing": "{{count}} of the chosen entries are not there any more; refresh the list.",
+      "same_account": "The money is on that account already.",
+      "closed_account": "{{name}} is closed; nothing new happens on it.",
+      "other_currency": "The money is in {{from}} and that account is in {{to}}; moving it would need a rate.",
+      "onto_itself": "{{count}} of the chosen entries already move money between these two accounts.",
+      "kept": "{{count}} of the chosen entries are kept by {{module}}; their money changes there."
     }
   },
   "files": {
@@ -540,7 +560,9 @@
     "fromEntry": "From {{title}}, {{date}}",
     "restored": "Restored.",
     "erased": "Erased.",
-    "emptied": "The trash is empty."
+    "emptied": "The trash is empty.",
+    "trades": "Trades",
+    "eraseTradeBody": "The trade is erased with its history, and cannot be brought back."
   },
   "imports": {
     "title": "Import",
@@ -748,5 +770,56 @@
     "lots": "Lots held",
     "acquired": "Acquired",
     "unitCost": "Per unit"
+  },
+  "keys": {
+    "title": "Keyboard shortcuts",
+    "description": "Letters wait while you type in a field.",
+    "general": "General",
+    "go": "Go to",
+    "list": "The list",
+    "next": "Next entry",
+    "previous": "Previous entry",
+    "open": "Open the entry",
+    "choose": "Choose the entry",
+    "entries": "Entries",
+    "quick": "Type a line"
+  },
+  "batch": {
+    "label": "What to do with the chosen entries",
+    "chosen_one": "{{count}} chosen",
+    "chosen_other": "{{count}} chosen",
+    "chooseAll": "Choose every entry shown",
+    "choose": "Choose {{name}}",
+    "categorize": "Categorize",
+    "move": "Move",
+    "tag": "Tag",
+    "clear": "Clear the choice",
+    "notMovable": "The chosen entries are on different accounts; narrow the list to one account to move them.",
+    "categorizeTitle_one": "Categorize the entry",
+    "categorizeTitle_other": "Categorize {{count}} entries",
+    "categorizeBody": "Unsorted money and money on your own categories goes under the one chosen. Fees an exchange or a trade took stay where they are.",
+    "moveTitle_one": "Move the entry to another account",
+    "moveTitle_other": "Move {{count}} entries to another account",
+    "moveBody": "Their money moves from {{account}} to an account in the same currency.",
+    "moveTo": "To",
+    "tagTitle_one": "Tag the entry",
+    "tagTitle_other": "Tag {{count}} entries",
+    "tagBody": "Labels are put on and taken off every chosen entry.",
+    "putOn": "Put on",
+    "takeOff": "Take off",
+    "takeOffHelp": "Labels to take off, where they are.",
+    "done_one": "{{count}} entry changed",
+    "done_other": "{{count}} entries changed",
+    "unchanged_one": "{{count}} had nothing to change.",
+    "unchanged_other": "{{count}} had nothing to change."
+  },
+  "merge": {
+    "action": "Merge",
+    "title": "Merge {{name}} into another",
+    "body": "Entries and buttons with {{name}} name the one chosen instead, and typing @{{name}} finds it from now on. {{name}} is deleted.",
+    "into": "Merge into",
+    "confirm": "Merge",
+    "done_one": "{{from}} merged into {{into}}: {{count}} entry moved",
+    "done_other": "{{from}} merged into {{into}}: {{count}} entries moved"
   }
 }

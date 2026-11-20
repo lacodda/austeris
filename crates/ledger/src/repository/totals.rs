@@ -38,19 +38,25 @@ pub struct TotalsFilter {
 /// Held entries count: the money was spent the day it was spent, whenever the
 /// bank gets round to posting it. A day is the day it happened, not the day it
 /// posted, for the same reason.
+///
+/// A draft's money counts too, by the way it went: money that arrived on the
+/// unsorted side was spent, money that left it was earned. It is grouped
+/// under no category - the group of what is not sorted yet - so the groups
+/// still account for every line, and a month of drafts is not a month in
+/// which nothing was spent.
 macro_rules! totals {
     ($group:literal, $join:literal) => {
         concat!(
             "SELECT ",
             $group,
             ", l.currency,
-                    COALESCE(SUM(l.amount) FILTER (WHERE c.flow = 'expense'), 0) AS spent,
-                    COALESCE(-SUM(l.amount) FILTER (WHERE c.flow = 'income'), 0) AS earned
+                    COALESCE(SUM(l.amount) FILTER (WHERE c.flow = 'expense' OR (l.side = 'unsorted' AND l.amount > 0)), 0) AS spent,
+                    COALESCE(-SUM(l.amount) FILTER (WHERE c.flow = 'income' OR (l.side = 'unsorted' AND l.amount < 0)), 0) AS earned
                FROM entry_lines l
                JOIN entries e ON e.id = l.entry_id
-               JOIN categories c ON c.id = l.category_id ",
+               LEFT JOIN categories c ON c.id = l.category_id ",
             $join,
-            " WHERE e.owner_id = $1 AND l.side = 'category'
+            " WHERE e.owner_id = $1 AND l.side IN ('category', 'unsorted')
                 AND ($2::date IS NULL OR e.occurred_on >= $2)
                 AND ($3::date IS NULL OR e.occurred_on <= $3)
                 AND ($4::text IS NULL OR EXISTS (SELECT 1 FROM entry_tags ft JOIN tags tt ON tt.id = ft.tag_id

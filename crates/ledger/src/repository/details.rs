@@ -48,14 +48,15 @@ pub async fn counterparty(pool: &PgPool, owner_id: Uuid, id: Uuid) -> Result<Opt
 }
 
 /// The counterparty a typed word means: `casarica`, `casa-rica` and `Casa Rica`
-/// are all "Casa Rica".
+/// are all "Casa Rica" - and so is a way of typing a counterparty that was
+/// merged into it.
 ///
 /// # Errors
 ///
 /// Returns an error when the query fails.
 pub async fn counterparty_by_name(pool: &PgPool, owner_id: Uuid, typed: &str) -> Result<Option<Counterparty>> {
     sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "SELECT {COUNTERPARTY} FROM counterparties WHERE owner_id = $1 AND key = typed_key($2)"
+        "SELECT {COUNTERPARTY} FROM counterparties WHERE owner_id = $1 AND id = counterparty_typed($1, $2)"
     )))
     .bind(owner_id)
     .bind(typed)
@@ -75,7 +76,7 @@ pub async fn counterparty_as_named(pool: &PgPool, owner_id: Uuid, name: &str, ta
     // printed as "CASA RICA S.A." is one shop once either has the number.
     sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT {COUNTERPARTY} FROM counterparties
-          WHERE owner_id = $1 AND (tax_id = $3 OR key = typed_key($2))
+          WHERE owner_id = $1 AND (tax_id = $3 OR id = counterparty_typed($1, $2))
           ORDER BY (tax_id IS NOT DISTINCT FROM $3) DESC
           LIMIT 1"
     )))
@@ -188,9 +189,12 @@ pub(super) async fn choose_counterparty(transaction: &mut Transaction<'_, Postgr
         CounterpartyChoice::New { name, usual_category, tax_id } => {
             // Created, or found when one typed the same way - or carrying the
             // same tax number - appeared since the caller looked: two lines
-            // naming a new shop at once are one shop.
+            // naming a new shop at once are one shop. Not created when the
+            // name is how a counterparty merged into another was typed: it
+            // means that other one.
             sqlx::query(
-                "INSERT INTO counterparties (owner_id, name, default_category_id, tax_id) VALUES ($1, $2, $3, $4)
+                "INSERT INTO counterparties (owner_id, name, default_category_id, tax_id)
+                 SELECT $1, $2, $3, $4 WHERE counterparty_typed($1, $2) IS NULL
                  ON CONFLICT DO NOTHING",
             )
             .bind(owner_id)
@@ -204,7 +208,7 @@ pub(super) async fn choose_counterparty(transaction: &mut Transaction<'_, Postgr
             // the shop, whatever this receipt calls it.
             let id: Uuid = sqlx::query_scalar(
                 "SELECT id FROM counterparties
-                  WHERE owner_id = $1 AND (tax_id = $3 OR key = typed_key($2))
+                  WHERE owner_id = $1 AND (tax_id = $3 OR id = counterparty_typed($1, $2))
                   ORDER BY (tax_id IS NOT DISTINCT FROM $3) DESC
                   LIMIT 1",
             )

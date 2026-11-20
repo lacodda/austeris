@@ -203,8 +203,6 @@ codes! {
     LineNoAmount = "line.no_amount",
     /// An amount of nothing.
     LineZeroAmount = "line.zero_amount",
-    /// An amount and nothing it was for. Params: `amount`.
-    LineNoCategory = "line.no_category",
     /// `from` or `to` with nothing after it. Params: `word`.
     LineDanglingAccount = "line.dangling_account",
     /// `@` followed by a number that is not one. Params: `word`.
@@ -223,12 +221,6 @@ codes! {
     LineNoOpenAccount = "line.no_open_account",
     /// Several open accounts and none named. Params: `example`, `accounts`.
     LineWhichAccount = "line.which_account",
-    /// A counterparty named with no usual category, and no category typed.
-    /// Params: `counterparty`, `amount`, `key`.
-    LineNoUsualCategory = "line.no_usual_category",
-    /// A counterparty never named before, and no category to give it.
-    /// Params: `name`, `amount`.
-    LineUnknownCounterparty = "line.unknown_counterparty",
     /// No category by the name typed. Params: `name`.
     LineUnknownCategory = "line.unknown_category",
     /// A name several categories have. Params: `name`, `names`.
@@ -407,6 +399,35 @@ codes! {
     /// A name with no letter or digit in it could never be typed. Params:
     /// `name`.
     CounterpartyUntypeable = "counterparty.untypeable",
+    /// A counterparty merged into itself.
+    CounterpartyMergeItself = "counterparty.merge_itself",
+    /// Both carry a tax number, and not the same one: two businesses, not one
+    /// typed two ways. Params: `from`, `into`.
+    CounterpartyMergeTaxIds = "counterparty.merge_tax_ids",
+
+    // One change to many entries at once.
+    /// A batch of no entries.
+    BatchEmpty = "batch.empty",
+    /// More entries than one batch changes. Params: `limit`, `count`.
+    BatchTooLarge = "batch.too_large",
+    /// No change said, or more than one.
+    BatchOneChange = "batch.one_change",
+    /// Labels to put on or take off, and none named.
+    BatchNoTags = "batch.no_tags",
+    /// Some of the entries are not the person's. Params: `count`.
+    BatchMissing = "batch.missing",
+    /// Money moved to the account it is on.
+    BatchSameAccount = "batch.same_account",
+    /// The account money is moved to is closed. Params: `name`.
+    BatchClosedAccount = "batch.closed_account",
+    /// The accounts are in different currencies. Params: `from`, `to`.
+    BatchOtherCurrency = "batch.other_currency",
+    /// Some of the entries move money between the two accounts already.
+    /// Params: `count`.
+    BatchOntoItself = "batch.onto_itself",
+    /// Some of the entries are kept by a module, and their money changes
+    /// there. Params: `count`, `module`.
+    BatchKept = "batch.kept",
     /// Not a country code. Params: `country`, as it was written.
     PlaceBadCountry = "place.bad_country",
     /// The person has no such place.
@@ -569,6 +590,11 @@ codes! {
     TradeKeyEmpty = "trade.key_empty",
     /// An idempotency key is longer than allowed. Params: `limit`.
     TradeKeyTooLong = "trade.key_too_long",
+    /// The trash has no such trade: never deleted, back already, or erased.
+    TradeNotInTrash = "trade.not_in_trash",
+    /// A trade recorded since under the same key stands for the one being
+    /// restored. Params: `key`.
+    TradeKeyTaken = "trade.key_taken",
 
     // Documents handed to the importer, beside the ones refused above.
     /// A file was sent with no name.

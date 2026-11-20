@@ -96,8 +96,10 @@ pub struct Preview {
     pub flow: Flow,
     /// The account it would leave or arrive in.
     pub account: Account,
-    /// What it would be filed under.
-    pub category: Category,
+    /// What it would be filed under; absent for a line that says nothing it
+    /// was for, which records a draft to sort later.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category: Option<Category>,
     /// The amount as the line said it, in the currency it said.
     pub amount: Money,
     /// What the account would move by, signed, in its own currency.
@@ -210,7 +212,6 @@ fn unreadable(error: parse::ParseError) -> AppError {
         Why::Empty => (Code::LineEmpty, json!({})),
         Why::NoAmount(word) => (Code::LineNoAmount, json!({ "word": word })),
         Why::ZeroAmount => (Code::LineZeroAmount, json!({})),
-        Why::NoCategory(amount) => (Code::LineNoCategory, json!({ "amount": amount })),
         Why::DanglingAccount(word) => (Code::LineDanglingAccount, json!({ "word": word })),
         Why::BadRate(word) => (Code::LineBadRate, json!({ "word": word })),
         Why::BareAt => (Code::LineBareAt, json!({})),
@@ -278,35 +279,40 @@ async fn resolve(
         parse::Flow::Expense => Flow::Expense,
         parse::Flow::Income => Flow::Income,
     };
-    match (category.flow, flow) {
-        (Flow::Income, Flow::Expense) => {
+    match (category.as_ref().map(|category| category.flow), flow) {
+        (Some(Flow::Income), Flow::Expense) => {
             return Err(AppError::bad_request(
                 Code::LineIncomeCategory,
                 anyhow::anyhow!(
                     "`{}` is a category of money coming in; write `+{}` for money coming in",
-                    category.name,
+                    category.as_ref().map(|category| category.name.as_str()).unwrap_or_default(),
                     spoken.amount
                 ),
             )
-            .with_params(json!({ "category": category.name, "amount": spoken.amount.to_string() })));
+            .with_params(json!({
+                "category": category.as_ref().map(|category| category.name.clone()).unwrap_or_default(),
+                "amount": spoken.amount.to_string(),
+            })));
         }
-        (Flow::Expense, Flow::Income) => {
+        (Some(Flow::Expense), Flow::Income) => {
+            let name = category.as_ref().map(|category| category.name.clone()).unwrap_or_default();
             return Err(AppError::bad_request(
                 Code::LineExpenseCategory,
-                anyhow::anyhow!("`{}` is a category of money going out; leave the `+` off for money spent", category.name),
+                anyhow::anyhow!("`{name}` is a category of money going out; leave the `+` off for money spent"),
             )
-            .with_params(json!({ "category": category.name })));
+            .with_params(json!({ "category": name })));
         }
         _ => {}
     }
 
     // A counterparty named for the first time takes this line's category as
-    // its usual one, so the next line can leave it out.
+    // its usual one, so the next line can leave it out - and none when the
+    // line is a draft: the first time it is sorted is the time to say.
     let choice = counterparty.as_ref().map(|named| match named {
         Spoken::Known(known) => CounterpartyChoice::Existing(known.id),
         Spoken::Unknown(name) => CounterpartyChoice::New {
             name: name.clone(),
-            usual_category: Some(category.id),
+            usual_category: category.as_ref().map(|category| category.id),
             tax_id: None,
         },
     });
@@ -343,39 +349,18 @@ async fn unknown_tags(pool: &PgPool, owner_id: Uuid, typed: &[String]) -> AppRes
 }
 
 /// The category a typed line is filed under: the one it names, or the usual
-/// one of the counterparty it names - "this shop is groceries".
-async fn category_for(pool: &PgPool, owner_id: Uuid, spoken: &parse::Spoken, counterparty: Option<&Spoken>) -> AppResult<Category> {
+/// one of the counterparty it names - "this shop is groceries". `None` when
+/// the line names neither, or a counterparty with no usual category: the
+/// money is recorded now, as a draft, and sorted later - at a till there is
+/// time for the amount, not for the category.
+async fn category_for(pool: &PgPool, owner_id: Uuid, spoken: &parse::Spoken, counterparty: Option<&Spoken>) -> AppResult<Option<Category>> {
     match (&spoken.category, counterparty) {
-        (Some(name), _) => category_named(pool, owner_id, name).await,
-        (None, Some(Spoken::Known(known))) => {
-            let usual = match known.default_category_id {
-                Some(id) => repository::categories(pool, owner_id).await?.into_iter().find(|category| category.id == id),
-                None => None,
-            };
-            usual.ok_or_else(|| {
-                AppError::bad_request(
-                    Code::LineNoUsualCategory,
-                    anyhow::anyhow!(
-                        "`{}` has no usual category; say what this was for, as in `{} food @{}`",
-                        known.name,
-                        spoken.amount,
-                        known.key
-                    ),
-                )
-                .with_params(json!({ "counterparty": known.name, "amount": spoken.amount.to_string(), "key": known.key }))
-            })
-        }
-        (None, Some(Spoken::Unknown(typed))) => Err(AppError::not_found(
-            Code::LineUnknownCounterparty,
-            anyhow::anyhow!(
-                "you have no counterparty called `{typed}`; say what this was for, as in `{} food @{typed}`, and it is created with that as its usual category",
-                spoken.amount
-            ),
-        )
-        .with_params(json!({ "name": typed, "amount": spoken.amount.to_string() }))),
-        // The parser refuses a line that names neither.
-        (None, None) => Err(AppError::bad_request(Code::LineNoCategory, anyhow::anyhow!("the line says nothing it was for"))
-            .with_params(json!({ "amount": spoken.amount.to_string() }))),
+        (Some(name), _) => category_named(pool, owner_id, name).await.map(Some),
+        (None, Some(Spoken::Known(known))) => Ok(match known.default_category_id {
+            Some(id) => repository::categories(pool, owner_id).await?.into_iter().find(|category| category.id == id),
+            None => None,
+        }),
+        (None, Some(Spoken::Unknown(_)) | None) => Ok(None),
     }
 }
 
