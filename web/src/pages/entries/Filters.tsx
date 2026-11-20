@@ -3,12 +3,13 @@ import { useTranslation } from 'react-i18next'
 import { useLocale } from 'dowel-ui'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Chip } from '@/components/ui/chip'
 import { DateRangePicker } from '@/components/ui/date-range-picker'
 import { Drawer, DrawerBody, DrawerClose, DrawerHeader, DrawerPopup, DrawerTitle } from '@/components/ui/drawer'
 import { Segment, SegmentedControl } from '@/components/ui/segmented-control'
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { isFiltered } from '@/lib/filters'
-import { categoryLabels, useAccounts, useCategories, useCounterparties, useTags } from '@/lib/ledger'
+import { categoryLabels, useAccounts, useCategories, useCounterparties, useTags, useUnsortedCount } from '@/lib/ledger'
 import type { EntryFilter, EntryStatus } from '@/lib/types'
 
 /** The value a Select holds for "no filter on this". */
@@ -22,10 +23,11 @@ interface FiltersProps {
 }
 
 /** What narrows the list: a period, an account, a category, a tag, a
- * counterparty, and whether the bank has posted it. */
+ * counterparty, whether the bank has posted it, and the drafts. */
 export function Filters({ filter, onFilterChange, stacked = false }: FiltersProps) {
   const { t } = useTranslation()
   const locale = useLocale()
+  const unsorted = useUnsortedCount()
   const accounts = useAccounts()
   const categories = useCategories()
   const tags = useTags()
@@ -91,6 +93,18 @@ export function Filters({ filter, onFilterChange, stacked = false }: FiltersProp
         <Segment value="pending">{t('filters.held')}</Segment>
         <Segment value="cleared">{t('filters.posted')}</Segment>
       </SegmentedControl>
+      {/* Offered while there is something to sort, or while it is on - a
+          switch that cannot be switched back off is a trap. */}
+      {filter.unsorted || (unsorted.data ?? 0) > 0 ? (
+        <Chip
+          pressed={filter.unsorted === true}
+          onPressedChange={(on) => set({ unsorted: on || undefined })}
+          count={unsorted.data}
+          className={stacked ? 'self-start' : undefined}
+        >
+          {t('filters.unsorted')}
+        </Chip>
+      ) : null}
       {isFiltered(filter) ? (
         <Button variant="link" className="text-sm" onClick={() => onFilterChange({})}>
           {t('filters.clear')}

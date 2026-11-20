@@ -25,6 +25,7 @@ export const keys = {
   entries: (filter: EntryFilter) => ['ledger', 'entries', filter] as const,
   history: (id: string) => ['ledger', 'history', id] as const,
   trash: ['ledger', 'trash'] as const,
+  unsorted: ['ledger', 'unsorted'] as const,
   rate: (given: string, got: string, on: string) => ['ledger', 'rate', given, got, on] as const,
 }
 
@@ -44,6 +45,9 @@ export const useTags = () => useQuery({ queryKey: keys.tags, queryFn: api.tags }
 export const useTemplates = () => useQuery({ queryKey: keys.templates, queryFn: api.templates })
 export const useHistory = (id: string) => useQuery({ queryKey: keys.history(id), queryFn: () => api.history(id) })
 export const useTrash = () => useQuery({ queryKey: keys.trash, queryFn: api.trash })
+/** How many drafts wait to be sorted. Under the books' key, so every write
+ * that could sort one refetches it. */
+export const useUnsortedCount = () => useQuery({ queryKey: keys.unsorted, queryFn: api.unsorted, select: (answer) => answer.count })
 
 /** How many entries a page of the list holds. */
 export const PAGE = 50

@@ -37,6 +37,7 @@ import { problem } from '@/lib/problem'
 import { useRecordedToast, useSecondPress } from '@/lib/recording'
 import type { Entry, PlaceBody } from '@/lib/types'
 import { Attachments } from '@/pages/entries/Attachments'
+import { BatchDialog } from '@/pages/entries/Batch'
 import { CounterpartyField, isTag, PlaceField, TagsField } from '@/pages/entries/fields'
 import { History } from '@/pages/entries/History'
 import { resolver } from '@/pages/entries/resolve'
@@ -111,6 +112,8 @@ function ViewEntry({ entry, onEdit, onPost, onDeleted }: { entry: Entry; onEdit:
   const recorded = useRecordedToast()
   const secondPress = useSecondPress()
   const [making, setMaking] = useState(false)
+  const [sorting, setSorting] = useState(false)
+  const draft = entry.lines.some((line) => line.side === 'unsorted')
   const feeCategory = categories.data?.find((category) => category.purpose === 'exchange_fees')?.id
   const name = title(entry, t('entry.untitled'))
 
@@ -227,7 +230,9 @@ function ViewEntry({ entry, onEdit, onPost, onDeleted }: { entry: Entry; onEdit:
                           ? (labels.get(line.category_id) ?? '')
                           : line.side === 'holding'
                             ? t('entry.holding')
-                            : t('entry.conversion')}
+                            : line.side === 'unsorted'
+                              ? <Badge variant="info">{t('entries.unsortedBadge')}</Badge>
+                              : t('entry.conversion')}
                     </div>
                     {line.note ? <div className="text-xs text-dim">{line.note}</div> : null}
                   </TableCell>
@@ -265,6 +270,11 @@ function ViewEntry({ entry, onEdit, onPost, onDeleted }: { entry: Entry; onEdit:
           )
         }
       >
+        {draft ? (
+          <Button variant="primary" onClick={() => setSorting(true)}>
+            {t('entries.sort')}
+          </Button>
+        ) : null}
         <Button onClick={onEdit}>{t('entry.edit')}</Button>
         {entry.status === 'pending' ? (
           <Button variant="primary" onClick={onPost}>
@@ -273,6 +283,9 @@ function ViewEntry({ entry, onEdit, onPost, onDeleted }: { entry: Entry; onEdit:
         ) : null}
       </DrawerActions>
       {making ? <MakeButton entry={entry} suggested={name} open={making} onOpenChange={setMaking} /> : null}
+      {/* A draft is sorted the way a batch of them is: one entry, given its
+          category. */}
+      <BatchDialog kind={sorting ? 'categorize' : null} entries={[entry]} from={undefined} onOpenChange={setSorting} onDone={() => setSorting(false)} />
       {secondPress.dialog}
     </>
   )

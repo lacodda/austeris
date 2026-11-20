@@ -11,6 +11,8 @@ import type {
   Account,
   Attachment,
   Balances,
+  BatchAction,
+  Batched,
   Category,
   Comparison,
   Counterparty,
@@ -29,6 +31,7 @@ import type {
   Instrument,
   IsoDate,
   LatestPrice,
+  MergedCounterparty,
   Module,
   NewAccount,
   NewEntry,
@@ -51,6 +54,7 @@ import type {
   Trade,
   TradeBody,
   TradeRevision,
+  TradeTrash,
   Trash,
   Upload,
   Valuation,
@@ -168,12 +172,20 @@ export const api = {
       `${LEDGER}/counterparties`,
       json('POST', { name, default_category_id: defaultCategory ?? null, kind: kind ?? null }),
     ),
+  /** Merges a counterparty into another: its entries and buttons name the
+   * other, and the way it was typed finds the other from now on. */
+  mergeCounterparty: (id: string, into: string) =>
+    request<MergedCounterparty>(`${LEDGER}/counterparties/${id}/merge`, json('POST', { into })),
   places: () => request<Place[]>(`${LEDGER}/places`),
   tags: () => request<Tag[]>(`${LEDGER}/tags`),
 
   entries: (filter: EntryFilter, limit: number, offset: number) =>
-    request<Entry[]>(`${LEDGER}/entries${query({ ...filter, limit, offset })}`),
+    request<Entry[]>(`${LEDGER}/entries${query({ ...filter, unsorted: filter.unsorted ? 'true' : undefined, limit, offset })}`),
   entry: (id: string) => request<Entry>(`${LEDGER}/entries/${id}`),
+  /** How many drafts there are: entries with money not sorted yet. */
+  unsorted: () => request<{ count: number }>(`${LEDGER}/entries/unsorted`),
+  /** One change to many entries, all of it or none of it. */
+  batch: (ids: string[], action: BatchAction) => request<Batched>(`${LEDGER}/entries/batch`, json('POST', { ids, ...action })),
   createEntry: (entry: NewEntry) => request<Entry>(`${LEDGER}/entries`, json('POST', entry)),
   quick: (line: QuickLine) => request<Recorded>(`${LEDGER}/entries/quick`, json('POST', line)),
   preview: (line: QuickLine, signal?: AbortSignal) =>
@@ -251,6 +263,11 @@ export const api = {
   /** The trade, and its money taken back out of the books. */
   deleteTrade: (id: string) => request<void>(`${PORTFOLIO}/trades/${id}`, { method: 'DELETE' }),
   tradeHistory: (id: string) => request<TradeRevision[]>(`${PORTFOLIO}/trades/${id}/history`),
+  tradeTrash: () => request<TradeTrash>(`${PORTFOLIO}/trash`),
+  /** Back from the trash, with its money booked again. */
+  restoreTrade: (id: string) => request<Trade>(`${PORTFOLIO}/trash/trades/${id}/restore`, { method: 'POST' }),
+  eraseTrade: (id: string) => request<void>(`${PORTFOLIO}/trash/trades/${id}`, { method: 'DELETE' }),
+  emptyTradeTrash: () => request<void>(`${PORTFOLIO}/trash`, { method: 'DELETE' }),
   positions: (on?: IsoDate) => request<Position[]>(`${PORTFOLIO}/positions${query({ on })}`),
   /** Each broker's and wallet's account, and how it counts its lots. */
   portfolioAccounts: () => request<PortfolioAccount[]>(`${PORTFOLIO}/accounts`),

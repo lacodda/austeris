@@ -12,7 +12,8 @@ export type Direction = 'expense' | 'income'
 
 /** One line of a split, as the form has read it. */
 export interface SplitLine {
-  categoryId: string
+  /** What it was for; none for a draft's money, to be sorted later. */
+  categoryId: string | null
   /** Positive, as typed: the direction gives it its sign. */
   amount: Decimal
   note?: string
@@ -30,7 +31,7 @@ export interface SplitLine {
 export function splitLines(direction: Direction, accountId: string, currency: string, split: readonly SplitLine[]): NewEntryLine[] {
   const towardsCategory = (amount: Decimal) => (direction === 'expense' ? amount : negate(amount))
   const categoryLines: NewEntryLine[] = split.map((line) => ({
-    category_id: line.categoryId,
+    ...(line.categoryId === null ? { unsorted: true } : { category_id: line.categoryId }),
     amount: towardsCategory(line.amount),
     currency,
     ...(line.note ? { note: line.note } : {}),

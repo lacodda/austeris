@@ -43,6 +43,19 @@ describe('splitLines', () => {
     expect(lines[0]?.amount).toBe('-0.3')
     expect(balances(lines)).toBe(true)
   })
+
+  it('leaves a part with no category to be sorted later, and still balances', () => {
+    const lines = splitLines('expense', 'cash', 'PYG', [
+      { categoryId: 'food', amount: '30000' },
+      { categoryId: null, amount: '15000' },
+    ])
+    expect(lines).toEqual([
+      { account_id: 'cash', amount: '-45000', currency: 'PYG' },
+      { category_id: 'food', amount: '30000', currency: 'PYG' },
+      { unsorted: true, amount: '15000', currency: 'PYG' },
+    ])
+    expect(balances(lines)).toBe(true)
+  })
 })
 
 describe('transferLines', () => {

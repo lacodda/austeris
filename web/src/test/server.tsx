@@ -68,6 +68,11 @@ export function signedIn(routes: Record<string, Answer> = {}): Sent[] {
     '/api/v1/auth/me': json(ME),
     'POST /api/v1/auth/logout': () => new Response(null, { status: 204 }),
     '/api/v1/modules': json(MODULES),
+    // What every screen asks beside its own: how many drafts wait, shown on
+    // the navigation, and the portfolio's trash beside the ledger's.
+    '/api/v1/ledger/entries/unsorted': json({ count: 0 }),
+    '/api/v1/portfolio/trash': json({ keep_days: 30, trades: [] }),
+    'DELETE /api/v1/portfolio/trash': () => new Response(null, { status: 204 }),
     ...routes,
   })
 }

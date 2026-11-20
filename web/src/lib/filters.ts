@@ -26,6 +26,7 @@ export function readFilter(params: URLSearchParams): EntryFilter {
   }
   const status = params.get('status')
   if (status && (STATUSES as readonly string[]).includes(status)) filter.status = status as EntryStatus
+  if (params.get('unsorted') === 'true') filter.unsorted = true
   return filter
 }
 
@@ -37,10 +38,11 @@ export function writeFilter(filter: EntryFilter): URLSearchParams {
     const value = filter[field]
     if (value) params.set(field, value)
   }
+  if (filter.unsorted) params.set('unsorted', 'true')
   return params
 }
 
 /** Whether anything narrows the list. */
 export function isFiltered(filter: EntryFilter): boolean {
-  return Object.values(filter).some((value) => value !== undefined && value !== '')
+  return Object.values(filter).some((value) => value !== undefined && value !== '' && value !== false)
 }

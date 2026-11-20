@@ -117,9 +117,10 @@ export interface Tag {
 }
 
 /** Where a line's money is: an account, a category, money changing currency,
- * or a holding - money that became something a module holds, a coin or a
- * share, which no report of spending counts. */
-export type LineSide = 'account' | 'category' | 'conversion' | 'holding'
+ * a holding - money that became something a module holds, a coin or a share,
+ * which no report of spending counts - or not said yet: a draft's money,
+ * recorded at the till and sorted later. */
+export type LineSide = 'account' | 'category' | 'conversion' | 'holding' | 'unsorted'
 
 export interface Line {
   id: string
@@ -212,12 +213,37 @@ export interface Trash {
   attachments: TrashedAttachment[]
 }
 
+/** What a batch does to every entry chosen: one of the three. */
+export type BatchAction =
+  | { categorize: string }
+  | { move: { from: string; to: string } }
+  | { tag: { add: string[]; remove: string[] } }
+
+/** What a batch changed, and what it left as it was - nothing in those was
+ * what it changes: a transfer has no category to give. */
+export interface Batched {
+  changed: string[]
+  unchanged: string[]
+}
+
+/** What merging a counterparty into another did. */
+export interface MergedCounterparty {
+  /** The one merged into, as it is now. */
+  counterparty: Counterparty
+  /** How many entries now name it instead. */
+  entries: number
+  /** How many buttons now name it instead. */
+  templates: number
+}
+
 export interface NewEntryLine {
   amount: Decimal
   currency: string
   account_id?: string
   category_id?: string
   conversion?: boolean
+  /** Money spent or earned on what is not said yet: the entry is a draft. */
+  unsorted?: boolean
   note?: string
 }
 
@@ -289,7 +315,9 @@ export interface Preview {
   occurred_on: IsoDate
   flow: Flow
   account: Account
-  category: Category
+  /** What it was for; absent for a line that says nothing it was for - it
+   * records a draft, to be sorted later. */
+  category?: Category | null
   /** The amount as the line said it. */
   amount: Money
   /** What the account would move by, signed, in its currency. */
@@ -330,6 +358,8 @@ export interface EntryFilter {
   counterparty?: string
   place?: string
   status?: EntryStatus
+  /** Only drafts: entries with money not sorted yet. */
+  unsorted?: boolean
 }
 
 /** A module of the installation, and whether it runs. */
@@ -593,10 +623,26 @@ export interface TradeState {
 export interface TradeRevision {
   id: number
   at: string
-  action: 'created' | 'changed' | 'deleted'
+  action: 'created' | 'changed' | 'deleted' | 'restored'
   who: Who
   before?: TradeState | null
   after?: TradeState | null
+}
+
+/** A trade in the portfolio's trash: what it was when it was deleted. */
+export interface TrashedTrade {
+  /** As it was, under the id it comes back with; no entry - its money comes
+   * back with it. */
+  trade: Trade
+  deleted_at: string
+  who: Who
+  /** When it is erased for good, unless it is restored first. */
+  erased_after: string
+}
+
+export interface TradeTrash {
+  keep_days: number
+  trades: TrashedTrade[]
 }
 
 /** How an account's sales pick the lots they take. */

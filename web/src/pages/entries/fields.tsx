@@ -46,15 +46,27 @@ export function isTag(text: string): boolean {
   return TAG.test(text)
 }
 
-export function TagsField({ value, onValueChange }: { value: string[]; onValueChange: (value: string[]) => void }) {
+export function TagsField({
+  value,
+  onValueChange,
+  label,
+  help,
+}: {
+  value: string[]
+  onValueChange: (value: string[]) => void
+  /** What the field is called, when it is not an entry's labels. */
+  label?: string
+  help?: string
+}) {
   const { t } = useTranslation()
   const bad = value.filter((tag) => !isTag(tag))
+  const name = label ?? t('entry.tags')
   return (
-    <Field label={t('entry.tags')} help={t('entry.tagsHelp')} error={bad.length > 0 ? t('entry.badTags', { tags: bad.join(', ') }) : undefined}>
+    <Field label={name} help={help ?? t('entry.tagsHelp')} error={bad.length > 0 ? t('entry.badTags', { tags: bad.join(', ') }) : undefined}>
       <TagInput
         value={value}
         onValueChange={(tags) => onValueChange(tags.map((tag) => tag.replace(/^#/, '').trim()).filter(Boolean))}
-        aria-label={t('entry.tags')}
+        aria-label={name}
         removeLabel={(tag) => t('entry.removeTag', { tag })}
       />
     </Field>

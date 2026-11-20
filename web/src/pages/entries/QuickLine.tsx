@@ -101,6 +101,7 @@ export function QuickLine({ accountId, day, className }: QuickLineProps) {
       <form onSubmit={submit} className="flex items-start gap-2">
         <Field label={t('quick.label')} labelHidden help={t('quick.help')} error={problemText ?? undefined} className="min-w-0 flex-1">
           <Input
+            data-quick-line
             value={text}
             onChange={(event) => {
               setText(event.target.value)
@@ -178,7 +179,11 @@ function PreviewLine({ preview, error, stale }: PreviewLineProps) {
     >
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
         <Money amount={preview.moves} currency={preview.account.currency} signDisplay="exceptZero" className="font-semibold text-text" />
-        <span className="text-text">{labels.get(preview.category.id) ?? preview.category.name}</span>
+        {preview.category ? (
+          <span className="text-text">{labels.get(preview.category.id) ?? preview.category.name}</span>
+        ) : (
+          <Badge variant="info">{t('entries.unsortedBadge')}</Badge>
+        )}
         <span className="text-dim">
           {preview.flow === 'income' ? t('quick.into', { account: preview.account.name }) : t('quick.from', { account: preview.account.name })}
         </span>

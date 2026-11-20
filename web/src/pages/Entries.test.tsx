@@ -50,7 +50,7 @@ describe('Entries', () => {
     const requests = signedIn({ ...LISTS, '/api/v1/ledger/entries': json([]) })
     render(app(<Entries />, '/entries?account=a1&tag=trip&status=pending'))
     expect(await screen.findByText('No entries match these filters.')).toBeTruthy()
-    const asked = requests.find((sent) => sent.path.startsWith('/api/v1/ledger/entries'))!.path
+    const asked = requests.find((sent) => sent.path.startsWith('/api/v1/ledger/entries?'))!.path
     expect(asked).toContain('account=a1')
     expect(asked).toContain('tag=trip')
     expect(asked).toContain('status=pending')
@@ -248,5 +248,80 @@ describe('Entries', () => {
     await userEvent.type(line, '45000 fod lunch{Enter}')
     expect(await screen.findByText('you have no category called `fod`; create it first')).toBeTruthy()
     expect((line as HTMLInputElement).value).toBe('45000 fod lunch')
+  })
+
+  it('gives the chosen entries one category with one request', async () => {
+    const second = { ...HELD, id: 'e2', description: 'Pharmacy' }
+    const requests = signedIn({
+      ...LISTS,
+      '/api/v1/ledger/entries': json([HELD, second]),
+      'POST /api/v1/ledger/entries/batch': json({ changed: ['e1', 'e2'], unchanged: [] }),
+    })
+    render(app(<Entries />, '/entries'))
+    await userEvent.click(await screen.findByRole('checkbox', { name: 'Choose Weekly shop' }))
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Choose Pharmacy' }))
+    const bar = screen.getByRole('toolbar', { name: 'What to do with the chosen entries' })
+    expect(within(bar).getByText('2 chosen')).toBeTruthy()
+    await userEvent.click(within(bar).getByRole('button', { name: 'Categorize' }))
+
+    const dialog = await screen.findByRole('dialog')
+    await userEvent.type(within(dialog).getByRole('combobox'), 'Groc')
+    await userEvent.click(await screen.findByRole('option', { name: 'Food › Groceries' }))
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Categorize' }))
+    await screen.findByText('2 entries changed')
+    expect(requests.find((each) => each.path === '/api/v1/ledger/entries/batch')?.body).toEqual({ ids: ['e1', 'e2'], categorize: 'c2' })
+  })
+
+  it('walks the list with J and K, and chooses with X', async () => {
+    const second = { ...HELD, id: 'e2', description: 'Pharmacy' }
+    signedIn({ ...LISTS, '/api/v1/ledger/entries': json([HELD, second]) })
+    render(app(<Entries />, '/entries'))
+    const first = await screen.findByRole('button', { name: 'Weekly shop' })
+    await userEvent.keyboard('j')
+    expect(document.activeElement).toBe(first)
+    await userEvent.keyboard('j')
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Pharmacy' }))
+    await userEvent.keyboard('x')
+    expect((screen.getByRole('checkbox', { name: 'Choose Pharmacy' }) as HTMLElement).getAttribute('aria-checked')).toBe('true')
+    await userEvent.keyboard('k')
+    expect(document.activeElement).toBe(first)
+    // Escape lets the choice go.
+    await userEvent.keyboard('{Escape}')
+    expect(screen.queryByRole('toolbar', { name: 'What to do with the chosen entries' })).toBeNull()
+  })
+
+  it('marks a draft and lists the drafts when asked', async () => {
+    const draft = {
+      ...HELD,
+      id: 'e3',
+      status: 'cleared',
+      description: 'At the till',
+      lines: [HELD.lines[0], { id: 'l3', side: 'unsorted', amount: '45000', currency: 'PYG', note: '' }],
+    }
+    const requests = signedIn({ ...LISTS, '/api/v1/ledger/entries': json([draft]), '/api/v1/ledger/entries/unsorted': json({ count: 1 }) })
+    render(app(<Entries />, '/entries?unsorted=true'))
+    const row = (await screen.findByRole('button', { name: 'At the till' })).closest('tr')!
+    expect(within(row).getByText('Unsorted')).toBeTruthy()
+    expect(requests.find((sent) => sent.path.startsWith('/api/v1/ledger/entries?'))?.path).toContain('unsorted=true')
+  })
+
+  it('merges the counterparty the list is narrowed to into another', async () => {
+    const requests = signedIn({
+      ...LISTS,
+      '/api/v1/ledger/counterparties': json([
+        { id: 'p1', name: 'Casa Rica', key: 'casarica' },
+        { id: 'p2', name: 'Casa Rika', key: 'casarika' },
+      ]),
+      '/api/v1/ledger/entries': json([]),
+      'POST /api/v1/ledger/counterparties/p2/merge': json({ counterparty: { id: 'p1', name: 'Casa Rica', key: 'casarica' }, entries: 3, templates: 0 }),
+    })
+    render(app(<Entries />, '/entries?counterparty=p2'))
+    await userEvent.click(await screen.findByRole('button', { name: 'Merge' }))
+    const dialog = await screen.findByRole('dialog')
+    await userEvent.type(within(dialog).getByRole('combobox'), 'Rica')
+    await userEvent.click(await screen.findByRole('option', { name: 'Casa Rica' }))
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Merge' }))
+    await screen.findByText('Casa Rika merged into Casa Rica: 3 entries moved')
+    expect(requests.find((each) => each.path === '/api/v1/ledger/counterparties/p2/merge')?.body).toEqual({ into: 'p1' })
   })
 })

@@ -43,7 +43,7 @@ describe('Trash', () => {
     render(app(<Trash />, '/entries/trash'))
     expect(await screen.findByText('Weekly shop')).toBeTruthy()
     // The server says how long it keeps things; the page does not promise its own.
-    expect(screen.getByText('Deleted entries and files wait here for 30 days, then they are erased for good.')).toBeTruthy()
+    expect(screen.getByText('Deleted entries, files and trades wait here for 30 days, then they are erased for good.')).toBeTruthy()
     const row = screen.getByText('Weekly shop').closest('li')!
     expect(within(row).getByText(/1 file/)).toBeTruthy()
     expect(within(row).getByText(/erased Nov 13, 2026/)).toBeTruthy()
@@ -96,7 +96,42 @@ describe('Trash', () => {
     signedIn({ '/api/v1/ledger/trash': json({ keep_days: 30, entries: [], attachments: [] }) })
     render(app(<Trash />, '/entries/trash'))
     expect(await screen.findByText('The trash is empty')).toBeTruthy()
-    expect(screen.getByText('A deleted entry or file waits here for 30 days before it is erased.')).toBeTruthy()
+    expect(screen.getByText('A deleted entry, file or trade waits here for 30 days before it is erased.')).toBeTruthy()
     expect((screen.getByRole('button', { name: 'Empty the trash' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('brings a deleted trade back, its money with it', async () => {
+    const trade = {
+      id: 'tr1',
+      kind: 'buy',
+      account_id: 'a9',
+      instrument_id: 'i1',
+      quantity: '0.01',
+      price: '60000',
+      currency: 'USDT',
+      fee: '1',
+      occurred_at: '2026-10-20T13:00:00Z',
+      occurred_on: '2026-10-20',
+      note: '',
+      money: '-601',
+      created_at: '2026-10-20T13:00:00Z',
+      updated_at: '2026-10-21T13:00:00Z',
+    }
+    const requests = signedIn({
+      '/api/v1/ledger/trash': json({ keep_days: 30, entries: [], attachments: [] }),
+      '/api/v1/portfolio/trash': json({
+        keep_days: 30,
+        trades: [{ trade, deleted_at: '2026-10-21T13:00:00Z', who: { kind: 'person', person_id: 'u1' }, erased_after: '2026-11-20T13:00:00Z' }],
+      }),
+      '/api/v1/ledger/accounts': json([{ id: 'a9', kind: 'crypto_wallet', name: 'Exchange', currency: 'USDT', opening_balance: '0' }]),
+      '/api/v1/market/instruments': json([{ id: 'i1', kind: 'crypto', symbol: 'BTC', name: 'Bitcoin' }]),
+      'POST /api/v1/portfolio/trash/trades/tr1/restore': json({ ...trade, entry_id: 'e9' }),
+    })
+    render(app(<Trash />, '/entries/trash'))
+    const section = await screen.findByRole('region', { name: 'Trades' })
+    expect(await within(section).findByText('BTC')).toBeTruthy()
+    expect(within(section).getByText(/Exchange/)).toBeTruthy()
+    await userEvent.click(within(section).getByRole('button', { name: /^Restore/ }))
+    await waitFor(() => expect(sent(requests, 'POST', '/api/v1/portfolio/trash/trades/tr1/restore')).toHaveLength(1))
   })
 })

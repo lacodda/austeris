@@ -1,12 +1,16 @@
-import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router'
+import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { ArrowLeftRight, ChevronDown, Coins, FileInput, PenLine, Wallet } from 'lucide-react'
 import { AppShell, Screen } from '@/components/ui/app-shell'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { useCommands } from '@/components/ui/commands'
 import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from '@/components/ui/menu'
 import { NavRail, type NavRailItem } from '@/components/ui/nav-rail'
+import { ShortcutsDialog } from '@/components/ui/shortcuts-dialog'
 import { languageName, LANGUAGES, setLanguage } from '@/i18n'
 import { useModules } from '@/lib/imports'
+import { useUnsortedCount } from '@/lib/ledger'
 import { useSession } from '@/lib/session'
 import { Accounts } from '@/pages/Accounts'
 import { Entries } from '@/pages/Entries'
@@ -16,14 +20,15 @@ import { Record } from '@/pages/Record'
 import { SignIn } from '@/pages/SignIn'
 import { Trash } from '@/pages/Trash'
 
-/** The screens, in the order the navigation lists them. */
+/** The screens, in the order the navigation lists them, with the letter
+ * that goes to each after G. */
 const SCREENS = [
-  { id: 'record', path: '/record', icon: <PenLine aria-hidden /> },
-  { id: 'accounts', path: '/accounts', icon: <Wallet aria-hidden /> },
-  { id: 'entries', path: '/entries', icon: <ArrowLeftRight aria-hidden /> },
+  { id: 'record', path: '/record', icon: <PenLine aria-hidden />, key: 'R' },
+  { id: 'accounts', path: '/accounts', icon: <Wallet aria-hidden />, key: 'A' },
+  { id: 'entries', path: '/entries', icon: <ArrowLeftRight aria-hidden />, key: 'E' },
   // A module's screen, shown only while the installation runs it.
-  { id: 'portfolio', path: '/portfolio', icon: <Coins aria-hidden />, module: 'portfolio' },
-  { id: 'import', path: '/import', icon: <FileInput aria-hidden />, module: 'imports' },
+  { id: 'portfolio', path: '/portfolio', icon: <Coins aria-hidden />, key: 'P', module: 'portfolio' },
+  { id: 'import', path: '/import', icon: <FileInput aria-hidden />, key: 'I', module: 'imports' },
 ] as const
 
 /** Which screen is showing. */
@@ -41,10 +46,40 @@ function Books() {
   const { t } = useTranslation()
   const { pathname } = useLocation()
   const modules = useModules()
+  const unsorted = useUnsortedCount()
   const shown = SCREENS.filter((screen) => !('module' in screen) || modules?.has(screen.module))
-  const items: NavRailItem[] = shown.map((screen) => ({ id: screen.id, label: t(`nav.${screen.id}`), icon: screen.icon }))
+  // The drafts wait on the entries: how many is said where the screen is
+  // named, in the header and in the phone's bar alike.
+  const drafts = unsorted.data ?? 0
+  const items: NavRailItem[] = shown.map((screen) => ({
+    id: screen.id,
+    label:
+      screen.id === 'entries' && drafts > 0 ? (
+        <span className="inline-flex items-center gap-1.5">
+          {t('nav.entries')}
+          <Badge variant="accent" aria-label={t('entries.unsortedCount', { count: drafts })}>
+            {drafts}
+          </Badge>
+        </span>
+      ) : (
+        t(`nav.${screen.id}`)
+      ),
+    icon: screen.icon,
+  }))
   const active = shown.find((screen) => pathname.startsWith(screen.path))?.id
   const link = (item: NavRailItem) => <NavLink to={shown.find((screen) => screen.id === item.id)?.path ?? '/'} />
+  const navigate = useNavigate()
+  // Declared here, before any screen's, so the frame's keys outrank a
+  // screen's should two ever ask for the same.
+  useCommands(
+    shown.map((screen) => ({
+      id: `go.${screen.id}`,
+      label: t(`nav.${screen.id}`),
+      group: t('keys.go'),
+      keys: `G ${screen.key}`,
+      run: () => void navigate(screen.path),
+    })),
+  )
 
   return (
     <AppShell top={<Header items={items} active={active} link={link} />}>
@@ -76,6 +111,7 @@ function Books() {
         render={link}
         className="sm:hidden"
       />
+      <ShortcutsDialog title={t('keys.title')} closeLabel={t('common.close')} group={t('keys.general')} description={t('keys.description')} />
     </AppShell>
   )
 }

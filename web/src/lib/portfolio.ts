@@ -24,6 +24,7 @@ export const keys = {
   snapshots: ['portfolio', 'snapshots'] as const,
   snapshot: (id: string, against: string | undefined) => ['portfolio', 'snapshot', id, against ?? null] as const,
   history: (id: string) => ['portfolio', 'history', id] as const,
+  trash: ['portfolio', 'trash'] as const,
   market: ['market'] as const,
   instruments: ['market', 'instruments'] as const,
   prices: (currency: string) => ['market', 'prices', currency] as const,
@@ -40,6 +41,8 @@ export const useGains = (from: IsoDate, to: IsoDate, currency: string | undefine
 export const useComparison = (id: string, against?: string) =>
   useQuery({ queryKey: keys.snapshot(id, against), queryFn: () => api.snapshot(id, against) })
 export const useTradeHistory = (id: string) => useQuery({ queryKey: keys.history(id), queryFn: () => api.tradeHistory(id) })
+/** The deleted trades, when the installation runs the portfolio. */
+export const useTradeTrash = (enabled: boolean) => useQuery({ queryKey: keys.trash, queryFn: api.tradeTrash, enabled })
 export const useInstruments = () => useQuery({ queryKey: keys.instruments, queryFn: api.instruments })
 export const usePrices = (currency: string | undefined) =>
   useQuery({ queryKey: keys.prices(currency ?? ''), queryFn: () => api.prices(currency ?? 'USD'), enabled: currency !== undefined })

@@ -127,11 +127,14 @@ export function EntryForm({ onDone, defaultAccount }: { onDone: () => void; defa
       const split = await Promise.all(
         lines.map(async (line, index) => {
           const value = parsed[index]
-          if (!line.category || !value) throw new Error(t('form.incomplete'))
-          return { categoryId: await resolve.category(line.category, flow), amount: value, note: line.note.trim() }
+          if (!value) throw new Error(t('form.incomplete'))
+          // A part with no category is money to sort later: the entry is a
+          // draft until it has one.
+          const categoryId = line.category ? await resolve.category(line.category, flow) : null
+          return { categoryId, amount: value, note: line.note.trim() }
         }),
       )
-      const counterpartyId = await resolve.counterparty(counterparty, split[0]?.categoryId)
+      const counterpartyId = await resolve.counterparty(counterparty, split[0]?.categoryId ?? undefined)
       const entry: NewEntry = {
         ...shared,
         counterparty_id: counterpartyId,
@@ -228,6 +231,7 @@ export function EntryForm({ onDone, defaultAccount }: { onDone: () => void; defa
               <CounterpartyField value={counterparty} onValueChange={chooseCounterparty} />
               <fieldset className="flex flex-col gap-2">
                 <legend className="caption mb-2">{t('entry.split')}</legend>
+                <p className="text-xs text-dim">{t('entry.sortLater')}</p>
                 {lines.map((line, index) => (
                   <div key={line.key} className="grid grid-cols-[minmax(0,1fr)_8rem_auto] items-start gap-2">
                     <div className="flex flex-col gap-1">
