@@ -151,12 +151,50 @@ transfer said to be a buy books one.
 
 ### `DELETE /api/v1/portfolio/trades/{id}`
 
-The trade, and its money out of the books. Its history stays.
+The trade, and its money out of the books, into [the trash](#the-trash). Its
+history stays.
 
 ### `GET /api/v1/portfolio/trades/{id}/history`
 
-Who recorded, changed and deleted it, and what it was before and after each,
-oldest first - kept by the database, as an entry's history is.
+Who recorded, changed, deleted and restored it, and what it was before and after
+each, oldest first - kept by the database, as an entry's history is.
+
+## The trash
+
+A deleted trade waits for as many days as the ledger's trash keeps an entry -
+30 - and then it is erased with its history, by an hourly sweep. Nothing is
+marked deleted and left where a position reads it: the trash is the history's
+last word, the deletion, which holds the trade as it was.
+
+### `GET /api/v1/portfolio/trash`
+
+```json
+{ "keep_days": 30,
+  "trades": [{ "trade": { "id": "…", "kind": "buy", "quantity": "0.01", "money": "-601", "…": "…" },
+               "deleted_at": "2026-11-20T13:00:00Z", "who": { "kind": "person", "person_id": "…" },
+               "erased_after": "2026-12-20T13:00:00Z" }] }
+```
+
+The most recently deleted first; a trade there has no `entry_id`, since its money
+left the books with it.
+
+### `POST /api/v1/portfolio/trash/trades/{id}/restore`
+
+Back under its own id, key and day, checked as a trade being recorded is, with
+its money booked again under the key it was booked under - `portfolio:trade:<id>`.
+Its history goes on with a `restored` revision rather than starting again.
+Refused when it no longer fits: its account closed since (`400`), its units sold
+by a later sale meanwhile (`409`, `trade.oversold`), or a trade recorded since
+under its `idempotency_key` standing for it (`409`, `trade.key_taken`). `404`
+(`trade.not_in_trash`) once it is back, erased, or never was deleted.
+
+### `DELETE /api/v1/portfolio/trash/trades/{id}`
+
+Erases one for good, with its history.
+
+### `DELETE /api/v1/portfolio/trash`
+
+Erases everything in it.
 
 ## Positions
 

@@ -83,7 +83,8 @@ account is recorded against that one:
 `from` names the account, `@` who was paid, `#` a tag, a currency code and
 `@rate` an amount in another currency, and a leading `~` marks it held. What
 the line created - a counterparty, a tag - is said when it is recorded, so a
-typo is seen at once. See [the ledger reference](/austeris/reference/ledger/)
+typo is seen at once. A line that says nothing it was for - `45000` at the till
+- is recorded as a **draft**, marked *Unsorted*, and sorted later. See [the ledger reference](/austeris/reference/ledger/)
 for the whole grammar.
 
 ### New entry
@@ -95,7 +96,9 @@ The account's side is never typed: it is the sum of the split, worked out
 exactly, so the entry balances by construction. A category or a counterparty
 that does not exist yet is typed into its field and created when the entry is
 saved - a cancelled form leaves nothing behind. A counterparty with a usual
-category fills it in. **Held** records a card payment the bank has not posted.
+category fills it in. A part left without a category is money to sort later:
+the entry is recorded as a draft. **Held** records a card payment the bank has
+not posted.
 
 Money in another currency than the account's is the one line's job, or an
 exchange's.
@@ -136,7 +139,8 @@ the new, the tags put on and taken off, the amount a hold was posted for, the
 files attached and removed.
 
 **Delete** sends the entry to the trash with its files, and the note that says
-so carries **Undo**.
+so carries **Undo**. A draft has **Sort**, which gives its unsorted money a
+category.
 
 **Record again today** copies it onto today; a payment in another currency is
 converted again at today's rate, and an exchange is not offered. **Make a
@@ -148,18 +152,52 @@ took another amount than was held - a hotel's pre-authorisation, a charge in
 another currency at the bank's rate - with that amount. A split cannot post for
 another amount: there is no saying which of its parts changed.
 
+### Drafts and sorting many at once
+
+How many drafts wait is beside **Entries** in the navigation, and the
+**Unsorted** filter lists them. A box at the start of each row chooses it - the
+one at the top chooses every entry shown - and the bar under the list does to
+all of them at once what it says:
+
+- **Categorize** gives them one category: their unsorted money, and money on
+  your own categories. Fees an exchange or a trade took stay where they are.
+- **Move** moves their money to another account in the same currency - entries
+  recorded against the wrong one. It is offered when they agree on an account:
+  the one the list is narrowed to, or the one every chosen entry moves.
+- **Tag** puts labels on and takes them off.
+
+What could not be changed - a transfer has no category to give - is said on the
+note, with how many were.
+
+A list narrowed to one counterparty offers **Merge**: the counterparty's entries
+and buttons go to the one chosen, which takes its usual category when it has
+none, and typing the merged name - `@supersies` - finds the one it was merged
+into from then on.
+
+### The keyboard
+
+**?** opens the sheet of every key the screen answers to. On the entries,
+**J** and **K** (or the arrows) walk a cursor down and up the list, **Enter**
+opens the entry under it, **X** chooses it, and **C**, **M** and **T**
+categorize, move or tag the chosen entries - or the one under the cursor when
+none is chosen. **Escape** lets the choice go, **N** starts a new entry and
+**/** goes to the one line. **G** and a letter goes to a screen: **G R**
+record, **G A** accounts, **G E** entries, **G P** portfolio, **G I** import.
+Letters wait while you type in a field.
+
 ### The trash
 
-Behind the bin beside **Exchange**: the entries deleted and the files taken off
-entries, each with the day it is erased for good - thirty days after it went
-in. **Restore** puts it back as it was: an entry under its own id, with its
-lines, its files and its history; a file on its entry. **Erase** and **Empty the
+Behind the bin beside **Exchange**: the entries deleted, the files taken off
+entries and - with the portfolio on - the trades deleted, each with the day it
+is erased for good - thirty days after it went in. **Restore** puts it back as
+it was: an entry under its own id, with its lines, its files and its history; a
+file on its entry; a trade with its money booked again. **Erase** and **Empty the
 trash** are asked about first, because nothing brings back what they erase.
 
 ### Filters
 
-A period, an account, a category, a tag, a counterparty, and whether the bank
-has posted it. The filter is in the address, so a filtered list can be
+A period, an account, a category, a tag, a counterparty, whether the bank
+has posted it, and - while there are any - the drafts. The filter is in the address, so a filtered list can be
 bookmarked, reloaded or sent to the next tab.
 
 ## Portfolio

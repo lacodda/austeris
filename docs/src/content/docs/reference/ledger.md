@@ -135,8 +135,8 @@ module's entry is refused, saying so, until that one is renamed.
 }
 ```
 
-At least two lines, each naming exactly one of an account, a category, or
-`"conversion": true`. Amounts are signed: negative leaves, positive arrives.
+At least two lines, each naming exactly one of an account, a category,
+`"conversion": true` or `"unsorted": true`. Amounts are signed: negative leaves, positive arrives.
 `occurred_on` is the day the money moved — not the instant it was recorded — and
 defaults to today.
 
@@ -144,11 +144,34 @@ A line on an account is in the account's currency; money in another currency
 reaches it through a **conversion**. An entry's conversion lines take one
 currency in and give another out — how is in
 [Money that changes currency](/austeris/concepts/double-entry/#money-that-changes-currency).
-Every line comes back with its `side`: `account`, `category`, `conversion` or
-`holding`. A **holding** is money that became something a module holds - a coin,
-a share - or came back from one: a buy on an exchange is the account's line and
-the holding's, and no report of spending counts it. Only a module posts one, on
-an entry it keeps (see below).
+Every line comes back with its `side`: `account`, `category`, `conversion`,
+`holding` or `unsorted`. A **holding** is money that became something a module
+holds - a coin, a share - or came back from one: a buy on an exchange is the
+account's line and the holding's, and no report of spending counts it. Only a
+module posts one, on an entry it keeps (see below).
+
+### Drafts
+
+At a till there is time for the amount, not for the category. A line with
+`"unsorted": true` is money spent or earned on what is not said yet, and the
+entry is a **draft**:
+
+```json
+{ "lines": [
+    { "account_id": "…", "amount": "-45000", "currency": "PYG" },
+    { "unsorted": true, "amount": "45000", "currency": "PYG" } ] }
+```
+
+It balances like any other entry, moves the account's balance, and counts in
+[totals](#totals) as spending (money arriving on the unsorted side) or income
+(money leaving it). It is sorted by giving the line a category - one entry or a
+hundred at once with a [batch](#post-apiv1ledgerentriesbatch) - and stops being
+a draft. A typed line that says nothing it was for records one too.
+
+### `GET /api/v1/ledger/entries/unsorted`
+
+How many drafts wait: `{ "count": 3 }`. `GET /entries?unsorted=true` lists
+them.
 
 The lines must sum to zero in every currency they touch. They are checked here
 and again at the database's commit; an entry that does not balance is refused
@@ -227,6 +250,7 @@ word after it is the note:
 | `10 usd subscriptions @5965 from card` | …at the rate the bank actually charged |
 | `45000 food @casarica lunch` | paid to the counterparty *Casa Rica* |
 | `45000 @casarica` | …filed under its usual category |
+| `45000 from cash` | 45 000 spent, on what is said later: a [draft](#drafts) |
 | `45000 food #holiday-2027` | labelled with a tag |
 | `~300000 hotel from card` | a payment the bank is still holding |
 
@@ -239,8 +263,9 @@ rate or a counterparty said twice is refused.
 A counterparty named for the first time is **created**, with the line's category
 as its usual one, and the answer says so in `new_counterparty` - so the next
 line can be `45000 @casarica`, and a mistyped name is seen the first time. A
-line that names only a counterparty needs one with a usual category; one never
-used before needs a category beside it.
+line that names nothing it was for - no category, and no counterparty with a
+usual one - records a [draft](#drafts) rather than being refused; a word that
+names no category is still refused, since it was said and meant something.
 
 A tag is `#` and a word starting with a letter - `order #1234` stays a note about
 an order. One used for the first time is created and listed in `new_tags`.
@@ -339,7 +364,39 @@ same status and code.
 
 Newest first. Takes `?from=`, `?to=`, `?account=`, `?category=`, `?tag=` (a
 name, in any case), `?counterparty=`, `?place=`, `?status=` (`pending` or
-`cleared`), `?limit=` (50 by default, 200 at most) and `?offset=`.
+`cleared`), `?unsorted=` (`true` for the [drafts](#drafts), `false` for the
+rest), `?limit=` (50 by default, 200 at most) and `?offset=`.
+
+### `POST /api/v1/ledger/entries/batch`
+
+One change to many entries - five hundred at most - done to all of them or to
+none, each with a revision in its [history](#history). Exactly one of:
+
+```json
+{ "ids": ["…", "…"], "categorize": "<category id>" }
+{ "ids": ["…"], "move": { "from": "<account id>", "to": "<account id>" } }
+{ "ids": ["…"], "tag": { "add": ["holiday-2027"], "remove": ["work"] } }
+```
+
+- **`categorize`** files the money under a category: every unsorted line, and
+  every line on a category of your own. Lines on a category the ledger or a
+  module keeps - an exchange's fees, a trade's - stay where they are.
+- **`move`** moves the money from one account to another of the same currency:
+  entries recorded against the wrong one. Refused for a closed account
+  (`batch.closed_account`), another currency (`batch.other_currency`), the
+  same account (`batch.same_account`), an entry that already moves money
+  between the two (`batch.onto_itself`), and with `409` for an entry a module
+  keeps (`batch.kept`), whose money changes there.
+- **`tag`** puts labels on and takes them off; one used for the first time is
+  created.
+
+```json
+{ "changed": ["…"], "unchanged": ["…"] }
+```
+
+`unchanged` are the entries with nothing in them the change reaches: a transfer
+has no category to give, an entry on another account no money to move. An entry
+that is not yours refuses the whole batch with `404` and `batch.missing`.
 
 ### Entries a module keeps
 
@@ -660,6 +717,24 @@ name.
 
 Only one that no entry names; `409` otherwise.
 
+### `POST /api/v1/ledger/counterparties/{id}/merge`
+
+A typo made a second counterparty - *Supersies* beside *Superseis* - and its
+entries belong to the first:
+
+```json
+{ "into": "<the counterparty to keep>" }
+```
+
+One transaction moves its entries and its [templates](#templates) to the one
+kept, which takes what it lacks of the usual category, the kind and the tax
+number, and deletes it. The way it was typed stays as a way of typing the one
+kept: `@supersies` - in a line, on a receipt, in an entry brought back from the
+trash - finds *Superseis* from then on, until a counterparty is given that name
+on purpose. Answers the one kept and how many `entries` and `templates` moved.
+`409` (`counterparty.merge_tax_ids`) when both carry a tax number and not the
+same one: two businesses, not one typed two ways.
+
 ## Places
 
 A country, as its ISO 3166-1 code, and a city in it when one is said. A code that
@@ -738,7 +813,10 @@ across them. Held payments count on the day they were made.
 
 The entries that name no counterparty, tag or place are reported too, last, as
 a group with no `id` and no `name`, so the groups account for every line. An
-entry with two tags counts under both.
+entry with two tags counts under both. A [draft](#drafts)'s money counts by the
+way it went - spent when it arrived on the unsorted side, earned when it left
+it - and under `?by=category` it is that group with no `id`: what is not sorted
+yet.
 
 ## Exchanges
 
