@@ -14,7 +14,7 @@ use axum::http::StatusCode;
 use axum::http::request::Parts;
 use uuid::Uuid;
 
-use crate::AppError;
+use crate::{AppError, Code};
 
 /// The header the gateway sets from a validated session.
 pub const USER_HEADER: &str = "x-austeris-user-id";
@@ -51,7 +51,7 @@ impl Caller {
         let header = parts
             .headers
             .get(USER_HEADER)
-            .ok_or_else(|| AppError::new(StatusCode::UNAUTHORIZED, anyhow::anyhow!("not signed in")))?;
+            .ok_or_else(|| AppError::refused(StatusCode::UNAUTHORIZED, Code::AuthSignedOut, anyhow::anyhow!("not signed in")))?;
 
         // A header that is present but unreadable is a fault in the gateway,
         // not a client mistake: the client never sent it. Saying 500 here would
@@ -59,7 +59,7 @@ impl Caller {
         // is logged at the level that reaches an operator and answered as 401.
         let id = header.to_str().ok().and_then(|value| value.parse::<Uuid>().ok()).ok_or_else(|| {
             tracing::error!("the gateway set {USER_HEADER} to something that is not a user id");
-            AppError::new(StatusCode::UNAUTHORIZED, anyhow::anyhow!("not signed in"))
+            AppError::refused(StatusCode::UNAUTHORIZED, Code::AuthSignedOut, anyhow::anyhow!("not signed in"))
         })?;
 
         Ok(Self(id))

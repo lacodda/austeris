@@ -116,11 +116,11 @@ async fn modules() -> axum::Json<Modules> {
 
 /// What a switched-off module answers every request with.
 fn switched_off(service: Service) -> AppError {
-    AppError::not_found(anyhow::anyhow!(
-        "{service} is switched off on this installation ({}=off)",
-        service.switch().unwrap_or_default()
-    ))
-    .with_code(Code::ModuleSwitchedOff, serde_json::json!({ "module": service.as_str() }))
+    AppError::not_found(
+        Code::ModuleSwitchedOff,
+        anyhow::anyhow!("{service} is switched off on this installation ({}=off)", service.switch().unwrap_or_default()),
+    )
+    .with_params(serde_json::json!({ "module": service.as_str() }))
 }
 
 /// Passes a request to the service that owns its prefix, and its answer back.
@@ -137,8 +137,12 @@ async fn forward(State(upstream): State<Upstream>, request: Request) -> AppResul
         .map_err(|error| AppError::internal(anyhow::anyhow!("{} has an unusable address: {error}", upstream.service)))?;
 
     let body = axum::body::to_bytes(body, MAX_BODY_BYTES).await.map_err(|_| {
-        AppError::new(StatusCode::PAYLOAD_TOO_LARGE, anyhow::anyhow!("the request body is too large"))
-            .with_code(Code::RequestTooLarge, serde_json::json!({ "limit_mb": MAX_BODY_BYTES / (1024 * 1024) }))
+        AppError::refused(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Code::RequestTooLarge,
+            anyhow::anyhow!("the request body is too large"),
+        )
+        .with_params(serde_json::json!({ "limit_mb": MAX_BODY_BYTES / (1024 * 1024) }))
     })?;
 
     let mut outgoing = upstream.client.request(parts.method.clone(), url).body(body);
@@ -166,7 +170,11 @@ async fn forward(State(upstream): State<Upstream>, request: Request) -> AppResul
         // behind this gateway is one person's finances; an installation on a
         // home network must not serve them to whoever asks.
         let Some(user_id) = caller(&upstream.peers, &parts).await else {
-            return Err(AppError::new(StatusCode::UNAUTHORIZED, anyhow::anyhow!("not signed in")));
+            return Err(AppError::refused(
+                StatusCode::UNAUTHORIZED,
+                Code::AuthSignedOut,
+                anyhow::anyhow!("not signed in"),
+            ));
         };
         outgoing = outgoing.header(USER_HEADER, user_id);
     }
@@ -176,7 +184,12 @@ async fn forward(State(upstream): State<Upstream>, request: Request) -> AppResul
         // A service that is down is this deployment's problem, not the
         // caller's mistake - and the caller can usefully retry.
         tracing::error!(service = upstream.service.as_str(), %error, "forwarding failed");
-        AppError::new(StatusCode::BAD_GATEWAY, anyhow::anyhow!("{} is not answering", upstream.service))
+        AppError::refused(
+            StatusCode::BAD_GATEWAY,
+            Code::ModuleNotAnswering,
+            anyhow::anyhow!("{} is not answering", upstream.service),
+        )
+        .with_params(serde_json::json!({ "module": upstream.service.as_str() }))
     })?;
 
     let mut builder = Response::builder().status(response.status());
@@ -258,7 +271,7 @@ fn is_hop_by_hop(name: &str) -> bool {
 
 /// What a path nobody serves is answered with.
 pub(crate) fn not_found() -> Response {
-    (StatusCode::NOT_FOUND, "no such endpoint\n").into_response()
+    AppError::not_found(Code::RequestNoSuchEndpoint, anyhow::anyhow!("no such endpoint")).into_response()
 }
 
 /// Whether a URI names a path the gateway will forward.

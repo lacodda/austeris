@@ -5,9 +5,8 @@
 //! message reaching the client is deliberately the one the constructor was
 //! given: no error the client cannot act on is spelled out to it.
 //!
-//! An error a client is expected to act on - offer "record it again", say it
-//! in the reader's language - also carries a [`Code`] and the facts its
-//! message was written from. The message stays for the command line and the
+//! Every error carries a [`Code`] and the facts its message was written from,
+//! so a client can offer "record it again" or say it in the reader's language. The message stays for the command line and the
 //! logs; the code is what a screen decides by.
 
 use axum::Json;
@@ -18,53 +17,62 @@ use serde::{Deserialize, Serialize};
 /// What a handler returns.
 pub type AppResult<T> = Result<T, AppError>;
 
-/// An error on its way to a client, with the status it should arrive as.
+/// An error on its way to a client, with the status it should arrive as and
+/// the [`Code`] a client decides by.
 #[derive(Debug)]
 pub struct AppError {
     status: StatusCode,
     source: anyhow::Error,
-    code: Option<Code>,
-    params: Option<serde_json::Value>,
+    code: Code,
+    params: serde_json::Value,
 }
 
 impl AppError {
-    /// Wraps an error with an explicit status.
-    pub fn new(status: StatusCode, source: impl Into<anyhow::Error>) -> Self {
+    fn build(status: StatusCode, code: Code, source: impl Into<anyhow::Error>) -> Self {
         Self {
             status,
             source: source.into(),
-            code: None,
-            params: None,
+            code,
+            params: serde_json::Value::Object(serde_json::Map::new()),
         }
     }
 
-    /// 500 — the service failed at something the client did not ask for wrongly.
+    /// 500 - the service failed at something the client did not ask for wrongly.
+    /// It answers [`Code::Internal`]: the client did nothing it could mend.
     pub fn internal(source: impl Into<anyhow::Error>) -> Self {
-        Self::new(StatusCode::INTERNAL_SERVER_ERROR, source)
+        Self::build(StatusCode::INTERNAL_SERVER_ERROR, Code::Internal, source)
     }
 
-    /// 400 — the request itself is wrong.
-    pub fn bad_request(source: impl Into<anyhow::Error>) -> Self {
-        Self::new(StatusCode::BAD_REQUEST, source)
+    /// 400 - the request itself is wrong.
+    pub fn bad_request(code: Code, source: impl Into<anyhow::Error>) -> Self {
+        Self::build(StatusCode::BAD_REQUEST, code, source)
     }
 
-    /// 404 — the thing addressed does not exist.
-    pub fn not_found(source: impl Into<anyhow::Error>) -> Self {
-        Self::new(StatusCode::NOT_FOUND, source)
+    /// 404 - the thing addressed does not exist.
+    pub fn not_found(code: Code, source: impl Into<anyhow::Error>) -> Self {
+        Self::build(StatusCode::NOT_FOUND, code, source)
     }
 
-    /// 503 — the service is up but something it depends on is not.
-    pub fn unavailable(source: impl Into<anyhow::Error>) -> Self {
-        Self::new(StatusCode::SERVICE_UNAVAILABLE, source)
+    /// 409 - the request is fine, but what is there says no to it.
+    pub fn conflict(code: Code, source: impl Into<anyhow::Error>) -> Self {
+        Self::build(StatusCode::CONFLICT, code, source)
     }
 
-    /// The same error, with the code a client decides by and the facts its
-    /// message was written from - the names and numbers a translation of it
-    /// needs.
+    /// 503 - the service is up but something it depends on is not.
+    pub fn unavailable(code: Code, source: impl Into<anyhow::Error>) -> Self {
+        Self::build(StatusCode::SERVICE_UNAVAILABLE, code, source)
+    }
+
+    /// Any other client-side refusal - 401, 413, 415, 429, 502.
+    pub fn refused(status: StatusCode, code: Code, source: impl Into<anyhow::Error>) -> Self {
+        Self::build(status, code, source)
+    }
+
+    /// The same error, with the facts its message was written from - the names
+    /// and numbers a translation of it needs. An object, by name.
     #[must_use]
-    pub fn with_code(mut self, code: Code, params: serde_json::Value) -> Self {
-        self.code = Some(code);
-        self.params = Some(params);
+    pub fn with_params(mut self, params: serde_json::Value) -> Self {
+        self.params = params;
         self
     }
 
@@ -74,9 +82,9 @@ impl AppError {
         self.status
     }
 
-    /// The code this carries, when it carries one.
+    /// The code this carries.
     #[must_use]
-    pub fn code(&self) -> Option<Code> {
+    pub fn code(&self) -> Code {
         self.code
     }
 }
@@ -123,7 +131,7 @@ impl IntoResponse for AppError {
             status: self.status.as_u16(),
             error: self.status.canonical_reason().unwrap_or("Error").to_owned(),
             message: self.source.to_string(),
-            code: self.code.map(|code| code.as_str().to_owned()),
+            code: self.code.as_str().to_owned(),
             params: self.params,
         };
         (self.status, Json(body)).into_response()
@@ -140,15 +148,13 @@ pub struct ErrorBody {
     /// What went wrong, in the words the constructor was given.
     pub message: String,
     /// What went wrong, as a stable identifier a client can act on and
-    /// translate: `entry.possible_duplicate`. Absent on errors that carry
-    /// none yet; `message` is always there to fall back on.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub code: Option<String>,
+    /// translate: `entry.possible_duplicate`. Always there; a client meeting
+    /// a code it does not know falls back on `message`.
+    pub code: String,
     /// The facts `message` was written from, by name, for a client writing
-    /// it in another language.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schema(value_type = Option<Object>)]
-    pub params: Option<serde_json::Value>,
+    /// it in another language. An object, empty when there are none.
+    #[schema(value_type = Object)]
+    pub params: serde_json::Value,
 }
 
 /// Declares the codes and the list of them in one place, so a code that is
@@ -323,6 +329,254 @@ codes! {
     /// The market, which knows the instruments and their prices, did not
     /// answer.
     PortfolioMarketUnavailable = "portfolio.market_unavailable",
+
+    // A fault on the server's side, which the client did nothing to cause.
+    /// Something went wrong that the client could not have mended; the reason
+    /// is in the server's log, never in the answer.
+    Internal = "server.internal",
+
+    // Who is asking.
+    /// No session, or one that is not valid any more.
+    AuthSignedOut = "auth.signed_out",
+    /// The email or the password is wrong - or there is no such account, which
+    /// is deliberately not told apart.
+    AuthWrongPassword = "auth.wrong_password",
+    /// Too many wrong passwords in a row from this address. Params:
+    /// `minutes`, how long the lock lasts.
+    AuthLockedOut = "auth.locked_out",
+
+    // What is wrong with a request as such, whatever it asks for.
+    /// A body, a query or a path that cannot be read as what the endpoint
+    /// takes. Params: `why`, the reader's own words.
+    RequestMalformed = "request.malformed",
+    /// A body sent without saying it is JSON.
+    RequestNotJson = "request.not_json",
+    /// No endpoint answers at this address.
+    RequestNoSuchEndpoint = "request.no_such_endpoint",
+    /// This address asks faster than austeris answers.
+    RequestRateLimited = "request.rate_limited",
+    /// A window that ends before it starts. Params: `from`, `to`.
+    RequestBackwardsWindow = "request.backwards_window",
+
+    /// A module the gateway reaches for did not answer. Params: `module`.
+    ModuleNotAnswering = "module.not_answering",
+
+    // Things named in a request that are not there, or not usable.
+    /// The currency is not a code. Params: `currency`, as it was written.
+    CurrencyNotACode = "currency.not_a_code",
+    /// An amount that has to be more than nothing is not.
+    AmountNotPositive = "amount.not_positive",
+    /// More decimal places than the currency has. Params: `amount`,
+    /// `currency`.
+    AmountTooPrecise = "amount.too_precise",
+    /// Not a number. Params: `text`, as it was written.
+    AmountNotANumber = "amount.not_a_number",
+
+    // Accounts and categories.
+    /// The person has no such account.
+    AccountNotFound = "account.not_found",
+    /// An account was sent with no name.
+    AccountNameRequired = "account.name_required",
+    /// The person has an account by that name.
+    AccountNameTaken = "account.name_taken",
+    /// The person has no such category.
+    CategoryNotFound = "category.not_found",
+    /// A category was sent with no name.
+    CategoryNameRequired = "category.name_required",
+    /// The parent named is not the person's category.
+    CategoryParentNotFound = "category.parent_not_found",
+    /// A sibling already has the name.
+    CategoryNameTaken = "category.name_taken",
+    /// The category fees are filed under cannot be made: the person has one
+    /// by that name that is money coming in.
+    CategoryFeeBlocked = "category.fee_blocked",
+
+    // Counterparties, places and tags.
+    /// The person has no such counterparty.
+    CounterpartyNotFound = "counterparty.not_found",
+    /// A counterparty was sent with no name.
+    CounterpartyNameRequired = "counterparty.name_required",
+    /// Entries name the counterparty, so it cannot be deleted.
+    CounterpartyInUse = "counterparty.in_use",
+    /// Not a tax number. Params: `tax_id`, as it was written.
+    CounterpartyBadTaxId = "counterparty.bad_tax_id",
+    /// Another counterparty has the tax number.
+    CounterpartyTaxIdTaken = "counterparty.tax_id_taken",
+    /// A counterparty is typed the same way. Params: `name`.
+    CounterpartyNameTaken = "counterparty.name_taken",
+    /// A name with no letter or digit in it could never be typed. Params:
+    /// `name`.
+    CounterpartyUntypeable = "counterparty.untypeable",
+    /// Not a country code. Params: `country`, as it was written.
+    PlaceBadCountry = "place.bad_country",
+    /// The person has no such place.
+    PlaceNotFound = "place.not_found",
+    /// The person has the place already.
+    PlaceAlready = "place.already",
+    /// Not a tag. Params: `tag`, as it was written.
+    TagBadName = "tag.bad_name",
+    /// The person has no such tag.
+    TagNotFound = "tag.not_found",
+    /// A tag was sent with no name.
+    TagNameRequired = "tag.name_required",
+    /// The person has a tag by that name.
+    TagNameTaken = "tag.name_taken",
+
+    // Entries: what is wrong with one being recorded or changed.
+    /// The person has no such entry.
+    EntryNotFound = "entry.not_found",
+    /// The trash holds no such entry.
+    EntryNotInTrash = "entry.not_in_trash",
+    /// An entry has two sides at least.
+    EntryTooFewLines = "entry.too_few_lines",
+    /// A line names an account, a category or a conversion, exactly one.
+    EntryLineSide = "entry.line_side",
+    /// A line of zero records nothing.
+    EntryLineZero = "entry.line_zero",
+    /// The lines do not sum to nothing in a currency. Params: `currency`,
+    /// `sum`.
+    EntryUnbalanced = "entry.unbalanced",
+    /// A rule of the books the entry breaks. Params: `message`, the rule's own
+    /// sentence.
+    EntryRuleBroken = "entry.rule_broken",
+    /// The entry names a counterparty or a category that is not the person's.
+    EntryNotYours = "entry.not_yours",
+    /// The entry names an account or a category that does not exist.
+    EntryUnknownReference = "entry.unknown_reference",
+    /// It moved money on an account or under a category that is gone, so it
+    /// cannot come back from the trash as it was.
+    EntrySideGone = "entry.side_gone",
+    /// The module that posted it has posted it again since.
+    EntryPostedAgain = "entry.posted_again",
+    /// A payment posts on or after the day it was made. Params: `day`.
+    EntryPostsBeforeMade = "entry.posts_before_made",
+    /// It was posted already. Params: `day`.
+    EntryAlreadyPosted = "entry.already_posted",
+    /// An entry moving several accounts cannot post for another amount.
+    /// Params: `count`.
+    EntryRepostAccounts = "entry.repost_accounts",
+    /// A split entry cannot post for another amount.
+    EntryRepostSplit = "entry.repost_split",
+    /// Only a payment to a category posts for another amount.
+    EntryRepostNotPayment = "entry.repost_not_payment",
+    /// A conversion's categories are not in one other currency.
+    EntryRepostCurrencies = "entry.repost_currencies",
+    /// Not one payment: it moves money between accounts.
+    EntryBetweenAccounts = "entry.between_accounts",
+    /// Not one payment: it moves no account.
+    EntryNoAccount = "entry.no_account",
+    /// Not one payment: it is split across categories.
+    EntrySplit = "entry.split",
+    /// Not one payment: it is on no category.
+    EntryNoCategory = "entry.no_category",
+
+    // Files kept with an entry.
+    /// A file was sent with no name.
+    AttachmentNameRequired = "attachment.name_required",
+    /// A file with nothing in it.
+    AttachmentEmpty = "attachment.empty",
+    /// No such file on an entry.
+    AttachmentNotFound = "attachment.not_found",
+    /// The trash holds no such file.
+    AttachmentNotInTrash = "attachment.not_in_trash",
+    /// The entry the file was on is in the trash too.
+    AttachmentEntryInTrash = "attachment.entry_in_trash",
+
+    // Buttons.
+    /// The person has no such button.
+    TemplateNotFound = "template.not_found",
+    /// A button was sent with no name.
+    TemplateNameRequired = "template.name_required",
+    /// An order that does not name every button, each once.
+    TemplateOrderIncomplete = "template.order_incomplete",
+    /// The button asks for the amount each time. Params: `name`.
+    TemplateAsksAmount = "template.asks_amount",
+
+    // Exchanges that cannot be planned.
+    /// Both amounts have to be more than nothing.
+    ExchangeNotPositive = "exchange.not_positive",
+    /// Both sides are in one currency. Params: `currency`.
+    ExchangeSameCurrency = "exchange.same_currency",
+    /// The amount received is worth nothing in the currency given. Params:
+    /// `amount`, `currency`.
+    ExchangeTooSmall = "exchange.too_small",
+    /// The reference rate is for another pair. Params: `base`, `quote`, the
+    /// rate's; `given`, `got`, the exchange's.
+    ExchangeWrongReference = "exchange.wrong_reference",
+
+    // Rates.
+    /// A currency is worth one of itself.
+    RateSameCurrency = "rate.same_currency",
+    /// A rate is a positive number.
+    RateNotPositive = "rate.not_positive",
+    /// No rate for the pair is known on or before the day. Params: `from`,
+    /// `to`, `day`.
+    RateNotFound = "rate.not_found",
+    /// No source publishes a rate for a day that has not happened.
+    RateFutureDay = "rate.future_day",
+
+    // The market's instruments and prices.
+    /// The market has no such instrument. Params: `id`, when it was named by
+    /// one in a list.
+    InstrumentNotFound = "instrument.not_found",
+    /// An instrument was sent with no symbol.
+    InstrumentSymbolRequired = "instrument.symbol_required",
+    /// Not an instrument's id. Params: `id`, as it was written.
+    InstrumentBadId = "instrument.bad_id",
+    /// A price is more than nothing.
+    PriceNotPositive = "price.not_positive",
+    /// A price is of a moment that has happened.
+    PriceInFuture = "price.in_future",
+    /// Not a source's name. Params: `source`.
+    PriceBadSource = "price.bad_source",
+    /// A source this installation asks itself. Params: `source`.
+    PriceLiveSource = "price.live_source",
+    /// No prices were sent.
+    PriceNoneGiven = "price.none_given",
+    /// More prices in one call than there can be. Params: `count`, `limit`.
+    PriceTooMany = "price.too_many",
+    /// A source that is switched off. Params: `source`.
+    SourceSwitchedOff = "source.switched_off",
+
+    // The portfolio.
+    /// The person has no such snapshot.
+    SnapshotNotFound = "snapshot.not_found",
+    /// A day that has not begun anywhere has no value yet.
+    PortfolioFutureDay = "portfolio.future_day",
+    /// The person has no such trade.
+    TradeNotFound = "trade.not_found",
+    /// A trade is of more than nothing.
+    TradeNothingTraded = "trade.nothing_traded",
+    /// A fee is not negative.
+    TradeNegativeFee = "trade.negative_fee",
+    /// A buy or a sale has a price of more than nothing.
+    TradePriceRequired = "trade.price_required",
+    /// A trade other than a transfer happens on one account.
+    TradeOneAccount = "trade.one_account",
+    /// What a unit was worth is not below nothing.
+    TradeNegativeWorth = "trade.negative_worth",
+    /// Units received cost nothing to receive; a fee is not theirs.
+    TradeReceiveFee = "trade.receive_fee",
+    /// A transfer has no price.
+    TradeTransferPriced = "trade.transfer_priced",
+    /// A transfer goes to another account, and none was named.
+    TradeTransferTarget = "trade.transfer_target",
+    /// A transfer goes to another account than it left.
+    TradeTransferToSelf = "trade.transfer_to_self",
+    /// A trade is of a moment that has happened.
+    TradeInFuture = "trade.in_future",
+    /// An idempotency key is not empty.
+    TradeKeyEmpty = "trade.key_empty",
+    /// An idempotency key is longer than allowed. Params: `limit`.
+    TradeKeyTooLong = "trade.key_too_long",
+
+    // Documents handed to the importer, beside the ones refused above.
+    /// A file was sent with no name.
+    DocumentNameRequired = "document.name_required",
+    /// A file with nothing in it.
+    DocumentEmpty = "document.empty",
+    /// No such document.
+    DocumentNotFound = "document.not_found",
 }
 
 #[cfg(test)]
@@ -348,7 +602,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_coded_error_carries_its_code_and_params_beside_the_message() {
-        let error = AppError::bad_request(anyhow::anyhow!("recorded a moment ago")).with_code(Code::PossibleDuplicate, serde_json::json!({ "seconds": 3 }));
+        let error = AppError::bad_request(Code::PossibleDuplicate, anyhow::anyhow!("recorded a moment ago")).with_params(serde_json::json!({ "seconds": 3 }));
         let body = error.into_response().into_body().collect().await.expect("a body").to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body).expect("json");
         assert_eq!(json["code"], "entry.possible_duplicate");
@@ -357,8 +611,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_error_without_a_code_says_nothing_about_one() {
-        let body = AppError::not_found(anyhow::anyhow!("no such entry"))
+    async fn an_internal_error_answers_the_server_code_with_no_params() {
+        let body = AppError::internal(anyhow::anyhow!("the pool is gone"))
             .into_response()
             .into_body()
             .collect()
@@ -366,7 +620,7 @@ mod tests {
             .expect("a body")
             .to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body).expect("json");
-        assert!(json.get("code").is_none(), "{json}");
-        assert!(json.get("params").is_none(), "{json}");
+        assert_eq!(json["code"], "server.internal");
+        assert_eq!(json["params"], serde_json::json!({}));
     }
 }

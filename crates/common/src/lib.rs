@@ -10,6 +10,7 @@ pub mod caller;
 pub mod config;
 pub mod db;
 pub mod error;
+pub mod extract;
 pub mod freshness;
 pub mod health;
 pub mod http;

@@ -40,8 +40,8 @@ pub enum Refused {
     /// The trade is not one: a buy with no price, a transfer to where it came
     /// from. What a form already prevents; said in English for whoever called
     /// the API by hand.
-    #[error("{0}")]
-    Malformed(&'static str),
+    #[error("{1}")]
+    Malformed(austeris_common::Code, &'static str),
     /// An account named is not the person's.
     #[error("no such account")]
     UnknownAccount,
@@ -221,39 +221,67 @@ struct Checked {
 /// Checks what a person says a trade is.
 async fn check<B: Books, M: Market>(books: &B, market: &M, owner: Uuid, body: &TradeBody) -> Result<Checked, Refused> {
     if body.quantity <= Decimal::ZERO {
-        return Err(Refused::Malformed("a trade is of more than nothing"));
+        return Err(Refused::Malformed(austeris_common::Code::TradeNothingTraded, "a trade is of more than nothing"));
     }
     let fee = body.fee.unwrap_or_default();
     if fee < Decimal::ZERO {
-        return Err(Refused::Malformed("a fee is not negative"));
+        return Err(Refused::Malformed(austeris_common::Code::TradeNegativeFee, "a fee is not negative"));
     }
     match body.kind {
         TradeKind::Buy | TradeKind::Sell => {
             if body.price.is_none_or(|price| price <= Decimal::ZERO) {
-                return Err(Refused::Malformed("a buy or a sale has a price, of more than nothing"));
+                return Err(Refused::Malformed(
+                    austeris_common::Code::TradePriceRequired,
+                    "a buy or a sale has a price, of more than nothing",
+                ));
             }
             if body.to_account_id.is_some() {
-                return Err(Refused::Malformed("a buy or a sale happens on one account; only a transfer goes to another"));
+                return Err(Refused::Malformed(
+                    austeris_common::Code::TradeOneAccount,
+                    "a buy or a sale happens on one account; only a transfer goes to another",
+                ));
             }
         }
         TradeKind::Receive => {
             if body.price.is_some_and(|price| price < Decimal::ZERO) {
-                return Err(Refused::Malformed("what a unit was worth is not below nothing"));
+                return Err(Refused::Malformed(
+                    austeris_common::Code::TradeNegativeWorth,
+                    "what a unit was worth is not below nothing",
+                ));
             }
             if !fee.is_zero() {
-                return Err(Refused::Malformed("units received cost nothing to receive; a fee is a buy's or a transfer's"));
+                return Err(Refused::Malformed(
+                    austeris_common::Code::TradeReceiveFee,
+                    "units received cost nothing to receive; a fee is a buy's or a transfer's",
+                ));
             }
             if body.to_account_id.is_some() {
-                return Err(Refused::Malformed("units are received on one account; only a transfer goes to another"));
+                return Err(Refused::Malformed(
+                    austeris_common::Code::TradeOneAccount,
+                    "units are received on one account; only a transfer goes to another",
+                ));
             }
         }
         TradeKind::Transfer => {
             if body.price.is_some() {
-                return Err(Refused::Malformed("a transfer has no price; nothing was paid"));
+                return Err(Refused::Malformed(
+                    austeris_common::Code::TradeTransferPriced,
+                    "a transfer has no price; nothing was paid",
+                ));
             }
             match body.to_account_id {
-                None => return Err(Refused::Malformed("a transfer goes to another account")),
-                Some(to) if to == body.account_id => return Err(Refused::Malformed("a transfer goes to another account than it left")),
+                None => {
+                    return Err(Refused::Malformed(
+                        austeris_common::Code::TradeTransferTarget,
+                        "a transfer goes to another account",
+                    ));
+                }
+                Some(to) if to == body.account_id => {
+                    return Err(Refused::Malformed(
+                        austeris_common::Code::TradeTransferToSelf,
+                        "a transfer goes to another account than it left",
+                    ));
+                }
                 Some(_) => {}
             }
             if fee >= body.quantity {
@@ -264,7 +292,10 @@ async fn check<B: Books, M: Market>(books: &B, market: &M, owner: Uuid, body: &T
     let occurred_at = body.occurred_at.with_timezone(&Utc);
     // A minute of grace for a clock on the person's side running ahead.
     if occurred_at > Utc::now() + Duration::minutes(1) {
-        return Err(Refused::Malformed("a trade is of a moment that has happened"));
+        return Err(Refused::Malformed(
+            austeris_common::Code::TradeInFuture,
+            "a trade is of a moment that has happened",
+        ));
     }
 
     let accounts = books.accounts(owner).await.map_err(|status| unavailable_ledger(&status))?;
@@ -370,7 +401,7 @@ pub enum Recorded {
 }
 
 /// The longest key a client may name a record by.
-const KEY_LENGTH: usize = 200;
+pub const KEY_LENGTH: usize = 200;
 
 /// The key a client names a record by, trimmed; `None` when it named none.
 ///
@@ -380,8 +411,11 @@ const KEY_LENGTH: usize = 200;
 pub fn idempotency_key(said: Option<&str>) -> Result<Option<&str>, Refused> {
     match said.map(str::trim) {
         None => Ok(None),
-        Some("") => Err(Refused::Malformed("an idempotency key is not empty")),
-        Some(key) if key.chars().count() > KEY_LENGTH => Err(Refused::Malformed("an idempotency key is 200 characters at most")),
+        Some("") => Err(Refused::Malformed(austeris_common::Code::TradeKeyEmpty, "an idempotency key is not empty")),
+        Some(key) if key.chars().count() > KEY_LENGTH => Err(Refused::Malformed(
+            austeris_common::Code::TradeKeyTooLong,
+            "an idempotency key is 200 characters at most",
+        )),
         Some(key) => Ok(Some(key)),
     }
 }

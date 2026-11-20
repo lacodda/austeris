@@ -60,7 +60,9 @@ import type {
 export class ApiError extends Error {
   readonly status: number
   /** What went wrong as the server names it for a client to act on -
-   * `entry.possible_duplicate` - when it names it. */
+   * `entry.possible_duplicate`. Every austeris error carries one; it is
+   * missing only when the answer did not come from austeris at all, a
+   * proxy's error page. */
   readonly code: string | undefined
   /** The facts the server's sentence was written from, for writing it in
    * this interface's language. */
@@ -103,9 +105,9 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
  *
  * Every austeris endpoint answers a failure with `{ status, error, message }`,
  * and `message` is the sentence written for a person - "you have no category
- * called `food`; create it first" - while `error` is only the status' name. An
- * error a client is meant to act on also carries a `code` and its `params`.
- * Anything else (a proxy's error page, say) falls back to the status text. */
+ * called `food`; create it first" - while `error` is only the status' name.
+ * Every error also carries a `code` and its `params`. Anything else (a proxy's
+ * error page, say) falls back to the status text, with no code. */
 async function reason(response: Response): Promise<{ message: string; code?: string; params?: Record<string, unknown> }> {
   const fallback = response.statusText || `HTTP ${response.status}`
   try {

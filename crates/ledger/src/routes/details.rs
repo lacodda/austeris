@@ -1,8 +1,8 @@
 //! Counterparties, places and tags, and the totals they gather money into.
 
-use austeris_common::{AppError, AppResult, Caller};
-use axum::Json;
-use axum::extract::{Path, Query, State};
+use austeris_common::extract::{Json, Path, Query};
+use austeris_common::{AppError, AppResult, Caller, Code};
+use axum::extract::State;
 use axum::http::StatusCode;
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
@@ -37,7 +37,7 @@ pub async fn read_counterparty(State(pool): State<PgPool>, caller: Caller, Path(
     repository::counterparty(&pool, caller.id(), id)
         .await?
         .map(Json)
-        .ok_or_else(|| AppError::not_found(anyhow::anyhow!("no such counterparty")))
+        .ok_or_else(|| AppError::not_found(Code::CounterpartyNotFound, anyhow::anyhow!("no such counterparty")))
 }
 
 /// What creating a counterparty carries.
@@ -133,7 +133,7 @@ pub async fn change_counterparty(
         .await
         .map_err(|error| counterparty_refused(error, name.as_deref().unwrap_or_default()))?
         .map(Json)
-        .ok_or_else(|| AppError::not_found(anyhow::anyhow!("no such counterparty")))
+        .ok_or_else(|| AppError::not_found(Code::CounterpartyNotFound, anyhow::anyhow!("no such counterparty")))
 }
 
 /// Deletes a counterparty no entry names.
@@ -151,11 +151,11 @@ pub async fn change_counterparty(
 pub async fn delete_counterparty(State(pool): State<PgPool>, caller: Caller, Path(id): Path<Uuid>) -> AppResult<StatusCode> {
     match repository::delete_counterparty(&pool, caller.id(), id).await {
         Ok(true) => Ok(StatusCode::NO_CONTENT),
-        Ok(false) => Err(AppError::not_found(anyhow::anyhow!("no such counterparty"))),
+        Ok(false) => Err(AppError::not_found(Code::CounterpartyNotFound, anyhow::anyhow!("no such counterparty"))),
         // Deleting it would leave its entries saying nothing about who they
         // were with, which is a change to the books nobody asked for.
-        Err(error) if is_still_referenced(&error) => Err(AppError::new(
-            StatusCode::CONFLICT,
+        Err(error) if is_still_referenced(&error) => Err(AppError::conflict(
+            Code::CounterpartyInUse,
             anyhow::anyhow!("entries name this counterparty; change them first"),
         )),
         Err(error) => Err(AppError::internal(error)),
@@ -166,14 +166,23 @@ pub async fn delete_counterparty(State(pool): State<PgPool>, caller: Caller, Pat
 fn counterparty_name(raw: &str) -> AppResult<String> {
     let name = raw.trim();
     if name.is_empty() {
-        return Err(AppError::bad_request(anyhow::anyhow!("a counterparty needs a name")));
+        return Err(AppError::bad_request(
+            Code::CounterpartyNameRequired,
+            anyhow::anyhow!("a counterparty needs a name"),
+        ));
     }
     Ok(name.to_owned())
 }
 
 /// A tax number as it is kept, or why it is not one.
 fn checked_tax_id(raw: &str) -> AppResult<String> {
-    crate::model::tax_id(raw).ok_or_else(|| AppError::bad_request(anyhow::anyhow!("`{raw}` is not a tax number; letters and digits, as in 80012345-6")))
+    crate::model::tax_id(raw).ok_or_else(|| {
+        AppError::bad_request(
+            Code::CounterpartyBadTaxId,
+            anyhow::anyhow!("`{raw}` is not a tax number; letters and digits, as in 80012345-6"),
+        )
+        .with_params(serde_json::json!({ "tax_id": raw }))
+    })
 }
 
 /// What a refused write of a counterparty means to the caller.
@@ -184,13 +193,20 @@ fn counterparty_refused(error: anyhow::Error, name: &str) -> AppError {
         .filter_map(|error| error.as_database_error())
         .any(|db| db.constraint() == Some("counterparties_owner_tax_id_key"));
     if collided_on_tax_id {
-        return AppError::new(StatusCode::CONFLICT, anyhow::anyhow!("another of your counterparties has that tax number"));
+        return AppError::conflict(
+            Code::CounterpartyTaxIdTaken,
+            anyhow::anyhow!("another of your counterparties has that tax number"),
+        );
     }
     if is_unique_violation(&error) {
-        return AppError::new(StatusCode::CONFLICT, anyhow::anyhow!("you have a counterparty typed the same way as `{name}`"));
+        return AppError::conflict(
+            Code::CounterpartyNameTaken,
+            anyhow::anyhow!("you have a counterparty typed the same way as `{name}`"),
+        )
+        .with_params(serde_json::json!({ "name": name }));
     }
     if is_foreign_key_violation(&error) {
-        return AppError::not_found(anyhow::anyhow!("you have no such category"));
+        return AppError::not_found(Code::CategoryNotFound, anyhow::anyhow!("you have no such category"));
     }
     // The schema's own rule: a name of nothing but punctuation cannot be typed.
     let refused = error
@@ -198,7 +214,11 @@ fn counterparty_refused(error: anyhow::Error, name: &str) -> AppError {
         .filter_map(|cause| cause.downcast_ref::<sqlx::Error>())
         .any(|error| error.as_database_error().is_some_and(|db| db.code().as_deref() == Some("23514")));
     if refused {
-        return AppError::bad_request(anyhow::anyhow!("`{name}` has no letter or digit in it, so it could never be typed"));
+        return AppError::bad_request(
+            Code::CounterpartyUntypeable,
+            anyhow::anyhow!("`{name}` has no letter or digit in it, so it could never be typed"),
+        )
+        .with_params(serde_json::json!({ "name": name }));
     }
     AppError::internal(error)
 }
@@ -231,9 +251,9 @@ pub async fn change_place(State(pool): State<PgPool>, caller: Caller, Path(id): 
     let place = body.checked()?;
     repository::change_place(&pool, caller.id(), id, &place)
         .await
-        .map_err(|error| conflict_or(error, "you have that place already"))?
+        .map_err(|error| conflict_or(error, Code::PlaceAlready, "you have that place already"))?
         .map(Json)
-        .ok_or_else(|| AppError::not_found(anyhow::anyhow!("no such place")))
+        .ok_or_else(|| AppError::not_found(Code::PlaceNotFound, anyhow::anyhow!("no such place")))
 }
 
 #[utoipa::path(
@@ -269,12 +289,14 @@ pub struct TagRename {
 )]
 pub async fn rename_tag(State(pool): State<PgPool>, caller: Caller, Path(id): Path<Uuid>, Json(body): Json<TagRename>) -> AppResult<Json<Tag>> {
     let names = super::tag_names(std::slice::from_ref(&body.name))?;
-    let name = names.first().ok_or_else(|| AppError::bad_request(anyhow::anyhow!("a tag needs a name")))?;
+    let name = names
+        .first()
+        .ok_or_else(|| AppError::bad_request(Code::TagNameRequired, anyhow::anyhow!("a tag needs a name")))?;
     repository::rename_tag(&pool, caller.id(), id, name)
         .await
-        .map_err(|error| conflict_or(error, "you have a tag by that name"))?
+        .map_err(|error| conflict_or(error, Code::TagNameTaken, "you have a tag by that name"))?
         .map(Json)
-        .ok_or_else(|| AppError::not_found(anyhow::anyhow!("no such tag")))
+        .ok_or_else(|| AppError::not_found(Code::TagNotFound, anyhow::anyhow!("no such tag")))
 }
 
 /// Deletes a tag, taking it off every entry that carried it. The entries stay.
@@ -292,7 +314,7 @@ pub async fn delete_tag(State(pool): State<PgPool>, caller: Caller, Path(id): Pa
     if repository::delete_tag(&pool, caller.id(), &caller.into(), id).await? {
         Ok(StatusCode::NO_CONTENT)
     } else {
-        Err(AppError::not_found(anyhow::anyhow!("no such tag")))
+        Err(AppError::not_found(Code::TagNotFound, anyhow::anyhow!("no such tag")))
     }
 }
 
@@ -355,7 +377,10 @@ pub async fn totals(State(pool): State<PgPool>, caller: Caller, Query(query): Qu
     if let (Some(from), Some(to)) = (query.from, query.to)
         && from > to
     {
-        return Err(AppError::bad_request(anyhow::anyhow!("the window ends before it starts")));
+        return Err(
+            AppError::bad_request(Code::RequestBackwardsWindow, anyhow::anyhow!("the window ends before it starts"))
+                .with_params(serde_json::json!({ "from": from.to_string(), "to": to.to_string() })),
+        );
     }
 
     let filter = TotalsFilter {

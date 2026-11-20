@@ -117,7 +117,9 @@ what it brings this way, so a file read twice is read once
 answers its name as `idempotency_key`, and keeps it when it is changed. A trade
 deleted is gone, name and all: recording under its name again records it anew.
 
-Other refusals, `400`, each with its code:
+Other refusals, `400`, each with its code (every error answers with one; the
+rest, such as `trade.not_found` or `snapshot.not_found`, are the usual ones of
+[the ledger's reference](/austeris/reference/ledger/)):
 
 | Code | Why |
 | --- | --- |

@@ -7,9 +7,9 @@
 
 use std::str::FromStr;
 
+use austeris_common::extract::{Json, Path};
 use austeris_common::{AppError, AppResult, Caller, Code};
-use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::State;
 use axum::http::StatusCode;
 use chrono::NaiveDate;
 use rust_decimal::Decimal;
@@ -69,13 +69,13 @@ pub async fn create_template(State(pool): State<PgPool>, caller: Caller, Json(ne
     let owner_id = caller.id();
     let name = new.name.trim();
     if name.is_empty() {
-        return Err(AppError::bad_request(anyhow::anyhow!("a template needs a name")));
+        return Err(AppError::bad_request(Code::TemplateNameRequired, anyhow::anyhow!("a template needs a name")));
     }
     let template = repository::template_from_entry(&pool, owner_id, new.entry_id, name, new.ask_amount)
         .await
         .map_err(|error| match error.downcast_ref::<NoTemplate>() {
-            Some(NoTemplate::NoEntry) => AppError::not_found(anyhow::anyhow!("no such entry")),
-            Some(not_one @ NoTemplate::NotOnePayment(_)) => AppError::bad_request(anyhow::anyhow!("{not_one}")),
+            Some(NoTemplate::NoEntry) => AppError::not_found(Code::EntryNotFound, anyhow::anyhow!("no such entry")),
+            Some(not_one @ NoTemplate::NotOnePayment(why)) => AppError::bad_request(not_one_code(*why), anyhow::anyhow!("{not_one}")),
             Some(NoTemplate::Kept(module)) => refused_or_missing(repository::KeptEntry { module: module.clone() }.into()),
             None => name_taken_or(error),
         })?;
@@ -108,7 +108,7 @@ pub struct TemplatePatch {
 )]
 pub async fn change_template(State(pool): State<PgPool>, caller: Caller, Path(id): Path<Uuid>, Json(patch): Json<TemplatePatch>) -> AppResult<Json<Template>> {
     let name = match patch.name.as_deref().map(str::trim) {
-        Some("") => return Err(AppError::bad_request(anyhow::anyhow!("a template needs a name"))),
+        Some("") => return Err(AppError::bad_request(Code::TemplateNameRequired, anyhow::anyhow!("a template needs a name"))),
         other => other.map(ToOwned::to_owned),
     };
     let changes = TemplateChanges {
@@ -119,7 +119,7 @@ pub async fn change_template(State(pool): State<PgPool>, caller: Caller, Path(id
         .await
         .map_err(name_taken_or)?
         .map(Json)
-        .ok_or_else(|| AppError::not_found(anyhow::anyhow!("no such template")))
+        .ok_or_else(|| AppError::not_found(Code::TemplateNotFound, anyhow::anyhow!("no such template")))
 }
 
 /// The order a person's buttons sit in.
@@ -143,7 +143,10 @@ pub async fn order_templates(State(pool): State<PgPool>, caller: Caller, Json(or
     if repository::order_templates(&pool, caller.id(), &order.ids).await? {
         Ok(StatusCode::NO_CONTENT)
     } else {
-        Err(AppError::bad_request(anyhow::anyhow!("an order names every template of yours, each once")))
+        Err(AppError::bad_request(
+            Code::TemplateOrderIncomplete,
+            anyhow::anyhow!("an order names every template of yours, each once"),
+        ))
     }
 }
 
@@ -162,7 +165,7 @@ pub async fn delete_template(State(pool): State<PgPool>, caller: Caller, Path(id
     if repository::delete_template(&pool, caller.id(), id).await? {
         Ok(StatusCode::NO_CONTENT)
     } else {
-        Err(AppError::not_found(anyhow::anyhow!("no such template")))
+        Err(AppError::not_found(Code::TemplateNotFound, anyhow::anyhow!("no such template")))
     }
 }
 
@@ -209,20 +212,21 @@ pub async fn use_template(
     let owner_id = caller.id();
     let template = repository::template(&pool, owner_id, id)
         .await?
-        .ok_or_else(|| AppError::not_found(anyhow::anyhow!("no such template")))?;
+        .ok_or_else(|| AppError::not_found(Code::TemplateNotFound, anyhow::anyhow!("no such template")))?;
     let amount = match (body.amount, template.amount) {
         (Some(given), _) => {
             if !given.is_sign_positive() || given.is_zero() {
-                return Err(AppError::bad_request(anyhow::anyhow!("an amount is positive")));
+                return Err(AppError::bad_request(Code::AmountNotPositive, anyhow::anyhow!("an amount is positive")));
             }
             given
         }
         (None, Some(kept)) => kept,
         (None, None) => {
-            return Err(AppError::bad_request(anyhow::anyhow!(
-                "`{}` asks for the amount each time; say how much",
-                template.name
-            )));
+            return Err(AppError::bad_request(
+                Code::TemplateAsksAmount,
+                anyhow::anyhow!("`{}` asks for the amount each time; say how much", template.name),
+            )
+            .with_params(serde_json::json!({ "name": template.name })));
         }
     };
 
@@ -298,7 +302,7 @@ pub async fn repeat(State(pool): State<PgPool>, caller: Caller, Path(id): Path<U
     let owner_id = caller.id();
     let entry = repository::entry(&pool, owner_id, id)
         .await?
-        .ok_or_else(|| AppError::not_found(anyhow::anyhow!("no such entry")))?;
+        .ok_or_else(|| AppError::not_found(Code::EntryNotFound, anyhow::anyhow!("no such entry")))?;
     // A trade repeated here would be money spent on a coin no trade knows
     // about; the module that keeps it records another.
     if entry.kept {
@@ -322,8 +326,12 @@ pub async fn repeat(State(pool): State<PgPool>, caller: Caller, Path(id): Path<U
         let fee_category = repository::category_for(&pool, owner_id, Purpose::ExchangeFees)
             .await?
             .map(|category| category.id);
-        let paid = paid::of(&entry, fee_category)
-            .map_err(|why| AppError::bad_request(anyhow::anyhow!("{why}; an exchange is recorded anew with what changed hands")))?;
+        let paid = paid::of(&entry, fee_category).map_err(|why| {
+            AppError::bad_request(
+                not_one_code(why),
+                anyhow::anyhow!("{why}; an exchange is recorded anew with what changed hands"),
+            )
+        })?;
         let account = repository::account(&pool, owner_id, paid.account_id)
             .await?
             .ok_or_else(|| AppError::internal(anyhow::anyhow!("an entry's account vanished")))?;
@@ -404,19 +412,27 @@ fn recorded(entry: Entry, conversion: Option<crate::exchange::Summary>) -> Recor
 /// A name another of the person's buttons has, said with its code; any other
 /// failure as it is.
 fn name_taken_or(error: anyhow::Error) -> AppError {
-    let refused = conflict_or(error, "there is already a template by that name");
-    if refused.status() == StatusCode::CONFLICT {
-        refused.with_code(Code::TemplateNameTaken, serde_json::json!({}))
-    } else {
-        refused
+    conflict_or(error, Code::TemplateNameTaken, "there is already a template by that name")
+}
+
+/// The code for the reason an entry is not one payment.
+fn not_one_code(why: crate::paid::NotOne) -> Code {
+    use crate::paid::NotOne;
+    match why {
+        NotOne::BetweenAccounts => Code::EntryBetweenAccounts,
+        NotOne::NoAccount => Code::EntryNoAccount,
+        NotOne::Split => Code::EntrySplit,
+        NotOne::NoCategory => Code::EntryNoCategory,
     }
 }
 
 /// A positive amount, from the decimal string a client sent.
 fn positive(text: &str) -> AppResult<Decimal> {
-    let amount = Decimal::from_str(text.trim()).map_err(|_| AppError::bad_request(anyhow::anyhow!("`{text}` is not an amount")))?;
+    let amount = Decimal::from_str(text.trim()).map_err(|_| {
+        AppError::bad_request(Code::AmountNotANumber, anyhow::anyhow!("`{text}` is not an amount")).with_params(serde_json::json!({ "text": text }))
+    })?;
     if !amount.is_sign_positive() || amount.is_zero() {
-        return Err(AppError::bad_request(anyhow::anyhow!("an amount is positive")));
+        return Err(AppError::bad_request(Code::AmountNotPositive, anyhow::anyhow!("an amount is positive")));
     }
     Ok(amount)
 }

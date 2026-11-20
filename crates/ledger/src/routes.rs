@@ -4,11 +4,12 @@
 //! here (ADR 0001). Every handler is scoped by [`Caller`] - the person the
 //! gateway vouched for - and there is no path that reads across people.
 
+use austeris_common::extract::{Json, Path, Query};
 use austeris_common::{AppError, AppResult, Caller, Code, health};
-use axum::extract::{DefaultBodyLimit, Path, Query, State};
+use axum::Router;
+use axum::extract::{DefaultBodyLimit, State};
 use axum::http::StatusCode;
 use axum::routing::{delete, get, patch, post, put};
-use axum::{Json, Router};
 use chrono::{NaiveDate, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -120,7 +121,7 @@ async fn read_account(State(pool): State<PgPool>, caller: Caller, Path(id): Path
     repository::account(&pool, caller.id(), id)
         .await?
         .map(Json)
-        .ok_or_else(|| AppError::not_found(anyhow::anyhow!("no such account")))
+        .ok_or_else(|| AppError::not_found(Code::AccountNotFound, anyhow::anyhow!("no such account")))
 }
 
 #[utoipa::path(
@@ -137,13 +138,13 @@ async fn read_account(State(pool): State<PgPool>, caller: Caller, Path(id): Path
 async fn create_account(State(pool): State<PgPool>, caller: Caller, Json(new): Json<NewAccount>) -> AppResult<(StatusCode, Json<Account>)> {
     let name = new.name.trim();
     if name.is_empty() {
-        return Err(AppError::bad_request(anyhow::anyhow!("an account needs a name")));
+        return Err(AppError::bad_request(Code::AccountNameRequired, anyhow::anyhow!("an account needs a name")));
     }
     let currency = currency_code(&new.currency)?;
 
     let account = repository::create_account(&pool, caller.id(), new.kind, name, &currency, new.opening_balance.unwrap_or(Decimal::ZERO))
         .await
-        .map_err(|error| conflict_or(error, "there is already an account by that name"))?;
+        .map_err(|error| conflict_or(error, Code::AccountNameTaken, "there is already an account by that name"))?;
 
     Ok((StatusCode::CREATED, Json(account)))
 }
@@ -179,7 +180,7 @@ async fn close_account(State(pool): State<PgPool>, caller: Caller, Path(id): Pat
     repository::set_account_closed(&pool, caller.id(), id, closing.closed)
         .await?
         .map(Json)
-        .ok_or_else(|| AppError::not_found(anyhow::anyhow!("no such account")))
+        .ok_or_else(|| AppError::not_found(Code::AccountNotFound, anyhow::anyhow!("no such account")))
 }
 
 /// What creating a category carries.
@@ -218,7 +219,7 @@ async fn list_categories(State(pool): State<PgPool>, caller: Caller) -> AppResul
 async fn create_category(State(pool): State<PgPool>, caller: Caller, Json(new): Json<NewCategory>) -> AppResult<(StatusCode, Json<Category>)> {
     let name = new.name.trim();
     if name.is_empty() {
-        return Err(AppError::bad_request(anyhow::anyhow!("a category needs a name")));
+        return Err(AppError::bad_request(Code::CategoryNameRequired, anyhow::anyhow!("a category needs a name")));
     }
 
     // A parent belonging to someone else would be accepted by the foreign key
@@ -226,13 +227,13 @@ async fn create_category(State(pool): State<PgPool>, caller: Caller, Json(new): 
     if let Some(parent_id) = new.parent_id {
         let parents = repository::categories(&pool, caller.id()).await?;
         if !parents.iter().any(|category| category.id == parent_id) {
-            return Err(AppError::not_found(anyhow::anyhow!("no such parent category")));
+            return Err(AppError::not_found(Code::CategoryParentNotFound, anyhow::anyhow!("no such parent category")));
         }
     }
 
     let category = repository::create_category(&pool, caller.id(), new.parent_id, new.flow, name)
         .await
-        .map_err(|error| conflict_or(error, "a category by that name is already here"))?;
+        .map_err(|error| conflict_or(error, Code::CategoryNameTaken, "a category by that name is already here"))?;
 
     Ok((StatusCode::CREATED, Json(category)))
 }
@@ -302,10 +303,14 @@ impl PlaceBody {
     /// its city trimmed - an empty one is the country as a whole.
     fn checked(&self) -> AppResult<NewPlace> {
         let country = country::code(&self.country).ok_or_else(|| {
-            AppError::bad_request(anyhow::anyhow!(
-                "`{}` is not a country code; two letters from ISO 3166-1, as in PY or BR (the United Kingdom is GB)",
-                self.country
-            ))
+            AppError::bad_request(
+                Code::PlaceBadCountry,
+                anyhow::anyhow!(
+                    "`{}` is not a country code; two letters from ISO 3166-1, as in PY or BR (the United Kingdom is GB)",
+                    self.country
+                ),
+            )
+            .with_params(serde_json::json!({ "country": self.country }))
         })?;
         let city = self.city.as_deref().map(str::trim).filter(|city| !city.is_empty()).map(ToOwned::to_owned);
         Ok(NewPlace { country, city })
@@ -317,9 +322,11 @@ fn tag_names(names: &[String]) -> AppResult<Vec<String>> {
     let mut out: Vec<String> = Vec::with_capacity(names.len());
     for raw in names {
         let name = parse::tag_name(raw.trim().trim_start_matches('#')).ok_or_else(|| {
-            AppError::bad_request(anyhow::anyhow!(
-                "`{raw}` is not a tag; a tag is one word starting with a letter, as in `holiday-2027`"
-            ))
+            AppError::bad_request(
+                Code::TagBadName,
+                anyhow::anyhow!("`{raw}` is not a tag; a tag is one word starting with a letter, as in `holiday-2027`"),
+            )
+            .with_params(serde_json::json!({ "tag": raw }))
         })?;
         if !out.iter().any(|seen| seen.to_lowercase() == name.to_lowercase()) {
             out.push(name);
@@ -379,9 +386,10 @@ async fn create_entry(State(pool): State<PgPool>, caller: Caller, Json(new): Jso
 /// The balance rule is still checked there, for every other writer.
 fn validate_lines(lines: Vec<NewEntryLine>) -> AppResult<Vec<NewLine>> {
     if lines.len() < 2 {
-        return Err(AppError::bad_request(anyhow::anyhow!(
-            "an entry has at least two sides: money leaves somewhere and arrives somewhere"
-        )));
+        return Err(AppError::bad_request(
+            Code::EntryTooFewLines,
+            anyhow::anyhow!("an entry has at least two sides: money leaves somewhere and arrives somewhere"),
+        ));
     }
 
     let mut out = Vec::with_capacity(lines.len());
@@ -391,13 +399,14 @@ fn validate_lines(lines: Vec<NewEntryLine>) -> AppResult<Vec<NewLine>> {
             (None, Some(category), false) => Side::Category(category),
             (None, None, true) => Side::Conversion,
             _ => {
-                return Err(AppError::bad_request(anyhow::anyhow!(
-                    "a line names an account, a category or a conversion - exactly one of them"
-                )));
+                return Err(AppError::bad_request(
+                    Code::EntryLineSide,
+                    anyhow::anyhow!("a line names an account, a category or a conversion - exactly one of them"),
+                ));
             }
         };
         if line.amount.is_zero() {
-            return Err(AppError::bad_request(anyhow::anyhow!("a line of zero records nothing")));
+            return Err(AppError::bad_request(Code::EntryLineZero, anyhow::anyhow!("a line of zero records nothing")));
         }
 
         out.push(NewLine {
@@ -416,9 +425,11 @@ fn validate_lines(lines: Vec<NewEntryLine>) -> AppResult<Vec<NewLine>> {
     for currency in currencies {
         let sum: Decimal = out.iter().filter(|line| line.currency == currency).map(|line| line.amount).sum();
         if !sum.is_zero() {
-            return Err(AppError::bad_request(anyhow::anyhow!(
-                "the entry does not balance in {currency}: the lines sum to {sum}"
-            )));
+            return Err(AppError::bad_request(
+                Code::EntryUnbalanced,
+                anyhow::anyhow!("the entry does not balance in {currency}: the lines sum to {sum}"),
+            )
+            .with_params(serde_json::json!({ "currency": currency, "sum": sum.to_string() })));
         }
     }
 
@@ -500,10 +511,10 @@ async fn exchange(State(pool): State<PgPool>, caller: Caller, Json(body): Json<E
     let owner_id = caller.id();
     let from = repository::account(&pool, owner_id, body.from_account)
         .await?
-        .ok_or_else(|| AppError::not_found(anyhow::anyhow!("no such account to exchange from")))?;
+        .ok_or_else(|| AppError::not_found(Code::AccountNotFound, anyhow::anyhow!("no such account to exchange from")))?;
     let to = repository::account(&pool, owner_id, body.to_account)
         .await?
-        .ok_or_else(|| AppError::not_found(anyhow::anyhow!("no such account to exchange into")))?;
+        .ok_or_else(|| AppError::not_found(Code::AccountNotFound, anyhow::anyhow!("no such account to exchange into")))?;
 
     let occurred_on = body.occurred_on.unwrap_or_else(today);
     let place = body.place.as_ref().map(PlaceBody::checked).transpose()?;
@@ -596,7 +607,10 @@ async fn list_entries(State(pool): State<PgPool>, caller: Caller, Query(query): 
     if let (Some(from), Some(to)) = (query.from, query.to)
         && from > to
     {
-        return Err(AppError::bad_request(anyhow::anyhow!("the window ends before it starts")));
+        return Err(
+            AppError::bad_request(Code::RequestBackwardsWindow, anyhow::anyhow!("the window ends before it starts"))
+                .with_params(serde_json::json!({ "from": from.to_string(), "to": to.to_string() })),
+        );
     }
 
     let filter = EntryFilter {
@@ -631,7 +645,7 @@ async fn read_entry(State(pool): State<PgPool>, caller: Caller, Path(id): Path<U
     repository::entry(&pool, caller.id(), id)
         .await?
         .map(Json)
-        .ok_or_else(|| AppError::not_found(anyhow::anyhow!("no such entry")))
+        .ok_or_else(|| AppError::not_found(Code::EntryNotFound, anyhow::anyhow!("no such entry")))
 }
 
 /// Deletes an entry and its lines, to the trash: for thirty days it can be
@@ -657,7 +671,7 @@ async fn delete_entry(State(pool): State<PgPool>, caller: Caller, Path(id): Path
     if deleted {
         Ok(StatusCode::NO_CONTENT)
     } else {
-        Err(AppError::not_found(anyhow::anyhow!("no such entry")))
+        Err(AppError::not_found(Code::EntryNotFound, anyhow::anyhow!("no such entry")))
     }
 }
 
@@ -783,10 +797,13 @@ pub struct RateQuery {
 async fn record_rate(State(pool): State<PgPool>, _caller: Caller, Json(new): Json<NewRate>) -> AppResult<StatusCode> {
     let (base, quote) = (currency_code(&new.base)?, currency_code(&new.quote)?);
     if base == quote {
-        return Err(AppError::bad_request(anyhow::anyhow!("a currency is worth one of itself")));
+        return Err(AppError::bad_request(
+            Code::RateSameCurrency,
+            anyhow::anyhow!("a currency is worth one of itself"),
+        ));
     }
     if !new.rate.is_sign_positive() || new.rate.is_zero() {
-        return Err(AppError::bad_request(anyhow::anyhow!("a rate is a positive number")));
+        return Err(AppError::bad_request(Code::RateNotPositive, anyhow::anyhow!("a rate is a positive number")));
     }
 
     repository::record_rate(&pool, &base, &quote, new.on_date.unwrap_or_else(today), new.rate, "manual").await?;
@@ -837,10 +854,10 @@ pub struct RateAtQuery {
 async fn rate_at(State(pool): State<PgPool>, _caller: Caller, Query(query): Query<RateAtQuery>) -> AppResult<Json<RateInForce>> {
     let (base, quote) = (currency_code(&query.base)?, currency_code(&query.quote)?);
     let on = query.on.unwrap_or_else(today);
-    repository::rate_in_force(&pool, &base, &quote, on)
-        .await?
-        .map(Json)
-        .ok_or_else(|| AppError::not_found(anyhow::anyhow!("no {base}->{quote} rate is known on or before {on}")))
+    repository::rate_in_force(&pool, &base, &quote, on).await?.map(Json).ok_or_else(|| {
+        AppError::not_found(Code::RateNotFound, anyhow::anyhow!("no {base}->{quote} rate is known on or before {on}"))
+            .with_params(serde_json::json!({ "from": base, "to": quote, "day": on.to_string() }))
+    })
 }
 
 /// Today, as the ledger reckons it.
@@ -858,19 +875,42 @@ fn today() -> NaiveDate {
 /// two that never balance against each other.
 fn currency_code(raw: &str) -> AppResult<String> {
     crate::currency::code(raw).ok_or_else(|| {
-        AppError::bad_request(anyhow::anyhow!(
-            "`{raw}` is not a currency code; three letters, as in USD or PYG, or an exchange's ticker of up to five, as in USDT"
-        ))
+        AppError::bad_request(
+            Code::CurrencyNotACode,
+            anyhow::anyhow!("`{raw}` is not a currency code; three letters, as in USD or PYG, or an exchange's ticker of up to five, as in USDT"),
+        )
+        .with_params(serde_json::json!({ "currency": raw }))
     })
 }
 
 /// A unique-violation is the caller's conflict; anything else is a fault.
-fn conflict_or(error: anyhow::Error, message: &'static str) -> AppError {
+fn conflict_or(error: anyhow::Error, code: Code, message: &'static str) -> AppError {
     if is_unique_violation(&error) {
-        AppError::new(StatusCode::CONFLICT, anyhow::anyhow!(message))
+        AppError::conflict(code, anyhow::anyhow!(message))
     } else {
         AppError::internal(error)
     }
+}
+
+/// A conversion that cannot be planned, as the caller is told.
+fn exchange_refused(refused: exchange::Refused) -> AppError {
+    use exchange::Refused;
+    let message = anyhow::anyhow!("{refused}");
+    match refused {
+        Refused::NotPositive => AppError::bad_request(Code::ExchangeNotPositive, message),
+        Refused::SameCurrency(currency) => AppError::bad_request(Code::ExchangeSameCurrency, message).with_params(serde_json::json!({ "currency": currency })),
+        Refused::TooSmall(amount, currency) => {
+            AppError::bad_request(Code::ExchangeTooSmall, message).with_params(serde_json::json!({ "amount": amount, "currency": currency }))
+        }
+        Refused::WrongReference(base, quote, given, got) => AppError::bad_request(Code::ExchangeWrongReference, message)
+            .with_params(serde_json::json!({ "base": base, "quote": quote, "given": given, "got": got })),
+    }
+}
+
+/// The ledger's own fee category could not be had: the person has one by the
+/// default name that is money coming in, which cannot hold fees.
+fn fee_category_blocked(error: anyhow::Error) -> AppError {
+    AppError::bad_request(Code::CategoryFeeBlocked, error)
 }
 
 /// Whether an error is PostgreSQL refusing a duplicate.
@@ -891,10 +931,8 @@ fn is_unique_violation(error: &anyhow::Error) -> bool {
 /// a rule added later is a 400 without anyone remembering to list it here.
 fn refused_or_missing(error: anyhow::Error) -> AppError {
     if let Some(twin) = error.downcast_ref::<PossibleDuplicate>() {
-        return AppError::new(StatusCode::CONFLICT, anyhow::anyhow!("{twin}")).with_code(
-            Code::PossibleDuplicate,
-            serde_json::json!({ "entry_id": twin.entry_id, "seconds": twin.seconds }),
-        );
+        return AppError::conflict(Code::PossibleDuplicate, anyhow::anyhow!("{twin}"))
+            .with_params(serde_json::json!({ "entry_id": twin.entry_id, "seconds": twin.seconds }));
     }
     if let Some(kept) = kept_by_a_module(&error) {
         return kept;
@@ -906,15 +944,18 @@ fn refused_or_missing(error: anyhow::Error) -> AppError {
         .find(|db| db.code().as_deref() == Some(CHECK_VIOLATION))
         .map(|db| db.message().to_owned());
     if let Some(message) = refused {
-        return AppError::bad_request(anyhow::anyhow!("{message}"));
+        return AppError::bad_request(Code::EntryRuleBroken, anyhow::anyhow!("{message}")).with_params(serde_json::json!({ "message": message }));
     }
     if is_foreign_key_violation(&error) {
-        return AppError::not_found(anyhow::anyhow!("the entry names a counterparty or a category that is not yours"));
+        return AppError::not_found(
+            Code::EntryNotYours,
+            anyhow::anyhow!("the entry names a counterparty or a category that is not yours"),
+        );
     }
 
     let text = format!("{error:#}");
     if text.contains("does not exist") {
-        AppError::not_found(anyhow::anyhow!("{text}"))
+        AppError::not_found(Code::EntryUnknownReference, anyhow::anyhow!("{text}"))
     } else {
         AppError::internal(error)
     }
@@ -936,11 +977,11 @@ pub(crate) fn kept_by_a_module(error: &anyhow::Error) -> Option<AppError> {
             })
     })?;
     Some(
-        AppError::new(
-            StatusCode::CONFLICT,
+        AppError::conflict(
+            Code::EntryKept,
             anyhow::anyhow!("this entry is kept by {module}: its day, description and money change there, and it is deleted there"),
         )
-        .with_code(Code::EntryKept, serde_json::json!({ "module": module })),
+        .with_params(serde_json::json!({ "module": module })),
     )
 }
 

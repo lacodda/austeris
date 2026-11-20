@@ -15,6 +15,7 @@ use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use austeris_common::{AppError, Code};
 use axum::extract::{ConnectInfo, Request, State};
 use axum::http::StatusCode;
 use axum::middleware::Next;
@@ -88,7 +89,7 @@ pub async fn limit(State(limiter): State<Limiter>, ConnectInfo(peer): ConnectInf
     // set would let one client claim to be thousands.
     if limiter.over_limit(peer.ip()) {
         tracing::warn!(client = %peer.ip(), "refused a client asking too fast");
-        return (StatusCode::TOO_MANY_REQUESTS, "too many requests\n").into_response();
+        return AppError::refused(StatusCode::TOO_MANY_REQUESTS, Code::RequestRateLimited, anyhow::anyhow!("too many requests")).into_response();
     }
 
     next.run(request).await

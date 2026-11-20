@@ -15,9 +15,10 @@ reported rather than trimmed.
 Why an entry has sides, and what that buys, is in
 [Why an entry has sides](/austeris/concepts/double-entry/).
 
-A refusal is `{ "status", "error", "message" }`, the message written for a
-person. One a client is meant to act on also carries a `code` and the `params`
-the message was written from, so a screen can say it in its own language:
+A refusal is `{ "status", "error", "message", "code", "params" }`, the message
+written for a person. Every error carries a `code` and the `params` the message
+was written from, an object that is empty when there are none, so a screen can
+say it in its own language:
 
 ```json
 { "status": 404, "error": "Not Found",
@@ -25,11 +26,18 @@ the message was written from, so a screen can say it in its own language:
   "code": "line.unknown_category", "params": { "name": "yachts" } }
 ```
 
-The codes so far are a [second press](#a-second-press), everything a
-[typed line](#post-apiv1ledgerentriesquick) can be refused for (`line.*`), a
-[file](#files) that is too large, not one that is kept, or there already
-(`attachment.*`), and a request larger than the gateway carries
-(`request.too_large`). Fall back to `message` for a code you do not know.
+A code is `area.what`. The areas are `auth` (who is asking), `request` (a
+request that cannot be read, is too large, asks too fast, or names a window that
+ends before it starts), `server` (`server.internal`, a fault on the server's side
+that the client did not cause), `module` and `source`, and then one area for
+each thing the services keep: `account`, `category`, `counterparty`, `place`,
+`tag`, `entry` (a [second press](#a-second-press) among them), `attachment`,
+`template`, `exchange`, `rate`, `amount`, `currency`, `instrument`, `price`,
+`document`, `slip`, `trade`, `snapshot` and `portfolio`. Everything a
+[typed line](#post-apiv1ledgerentriesquick) can be refused for is `line.*`. A
+body, a query or a path that cannot be read answers `request.malformed` with the
+reader's own words as `why`, like any other error. Fall back to `message` for a
+code you do not know.
 
 ## Accounts
 

@@ -6,9 +6,9 @@ import type { Reason } from '@/lib/types'
 /*
  * What went wrong, as the person reads it.
  *
- * An error the server names with a code is written here in the interface's
- * language, from the facts it sent beside the code; one it does not name yet
- * is the server's own sentence. Codes live under `errors.` in the locale
+ * An error is written here in the interface's language, from the code the
+ * server sent and the facts beside it; a code the interface does not know, or
+ * an answer that is not the server's at all, is the sentence it came with. Codes live under `errors.` in the locale
  * files, and a test of the server's holds every code it can answer with to
  * having a sentence there in each language.
  */

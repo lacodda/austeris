@@ -4,11 +4,12 @@
 //! `/api/v1/portfolio/...` here (ADR 0001), and every handler is scoped by the
 //! [`Caller`] it vouched for.
 
+use austeris_common::extract::{Json, Path, Query};
 use austeris_common::{AppError, AppResult, Caller, Code, health};
-use axum::extract::{Path, Query, State};
+use axum::Router;
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::{get, put};
-use axum::{Json, Router};
 use chrono::{Datelike, Days, NaiveDate, Utc};
 use serde::Deserialize;
 use sqlx::PgPool;
@@ -326,7 +327,7 @@ async fn set_account<B: Books + Clone + 'static, M: Market + Clone + 'static>(
     let account = accounts
         .into_iter()
         .find(|account| account.id == id)
-        .ok_or_else(|| AppError::not_found(anyhow::anyhow!("no such account")))?;
+        .ok_or_else(|| AppError::not_found(Code::AccountNotFound, anyhow::anyhow!("no such account")))?;
     if !account.holds_positions() {
         return Err(refused(Refused::NotAHoldingAccount {
             name: account.name,
@@ -363,7 +364,7 @@ async fn lots<B: Books + Clone + 'static, M: Market + Clone + 'static>(
     caller: Caller,
     Query(query): Query<OnQuery>,
 ) -> AppResult<Json<Vec<PositionLots>>> {
-    let on = snapshot::day(query.on).map_err(|why| AppError::bad_request(anyhow::anyhow!(why)))?;
+    let on = snapshot::day(query.on).map_err(future_day)?;
     let positions = gains::open_lots(&state.pool, &state.market, caller.id(), on).await.map_err(unvalued)?;
     Ok(Json(positions))
 }
@@ -408,7 +409,11 @@ async fn gains<B: Books + Clone + 'static, M: Market + Clone + 'static>(
     let to = query.to.unwrap_or(today);
     let from = query.from.unwrap_or_else(|| NaiveDate::from_ymd_opt(to.year(), 1, 1).unwrap_or(to));
     if from > to {
-        return Err(AppError::bad_request(anyhow::anyhow!("the period ends on {to}, before it starts on {from}")));
+        return Err(AppError::bad_request(
+            Code::RequestBackwardsWindow,
+            anyhow::anyhow!("the period ends on {to}, before it starts on {from}"),
+        )
+        .with_params(serde_json::json!({ "from": from.to_string(), "to": to.to_string() })));
     }
     let report = gains::gains(&state.pool, &state.books, &state.market, caller.id(), from, to, &currency)
         .await
@@ -449,7 +454,7 @@ async fn value<B: Books + Clone + 'static, M: Market + Clone + 'static>(
     Query(query): Query<ValueQuery>,
 ) -> AppResult<Json<Valuation>> {
     let currency = currency(query.currency.as_deref())?;
-    let on = snapshot::day(query.on).map_err(|why| AppError::bad_request(anyhow::anyhow!(why)))?;
+    let on = snapshot::day(query.on).map_err(future_day)?;
     let valuation = value::valuation(&state.pool, &state.books, &state.market, caller.id(), on, &currency)
         .await
         .map_err(unvalued)?;
@@ -517,7 +522,7 @@ async fn take_snapshot<B: Books + Clone + 'static, M: Market + Clone + 'static>(
     }
 
     let currency = currency(body.currency.as_deref())?;
-    let on = snapshot::day(body.on).map_err(|why| AppError::bad_request(anyhow::anyhow!(why)))?;
+    let on = snapshot::day(body.on).map_err(future_day)?;
     let valuation = value::valuation(&state.pool, &state.books, &state.market, caller.id(), on, &currency)
         .await
         .map_err(unvalued)?;
@@ -561,7 +566,7 @@ async fn read_snapshot<B: Books + Clone + 'static, M: Market + Clone + 'static>(
     Path(id): Path<Uuid>,
     Query(query): Query<CompareQuery>,
 ) -> AppResult<Json<Comparison>> {
-    let no_snapshot = || AppError::not_found(anyhow::anyhow!("no such snapshot"));
+    let no_snapshot = || AppError::not_found(Code::SnapshotNotFound, anyhow::anyhow!("no such snapshot"));
     let taken = repository::snapshot(&state.pool, caller.id(), id).await?.ok_or_else(no_snapshot)?;
     let against = match query.against {
         Some(other) => repository::snapshot(&state.pool, caller.id(), other).await?.ok_or_else(no_snapshot)?.valuation,
@@ -595,7 +600,7 @@ async fn delete_snapshot<B: Books + Clone + 'static, M: Market + Clone + 'static
     if repository::delete_snapshot(&state.pool, caller.id(), id).await? {
         Ok(StatusCode::NO_CONTENT)
     } else {
-        Err(AppError::not_found(anyhow::anyhow!("no such snapshot")))
+        Err(AppError::not_found(Code::SnapshotNotFound, anyhow::anyhow!("no such snapshot")))
     }
 }
 
@@ -604,35 +609,45 @@ fn currency(asked: Option<&str>) -> AppResult<String> {
     match asked {
         None => Ok("USD".to_owned()),
         Some(raw) => austeris_ledger::currency::code(raw).ok_or_else(|| {
-            AppError::bad_request(anyhow::anyhow!(
-                "`{raw}` is not a currency code; three letters, as in USD, or an exchange's ticker, as in USDT"
-            ))
+            AppError::bad_request(
+                Code::CurrencyNotACode,
+                anyhow::anyhow!("`{raw}` is not a currency code; three letters, as in USD, or an exchange's ticker, as in USDT"),
+            )
+            .with_params(serde_json::json!({ "currency": raw }))
         }),
     }
+}
+
+/// A day that has not begun anywhere, as the caller is told.
+fn future_day(why: &'static str) -> AppError {
+    AppError::bad_request(Code::PortfolioFutureDay, anyhow::anyhow!(why))
 }
 
 /// A refused trade, as the caller is told.
 fn refused(refusal: Refused) -> AppError {
     let message = anyhow::anyhow!("{refusal}");
     match refusal {
-        Refused::Missing => AppError::not_found(message),
-        Refused::Malformed(_) => AppError::bad_request(message),
-        Refused::UnknownAccount => AppError::bad_request(message).with_code(Code::TradeUnknownAccount, serde_json::json!({})),
-        Refused::UnknownInstrument => AppError::bad_request(message).with_code(Code::TradeUnknownInstrument, serde_json::json!({})),
+        Refused::Missing => AppError::not_found(Code::TradeNotFound, message),
+        Refused::Malformed(Code::TradeKeyTooLong, _) => {
+            AppError::bad_request(Code::TradeKeyTooLong, message).with_params(serde_json::json!({ "limit": trade::KEY_LENGTH }))
+        }
+        Refused::Malformed(code, _) => AppError::bad_request(code, message),
+        Refused::UnknownAccount => AppError::bad_request(Code::TradeUnknownAccount, message),
+        Refused::UnknownInstrument => AppError::bad_request(Code::TradeUnknownInstrument, message),
         Refused::NotAHoldingAccount { name, kind } => {
-            AppError::bad_request(message).with_code(Code::TradeNotAHoldingAccount, serde_json::json!({ "name": name, "kind": kind }))
+            AppError::bad_request(Code::TradeNotAHoldingAccount, message).with_params(serde_json::json!({ "name": name, "kind": kind }))
         }
-        Refused::ClosedAccount { name } => AppError::bad_request(message).with_code(Code::TradeClosedAccount, serde_json::json!({ "name": name })),
-        Refused::MoneyNotHolding { symbol } => AppError::bad_request(message).with_code(Code::TradeMoneyNotHolding, serde_json::json!({ "symbol": symbol })),
-        Refused::FeeTooLarge => AppError::bad_request(message).with_code(Code::TradeFeeTooLarge, serde_json::json!({})),
-        Refused::NothingMoved { currency } => AppError::bad_request(message).with_code(Code::TradeNothingMoved, serde_json::json!({ "currency": currency })),
-        Refused::ReceiveUnpriced { symbol } => AppError::bad_request(message).with_code(Code::TradeReceiveUnpriced, serde_json::json!({ "symbol": symbol })),
+        Refused::ClosedAccount { name } => AppError::bad_request(Code::TradeClosedAccount, message).with_params(serde_json::json!({ "name": name })),
+        Refused::MoneyNotHolding { symbol } => AppError::bad_request(Code::TradeMoneyNotHolding, message).with_params(serde_json::json!({ "symbol": symbol })),
+        Refused::FeeTooLarge => AppError::bad_request(Code::TradeFeeTooLarge, message),
+        Refused::NothingMoved { currency } => AppError::bad_request(Code::TradeNothingMoved, message).with_params(serde_json::json!({ "currency": currency })),
+        Refused::ReceiveUnpriced { symbol } => AppError::bad_request(Code::TradeReceiveUnpriced, message).with_params(serde_json::json!({ "symbol": symbol })),
         Refused::Oversold { symbol, short, at } => {
-            AppError::new(StatusCode::CONFLICT, message).with_code(Code::TradeOversold, serde_json::json!({ "symbol": symbol, "short": short, "at": at }))
+            AppError::conflict(Code::TradeOversold, message).with_params(serde_json::json!({ "symbol": symbol, "short": short, "at": at }))
         }
-        Refused::RefusedByLedger(said) => AppError::bad_request(message).with_code(Code::TradeRefusedByLedger, serde_json::json!({ "message": said })),
-        Refused::LedgerUnavailable => AppError::unavailable(message).with_code(Code::PortfolioLedgerUnavailable, serde_json::json!({})),
-        Refused::MarketUnavailable => AppError::unavailable(message).with_code(Code::PortfolioMarketUnavailable, serde_json::json!({})),
+        Refused::RefusedByLedger(said) => AppError::bad_request(Code::TradeRefusedByLedger, message).with_params(serde_json::json!({ "message": said })),
+        Refused::LedgerUnavailable => AppError::unavailable(Code::PortfolioLedgerUnavailable, message),
+        Refused::MarketUnavailable => AppError::unavailable(Code::PortfolioMarketUnavailable, message),
         Refused::Failed(error) => AppError::internal(error),
     }
 }
@@ -642,11 +657,11 @@ fn unvalued(error: Unvalued) -> AppError {
     match error {
         Unvalued::Ledger(status) => {
             tracing::error!(%status, "the ledger did not answer a valuation");
-            AppError::unavailable(anyhow::anyhow!("the ledger is not answering")).with_code(Code::PortfolioLedgerUnavailable, serde_json::json!({}))
+            AppError::unavailable(Code::PortfolioLedgerUnavailable, anyhow::anyhow!("the ledger is not answering"))
         }
         Unvalued::Market(status) => {
             tracing::error!(%status, "the market did not answer a valuation");
-            AppError::unavailable(anyhow::anyhow!("the market is not answering")).with_code(Code::PortfolioMarketUnavailable, serde_json::json!({}))
+            AppError::unavailable(Code::PortfolioMarketUnavailable, anyhow::anyhow!("the market is not answering"))
         }
         Unvalued::Here(error) => AppError::internal(error),
     }

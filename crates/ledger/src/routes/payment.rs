@@ -83,10 +83,11 @@ impl Payment {
             // stated on a plain line it would be silently ignored, and the
             // person would think it had been applied.
             if self.rate.is_some() {
-                return Err(AppError::bad_request(anyhow::anyhow!(
-                    "a rate converts an amount in another currency; this one is already in {account_currency}"
-                ))
-                .with_code(Code::LineRateWithoutCurrency, serde_json::json!({ "currency": account_currency })));
+                return Err(AppError::bad_request(
+                    Code::LineRateWithoutCurrency,
+                    anyhow::anyhow!("a rate converts an amount in another currency; this one is already in {account_currency}"),
+                )
+                .with_params(serde_json::json!({ "currency": account_currency })));
             }
             let moves = match self.flow {
                 Flow::Expense => -self.amount,
@@ -106,26 +107,25 @@ impl Payment {
                 repository::rate_in_force(pool, &foreign, &account_currency, self.occurred_on)
                     .await?
                     .ok_or_else(|| {
-                        AppError::bad_request(anyhow::anyhow!(
-                            "no {foreign}->{account_currency} rate is known on or before {}; state the one you were charged, as in `@5965`",
-                            self.occurred_on
-                        ))
-                        .with_code(
+                        AppError::bad_request(
                             Code::LineNoRate,
-                            serde_json::json!({ "from": foreign, "to": account_currency, "day": self.occurred_on }),
+                            anyhow::anyhow!(
+                                "no {foreign}->{account_currency} rate is known on or before {}; state the one you were charged, as in `@5965`",
+                                self.occurred_on
+                            ),
                         )
+                        .with_params(serde_json::json!({ "from": foreign, "to": account_currency, "day": self.occurred_on }))
                     })?
                     .rate
             }
         };
         let in_account = currency::round(self.amount * rate, &account_currency);
         if in_account.is_zero() {
-            return Err(
-                AppError::bad_request(anyhow::anyhow!("{} {foreign} is worth nothing in {account_currency}", self.amount.normalize())).with_code(
-                    Code::LineWorthless,
-                    serde_json::json!({ "amount": self.amount.normalize().to_string(), "currency": foreign, "account_currency": account_currency }),
-                ),
-            );
+            return Err(AppError::bad_request(
+                Code::LineWorthless,
+                anyhow::anyhow!("{} {foreign} is worth nothing in {account_currency}", self.amount.normalize()),
+            )
+            .with_params(serde_json::json!({ "amount": self.amount.normalize().to_string(), "currency": foreign, "account_currency": account_currency })));
         }
 
         // Spending gives the account's currency for the foreign one; earning
@@ -235,7 +235,7 @@ pub async fn plan(pool: &PgPool, given: Money, got: Money, occurred_on: NaiveDat
     // The reference prices what was got in what was given: how many of the
     // given currency the received amount was worth that day.
     let reference = repository::rate_in_force(pool, &got.currency, &given.currency, occurred_on).await?;
-    exchange::plan(given, got, reference).map_err(AppError::bad_request)
+    exchange::plan(given, got, reference).map_err(super::exchange_refused)
 }
 
 /// The lines of a planned conversion, creating the fee category the first time
@@ -245,7 +245,7 @@ pub async fn conversion_lines(pool: &PgPool, owner_id: Uuid, plan: &Plan, from: 
         Some(
             repository::purpose_category(pool, owner_id, Purpose::ExchangeFees)
                 .await
-                .map_err(AppError::bad_request)?
+                .map_err(super::fee_category_blocked)?
                 .id,
         )
     } else {

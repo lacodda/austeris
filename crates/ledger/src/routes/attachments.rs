@@ -1,9 +1,9 @@
 //! Files kept with an entry: attaching one, reading it back, taking it off.
 
+use austeris_common::extract::{Json, Path, Query};
 use austeris_common::{AppError, AppResult, Caller, Code};
-use axum::Json;
 use axum::body::Bytes;
-use axum::extract::{Path, Query, State};
+use axum::extract::State;
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
@@ -49,31 +49,32 @@ pub async fn attach(
     Query(query): Query<AttachQuery>,
     content: Bytes,
 ) -> AppResult<(StatusCode, Json<Attachment>)> {
-    let name = attachment::file_name(&query.name).ok_or_else(|| AppError::bad_request(anyhow::anyhow!("a file needs a name")))?;
+    let name = attachment::file_name(&query.name).ok_or_else(|| AppError::bad_request(Code::AttachmentNameRequired, anyhow::anyhow!("a file needs a name")))?;
     if content.is_empty() {
-        return Err(AppError::bad_request(anyhow::anyhow!("the file is empty")));
+        return Err(AppError::bad_request(Code::AttachmentEmpty, anyhow::anyhow!("the file is empty")));
     }
     if content.len() > MAX_BYTES {
-        return Err(AppError::new(
+        return Err(AppError::refused(
             StatusCode::PAYLOAD_TOO_LARGE,
+            Code::AttachmentTooLarge,
             anyhow::anyhow!("a file can be {} MB at most", MAX_BYTES / (1024 * 1024)),
         )
-        .with_code(Code::AttachmentTooLarge, serde_json::json!({ "limit_mb": MAX_BYTES / (1024 * 1024) })));
+        .with_params(serde_json::json!({ "limit_mb": MAX_BYTES / (1024 * 1024) })));
     }
     let media_type = attachment::media_type(&content).ok_or_else(|| {
-        AppError::new(
+        AppError::refused(
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            Code::AttachmentUnsupported,
             anyhow::anyhow!("only a picture (JPEG, PNG, WebP, HEIC), a PDF or an XML document is kept"),
         )
-        .with_code(Code::AttachmentUnsupported, serde_json::json!({}))
     })?;
 
     match repository::attach(&pool, caller.id(), &caller.into(), id, &name, media_type, &content).await? {
         Attached::Now(attachment) => Ok((StatusCode::CREATED, Json(attachment))),
-        Attached::NoEntry => Err(AppError::not_found(anyhow::anyhow!("no such entry"))),
+        Attached::NoEntry => Err(AppError::not_found(Code::EntryNotFound, anyhow::anyhow!("no such entry"))),
         Attached::Already(twin) => Err(
-            AppError::new(StatusCode::CONFLICT, anyhow::anyhow!("this file is on the entry already, as {}", twin.name))
-                .with_code(Code::AttachmentAlready, serde_json::json!({ "name": twin.name })),
+            AppError::conflict(Code::AttachmentAlready, anyhow::anyhow!("this file is on the entry already, as {}", twin.name))
+                .with_params(serde_json::json!({ "name": twin.name })),
         ),
     }
 }
@@ -96,7 +97,7 @@ pub async fn attach(
 pub async fn content(State(pool): State<PgPool>, caller: Caller, Path(id): Path<Uuid>) -> AppResult<Response> {
     let (file, bytes) = repository::attachment_content(&pool, caller.id(), id)
         .await?
-        .ok_or_else(|| AppError::not_found(anyhow::anyhow!("no such file")))?;
+        .ok_or_else(|| AppError::not_found(Code::AttachmentNotFound, anyhow::anyhow!("no such file")))?;
 
     let header = |value: String| HeaderValue::from_str(&value).map_err(AppError::internal);
     let mut response = bytes.into_response();
@@ -130,6 +131,6 @@ pub async fn remove(State(pool): State<PgPool>, caller: Caller, Path(id): Path<U
     if repository::remove_attachment(&pool, caller.id(), &caller.into(), id).await? {
         Ok(StatusCode::NO_CONTENT)
     } else {
-        Err(AppError::not_found(anyhow::anyhow!("no such file on an entry")))
+        Err(AppError::not_found(Code::AttachmentNotFound, anyhow::anyhow!("no such file on an entry")))
     }
 }

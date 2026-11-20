@@ -4,12 +4,13 @@
 //! world reaches, and it forwards `/api/v1/auth/...` here (ADR 0001).
 
 use anyhow::Result;
-use austeris_common::{AppError, AppResult, health};
+use austeris_common::extract::Json;
+use austeris_common::{AppError, AppResult, Code, health};
+use axum::Router;
 use axum::extract::State;
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -85,10 +86,12 @@ async fn login(State(state): State<ServiceState>, Json(credentials): Json<Creden
     // worth guessing at, whether or not it is a real account here.
     if session::is_locked_out(&state.pool, &credentials.email).await? {
         tracing::warn!("a sign-in was refused because the address is locked out");
-        return Err(AppError::new(
+        return Err(AppError::refused(
             StatusCode::TOO_MANY_REQUESTS,
+            Code::AuthLockedOut,
             anyhow::anyhow!("too many failed attempts; try again in {} minutes", session::LOCKOUT_WINDOW_MINUTES),
-        ));
+        )
+        .with_params(serde_json::json!({ "minutes": session::LOCKOUT_WINDOW_MINUTES })));
     }
 
     let row: Option<(Uuid, Option<String>)> = sqlx::query_as("SELECT id, password_hash FROM users WHERE lower(email) = lower($1) AND active")
@@ -99,7 +102,7 @@ async fn login(State(state): State<ServiceState>, Json(credentials): Json<Creden
     // An unknown address, a deactivated account and a wrong password are one
     // answer. Distinguishing them turns the sign-in form into a way to learn
     // who has an account here.
-    let refused = || AppError::new(StatusCode::UNAUTHORIZED, anyhow::anyhow!("wrong email or password"));
+    let refused = || AppError::refused(StatusCode::UNAUTHORIZED, Code::AuthWrongPassword, anyhow::anyhow!("wrong email or password"));
 
     let Some((user_id, Some(hash))) = row else {
         // An account with no password cannot be signed into - and the work to
@@ -199,7 +202,7 @@ impl axum::extract::FromRequestParts<ServiceState> for Holder {
     type Rejection = AppError;
 
     async fn from_request_parts(parts: &mut axum::http::request::Parts, state: &ServiceState) -> Result<Self, Self::Rejection> {
-        let unauthorized = || AppError::new(StatusCode::UNAUTHORIZED, anyhow::anyhow!("not signed in"));
+        let unauthorized = || AppError::refused(StatusCode::UNAUTHORIZED, Code::AuthSignedOut, anyhow::anyhow!("not signed in"));
 
         let token = session_cookie(parts).ok_or_else(unauthorized)?;
         session::authenticate(&state.pool, &token).await?.map(Holder).ok_or_else(unauthorized)

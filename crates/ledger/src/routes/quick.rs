@@ -1,7 +1,7 @@
 //! An entry in one typed line, and what a line would record before it is.
 
+use austeris_common::extract::Json;
 use austeris_common::{AppError, AppResult, Caller, Code};
-use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use chrono::NaiveDate;
@@ -216,7 +216,7 @@ fn unreadable(error: parse::ParseError) -> AppError {
         Why::BareAt => (Code::LineBareAt, json!({})),
         Why::Twice(word) => (Code::LineTwice, json!({ "word": word })),
     };
-    AppError::bad_request(error).with_code(code, params)
+    AppError::bad_request(code, error).with_params(params)
 }
 
 /// The counterparty a typed line named, as the person's books know it.
@@ -263,11 +263,11 @@ async fn resolve(
 
     let account = match (&spoken.account, account_id) {
         (Some(name), _) => repository::account_by_name(pool, owner_id, name).await?.ok_or_else(|| {
-            AppError::not_found(anyhow::anyhow!("you have no account called `{name}`")).with_code(Code::LineUnknownAccount, json!({ "name": name }))
+            AppError::not_found(Code::LineUnknownAccount, anyhow::anyhow!("you have no account called `{name}`")).with_params(json!({ "name": name }))
         })?,
         (None, Some(id)) => repository::account(pool, owner_id, id)
             .await?
-            .ok_or_else(|| AppError::not_found(anyhow::anyhow!("no such account")))?,
+            .ok_or_else(|| AppError::not_found(Code::AccountNotFound, anyhow::anyhow!("no such account")))?,
         (None, None) => default_account(pool, owner_id).await?,
     };
 
@@ -280,22 +280,22 @@ async fn resolve(
     };
     match (category.flow, flow) {
         (Flow::Income, Flow::Expense) => {
-            return Err(AppError::bad_request(anyhow::anyhow!(
-                "`{}` is a category of money coming in; write `+{}` for money coming in",
-                category.name,
-                spoken.amount
-            ))
-            .with_code(
+            return Err(AppError::bad_request(
                 Code::LineIncomeCategory,
-                json!({ "category": category.name, "amount": spoken.amount.to_string() }),
-            ));
+                anyhow::anyhow!(
+                    "`{}` is a category of money coming in; write `+{}` for money coming in",
+                    category.name,
+                    spoken.amount
+                ),
+            )
+            .with_params(json!({ "category": category.name, "amount": spoken.amount.to_string() })));
         }
         (Flow::Expense, Flow::Income) => {
-            return Err(AppError::bad_request(anyhow::anyhow!(
-                "`{}` is a category of money going out; leave the `+` off for money spent",
-                category.name
-            ))
-            .with_code(Code::LineExpenseCategory, json!({ "category": category.name })));
+            return Err(AppError::bad_request(
+                Code::LineExpenseCategory,
+                anyhow::anyhow!("`{}` is a category of money going out; leave the `+` off for money spent", category.name),
+            )
+            .with_params(json!({ "category": category.name })));
         }
         _ => {}
     }
@@ -353,25 +353,29 @@ async fn category_for(pool: &PgPool, owner_id: Uuid, spoken: &parse::Spoken, cou
                 None => None,
             };
             usual.ok_or_else(|| {
-                AppError::bad_request(anyhow::anyhow!(
-                    "`{}` has no usual category; say what this was for, as in `{} food @{}`",
-                    known.name,
-                    spoken.amount,
-                    known.key
-                ))
-                .with_code(
+                AppError::bad_request(
                     Code::LineNoUsualCategory,
-                    json!({ "counterparty": known.name, "amount": spoken.amount.to_string(), "key": known.key }),
+                    anyhow::anyhow!(
+                        "`{}` has no usual category; say what this was for, as in `{} food @{}`",
+                        known.name,
+                        spoken.amount,
+                        known.key
+                    ),
                 )
+                .with_params(json!({ "counterparty": known.name, "amount": spoken.amount.to_string(), "key": known.key }))
             })
         }
-        (None, Some(Spoken::Unknown(typed))) => Err(AppError::not_found(anyhow::anyhow!(
-            "you have no counterparty called `{typed}`; say what this was for, as in `{} food @{typed}`, and it is created with that as its usual category",
-            spoken.amount
-        ))
-        .with_code(Code::LineUnknownCounterparty, json!({ "name": typed, "amount": spoken.amount.to_string() }))),
+        (None, Some(Spoken::Unknown(typed))) => Err(AppError::not_found(
+            Code::LineUnknownCounterparty,
+            anyhow::anyhow!(
+                "you have no counterparty called `{typed}`; say what this was for, as in `{} food @{typed}`, and it is created with that as its usual category",
+                spoken.amount
+            ),
+        )
+        .with_params(json!({ "name": typed, "amount": spoken.amount.to_string() }))),
         // The parser refuses a line that names neither.
-        (None, None) => Err(AppError::bad_request(anyhow::anyhow!("the line says nothing it was for"))),
+        (None, None) => Err(AppError::bad_request(Code::LineNoCategory, anyhow::anyhow!("the line says nothing it was for"))
+            .with_params(json!({ "amount": spoken.amount.to_string() }))),
     }
 }
 
@@ -379,16 +383,19 @@ async fn category_for(pool: &PgPool, owner_id: Uuid, spoken: &parse::Spoken, cou
 async fn category_named(pool: &PgPool, owner_id: Uuid, name: &str) -> AppResult<Category> {
     match repository::category_by_name(pool, owner_id, name).await? {
         CategoryMatch::One(category) => Ok(*category),
-        CategoryMatch::None => Err(AppError::not_found(anyhow::anyhow!("you have no category called `{name}`; create it first"))
-            .with_code(Code::LineUnknownCategory, json!({ "name": name }))),
+        CategoryMatch::None => Err(AppError::not_found(
+            Code::LineUnknownCategory,
+            anyhow::anyhow!("you have no category called `{name}`; create it first"),
+        )
+        .with_params(json!({ "name": name }))),
         // Resolved by asking, not by guessing: filing money under the wrong
         // one of two categories with the same name is a mistake nobody sees
         // until a report is wrong.
-        CategoryMatch::Several(names) => Err(AppError::new(
-            StatusCode::CONFLICT,
+        CategoryMatch::Several(names) => Err(AppError::conflict(
+            Code::LineAmbiguousCategory,
             anyhow::anyhow!("`{name}` means more than one category ({}); say which, as in `living/{name}`", names.join(", ")),
         )
-        .with_code(Code::LineAmbiguousCategory, json!({ "name": name, "names": names.join(", ") }))),
+        .with_params(json!({ "name": name, "names": names.join(", ") }))),
     }
 }
 
@@ -406,16 +413,17 @@ async fn default_account(pool: &PgPool, owner_id: Uuid) -> AppResult<Account> {
 
     match <[Account; 1]>::try_from(open) {
         Ok([only]) => Ok(only),
-        Err(rest) if rest.is_empty() => Err(
-            AppError::not_found(anyhow::anyhow!("you have no open account to record this against; create one first"))
-                .with_code(Code::LineNoOpenAccount, json!({})),
-        ),
+        Err(rest) if rest.is_empty() => Err(AppError::not_found(
+            Code::LineNoOpenAccount,
+            anyhow::anyhow!("you have no open account to record this against; create one first"),
+        )),
         Err(rest) => {
             let names = rest.iter().map(|account| account.name.as_str()).collect::<Vec<_>>().join(", ");
-            Err(
-                AppError::bad_request(anyhow::anyhow!("say which account, as in `from {}` - you have {names}", rest[0].name))
-                    .with_code(Code::LineWhichAccount, json!({ "example": rest[0].name, "accounts": names })),
+            Err(AppError::bad_request(
+                Code::LineWhichAccount,
+                anyhow::anyhow!("say which account, as in `from {}` - you have {names}", rest[0].name),
             )
+            .with_params(json!({ "example": rest[0].name, "accounts": names })))
         }
     }
 }

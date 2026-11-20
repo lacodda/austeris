@@ -1,9 +1,9 @@
 //! What an entry remembers - who changed it and what it was - and the trash
 //! that deleted entries and the files taken off them wait in.
 
+use austeris_common::extract::{Json, Path};
 use austeris_common::{AppError, AppResult, Caller, Code};
-use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::State;
 use axum::http::StatusCode;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -29,7 +29,7 @@ pub async fn history(State(pool): State<PgPool>, caller: Caller, Path(id): Path<
     repository::history(&pool, caller.id(), id)
         .await?
         .map(Json)
-        .ok_or_else(|| AppError::not_found(anyhow::anyhow!("no such entry")))
+        .ok_or_else(|| AppError::not_found(Code::EntryNotFound, anyhow::anyhow!("no such entry")))
 }
 
 /// What is in the trash: entries deleted, and files taken off entries, for
@@ -73,9 +73,15 @@ pub async fn empty(State(pool): State<PgPool>, caller: Caller) -> AppResult<Stat
 pub async fn restore_entry(State(pool): State<PgPool>, caller: Caller, Path(id): Path<Uuid>) -> AppResult<Json<Entry>> {
     match repository::restore_entry(&pool, caller.id(), &caller.into(), id).await {
         Ok(Restored::Back(entry)) => Ok(Json(*entry)),
-        Ok(Restored::Missing) => Err(AppError::not_found(anyhow::anyhow!("no such entry in the trash"))),
+        Ok(Restored::Missing) => Err(AppError::not_found(Code::EntryNotInTrash, anyhow::anyhow!("no such entry in the trash"))),
         Err(error) => match error.downcast::<RestoreRefused>() {
-            Ok(refused) => Err(AppError::new(StatusCode::CONFLICT, refused)),
+            Ok(refused) => Err(AppError::conflict(
+                match refused {
+                    RestoreRefused::SideGone => Code::EntrySideGone,
+                    RestoreRefused::PostedAgain => Code::EntryPostedAgain,
+                },
+                refused,
+            )),
             Err(error) => Err(AppError::internal(error)),
         },
     }
@@ -96,7 +102,7 @@ pub async fn erase_entry(State(pool): State<PgPool>, caller: Caller, Path(id): P
     if repository::erase_entry(&pool, caller.id(), id).await? {
         Ok(StatusCode::NO_CONTENT)
     } else {
-        Err(AppError::not_found(anyhow::anyhow!("no such entry in the trash")))
+        Err(AppError::not_found(Code::EntryNotInTrash, anyhow::anyhow!("no such entry in the trash")))
     }
 }
 
@@ -115,13 +121,15 @@ pub async fn erase_entry(State(pool): State<PgPool>, caller: Caller, Path(id): P
 pub async fn restore_attachment(State(pool): State<PgPool>, caller: Caller, Path(id): Path<Uuid>) -> AppResult<Json<Attachment>> {
     match repository::restore_attachment(&pool, caller.id(), &caller.into(), id).await? {
         FileRestored::Back(attachment) => Ok(Json(attachment)),
-        FileRestored::Missing => Err(AppError::not_found(anyhow::anyhow!("no such file in the trash"))),
-        FileRestored::EntryInTrash => Err(AppError::new(
-            StatusCode::CONFLICT,
+        FileRestored::Missing => Err(AppError::not_found(Code::AttachmentNotInTrash, anyhow::anyhow!("no such file in the trash"))),
+        FileRestored::EntryInTrash => Err(AppError::conflict(
+            Code::AttachmentEntryInTrash,
             anyhow::anyhow!("the entry this file was on is in the trash; restore the entry and its files come back with it"),
         )),
-        FileRestored::AttachedAgain => Err(AppError::new(StatusCode::CONFLICT, anyhow::anyhow!("the same file is on the entry again"))
-            .with_code(Code::AttachmentAlready, serde_json::json!({}))),
+        FileRestored::AttachedAgain => Err(AppError::conflict(
+            Code::AttachmentAlready,
+            anyhow::anyhow!("the same file is on the entry again"),
+        )),
     }
 }
 
@@ -140,6 +148,6 @@ pub async fn erase_attachment(State(pool): State<PgPool>, caller: Caller, Path(i
     if repository::erase_attachment(&pool, caller.id(), id).await? {
         Ok(StatusCode::NO_CONTENT)
     } else {
-        Err(AppError::not_found(anyhow::anyhow!("no such file in the trash")))
+        Err(AppError::not_found(Code::AttachmentNotInTrash, anyhow::anyhow!("no such file in the trash")))
     }
 }

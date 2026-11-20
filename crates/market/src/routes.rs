@@ -5,11 +5,12 @@
 
 use std::sync::Arc;
 
-use austeris_common::{AppError, AppResult, health};
-use axum::extract::{Path, Query, State};
+use austeris_common::extract::{Json, Path, Query};
+use austeris_common::{AppError, AppResult, Code, health};
+use axum::Router;
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::{get, post};
-use axum::{Json, Router};
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
@@ -106,7 +107,7 @@ async fn read_instrument(State(state): State<ServiceState>, Path(id): Path<Uuid>
     repository::instrument(&state.pool, id)
         .await?
         .map(Json)
-        .ok_or_else(|| AppError::not_found(anyhow::anyhow!("no such instrument")))
+        .ok_or_else(|| AppError::not_found(Code::InstrumentNotFound, anyhow::anyhow!("no such instrument")))
 }
 
 /// Creating one that already exists updates its name and returns the same id,
@@ -123,7 +124,10 @@ async fn read_instrument(State(state): State<ServiceState>, Path(id): Path<Uuid>
 )]
 async fn create_instrument(State(state): State<ServiceState>, Json(new): Json<NewInstrument>) -> AppResult<(StatusCode, Json<Instrument>)> {
     if new.symbol.trim().is_empty() {
-        return Err(AppError::bad_request(anyhow::anyhow!("an instrument needs a symbol")));
+        return Err(AppError::bad_request(
+            Code::InstrumentSymbolRequired,
+            anyhow::anyhow!("an instrument needs a symbol"),
+        ));
     }
 
     let instrument = repository::upsert_instrument(&state.pool, new.kind, new.symbol.trim(), new.name.trim(), new.decimals).await?;
@@ -146,7 +150,7 @@ async fn bind_source(State(state): State<ServiceState>, Path(id): Path<Uuid>, Js
     // Binding a source to an instrument that does not exist would be accepted
     // by the foreign key and rejected as a 500; saying so is better.
     if repository::instrument(&state.pool, id).await?.is_none() {
-        return Err(AppError::not_found(anyhow::anyhow!("no such instrument")));
+        return Err(AppError::not_found(Code::InstrumentNotFound, anyhow::anyhow!("no such instrument")));
     }
 
     repository::bind_source(&state.pool, id, &new.source, &new.external_id, new.priority).await?;
@@ -190,23 +194,30 @@ pub const MANUAL: &str = "manual";
 )]
 async fn record_price(State(state): State<ServiceState>, Path(id): Path<Uuid>, Json(new): Json<NewPrice>) -> AppResult<(StatusCode, Json<LatestPrice>)> {
     let Some(instrument) = repository::instrument(&state.pool, id).await? else {
-        return Err(AppError::not_found(anyhow::anyhow!("no such instrument")));
+        return Err(AppError::not_found(Code::InstrumentNotFound, anyhow::anyhow!("no such instrument")));
     };
     if new.price <= rust_decimal::Decimal::ZERO {
-        return Err(AppError::bad_request(anyhow::anyhow!("a price is more than nothing")));
+        return Err(AppError::bad_request(Code::PriceNotPositive, anyhow::anyhow!("a price is more than nothing")));
     }
     let currency = new.currency.trim().to_ascii_uppercase();
     if !(3..=5).contains(&currency.len()) || !currency.chars().all(|c| c.is_ascii_uppercase()) {
-        return Err(AppError::bad_request(anyhow::anyhow!(
-            "`{}` is not a currency code; three letters, as in USD, or an exchange's ticker, as in USDT",
-            new.currency
-        )));
+        return Err(AppError::bad_request(
+            Code::CurrencyNotACode,
+            anyhow::anyhow!(
+                "`{}` is not a currency code; three letters, as in USD, or an exchange's ticker, as in USDT",
+                new.currency
+            ),
+        )
+        .with_params(serde_json::json!({ "currency": new.currency })));
     }
     let now = Utc::now();
     let observed_at = new.observed_at.unwrap_or(now);
     // A minute of grace for a clock on the person's side running ahead.
     if observed_at > now + Duration::minutes(1) {
-        return Err(AppError::bad_request(anyhow::anyhow!("a price is of a moment that has happened")));
+        return Err(AppError::bad_request(
+            Code::PriceInFuture,
+            anyhow::anyhow!("a price is of a moment that has happened"),
+        ));
     }
 
     repository::record_price(&state.pool, id, &currency, observed_at, new.price, MANUAL).await?;
@@ -286,26 +297,33 @@ async fn record_prices(State(state): State<ServiceState>, Json(history): Json<Pr
         && source.starts_with(|c: char| c.is_ascii_lowercase())
         && source.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
     if !well_formed {
-        return Err(AppError::bad_request(anyhow::anyhow!(
-            "`{}` is not a source's name; lowercase letters, digits and dashes, as in austeris-2025",
-            history.source
-        )));
+        return Err(AppError::bad_request(
+            Code::PriceBadSource,
+            anyhow::anyhow!(
+                "`{}` is not a source's name; lowercase letters, digits and dashes, as in austeris-2025",
+                history.source
+            ),
+        )
+        .with_params(serde_json::json!({ "source": history.source })));
     }
     // A live source's prices are what it said; its name on prices it never
     // said would make its history, and its freshness, a lie.
     if state.sources.names().contains(&source) {
-        return Err(AppError::bad_request(anyhow::anyhow!(
-            "{source} is a source this installation asks itself; record prices brought from elsewhere under another name"
-        )));
+        return Err(AppError::bad_request(
+            Code::PriceLiveSource,
+            anyhow::anyhow!("{source} is a source this installation asks itself; record prices brought from elsewhere under another name"),
+        )
+        .with_params(serde_json::json!({ "source": source })));
     }
     if history.prices.is_empty() {
-        return Err(AppError::bad_request(anyhow::anyhow!("there are no prices to record")));
+        return Err(AppError::bad_request(Code::PriceNoneGiven, anyhow::anyhow!("there are no prices to record")));
     }
     if history.prices.len() > MOST_PRICES {
-        return Err(AppError::bad_request(anyhow::anyhow!(
-            "{} prices in one call; {MOST_PRICES} at most",
-            history.prices.len()
-        )));
+        return Err(AppError::bad_request(
+            Code::PriceTooMany,
+            anyhow::anyhow!("{} prices in one call; {MOST_PRICES} at most", history.prices.len()),
+        )
+        .with_params(serde_json::json!({ "count": history.prices.len(), "limit": MOST_PRICES })));
     }
 
     let mut wanted: Vec<Uuid> = history.prices.iter().map(|price| price.instrument_id).collect();
@@ -317,7 +335,10 @@ async fn record_prices(State(state): State<ServiceState>, Json(history): Json<Pr
         .map(|instrument| instrument.id)
         .collect();
     if let Some(unknown) = wanted.iter().find(|id| !known.contains(id)) {
-        return Err(AppError::bad_request(anyhow::anyhow!("no such instrument: {unknown}")));
+        return Err(
+            AppError::bad_request(Code::InstrumentNotFound, anyhow::anyhow!("no such instrument: {unknown}"))
+                .with_params(serde_json::json!({ "id": unknown.to_string() })),
+        );
     }
 
     // A minute of grace for a clock on the caller's side running ahead.
@@ -325,17 +346,24 @@ async fn record_prices(State(state): State<ServiceState>, Json(history): Json<Pr
     let mut observations = Vec::with_capacity(history.prices.len());
     for given in &history.prices {
         if given.price <= rust_decimal::Decimal::ZERO {
-            return Err(AppError::bad_request(anyhow::anyhow!("a price is more than nothing")));
+            return Err(AppError::bad_request(Code::PriceNotPositive, anyhow::anyhow!("a price is more than nothing")));
         }
         let currency = given.currency.trim().to_ascii_uppercase();
         if !(3..=5).contains(&currency.len()) || !currency.chars().all(|c| c.is_ascii_uppercase()) {
-            return Err(AppError::bad_request(anyhow::anyhow!(
-                "`{}` is not a currency code; three letters, as in USD, or an exchange's ticker, as in USDT",
-                given.currency
-            )));
+            return Err(AppError::bad_request(
+                Code::CurrencyNotACode,
+                anyhow::anyhow!(
+                    "`{}` is not a currency code; three letters, as in USD, or an exchange's ticker, as in USDT",
+                    given.currency
+                ),
+            )
+            .with_params(serde_json::json!({ "currency": given.currency })));
         }
         if given.observed_at > latest {
-            return Err(AppError::bad_request(anyhow::anyhow!("a price is of a moment that has happened")));
+            return Err(AppError::bad_request(
+                Code::PriceInFuture,
+                anyhow::anyhow!("a price is of a moment that has happened"),
+            ));
         }
         observations.push(repository::Observation {
             instrument_id: given.instrument_id,
@@ -379,9 +407,9 @@ async fn latest_prices(State(state): State<ServiceState>, Query(query): Query<Pr
         Some(list) => list
             .split(',')
             .map(|id| {
-                id.trim()
-                    .parse::<Uuid>()
-                    .map_err(|_| AppError::bad_request(anyhow::anyhow!("`{id}` is not an instrument id")))
+                id.trim().parse::<Uuid>().map_err(|_| {
+                    AppError::bad_request(Code::InstrumentBadId, anyhow::anyhow!("`{id}` is not an instrument id")).with_params(serde_json::json!({ "id": id }))
+                })
             })
             .collect::<Result<Vec<_>, _>>()?,
         None => repository::instruments(&state.pool).await?.into_iter().map(|i| i.id).collect(),
@@ -428,7 +456,10 @@ async fn price_history(State(state): State<ServiceState>, Path(id): Path<Uuid>, 
     let from = query.from.unwrap_or(to - Duration::days(30));
 
     if from > to {
-        return Err(AppError::bad_request(anyhow::anyhow!("the window ends before it starts")));
+        return Err(
+            AppError::bad_request(Code::RequestBackwardsWindow, anyhow::anyhow!("the window ends before it starts"))
+                .with_params(serde_json::json!({ "from": from.to_rfc3339(), "to": to.to_rfc3339() })),
+        );
     }
 
     Ok(Json(repository::price_history(&state.pool, id, &query.currency, from, to).await?))
@@ -474,10 +505,11 @@ pub struct Synced {
 async fn sync_instruments(State(state): State<ServiceState>, Query(query): Query<SyncQuery>) -> AppResult<Json<Synced>> {
     let source = state.sources.coinmarketcap();
     if !source.is_available() {
-        return Err(AppError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
+        return Err(AppError::unavailable(
+            Code::SourceSwitchedOff,
             anyhow::anyhow!("the {} source is switched off; set AUSTERIS_CMC_API_KEY", source.name()),
-        ));
+        )
+        .with_params(serde_json::json!({ "source": source.name() })));
     }
 
     let listings = source.catalogue(query.limit).await.map_err(AppError::internal)?;
@@ -522,9 +554,10 @@ pub struct RefreshQuery {
 )]
 async fn refresh_prices(State(state): State<ServiceState>, Query(query): Query<RefreshQuery>) -> AppResult<Json<Refreshed>> {
     if query.on.is_some_and(|day| day > Utc::now().date_naive()) {
-        return Err(AppError::bad_request(anyhow::anyhow!(
-            "no source publishes a rate for a day that has not happened"
-        )));
+        return Err(AppError::bad_request(
+            Code::RateFutureDay,
+            anyhow::anyhow!("no source publishes a rate for a day that has not happened"),
+        ));
     }
     Ok(Json(refresh::run(&state.pool, &state.sources, state.ledger.as_ref(), query.on).await?))
 }

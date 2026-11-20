@@ -273,7 +273,28 @@
   "errors": {
     "entry": {
       "possible_duplicate": "The same entry was recorded {{seconds}} s ago.",
-      "kept": "This entry is kept by {{module}}: its day, description and money change there, and it is deleted there."
+      "kept": "This entry is kept by {{module}}: its day, description and money change there, and it is deleted there.",
+      "not_found": "There is no such entry.",
+      "not_in_trash": "There is no such entry in the trash.",
+      "too_few_lines": "An entry has two sides at least: money leaves somewhere and arrives somewhere.",
+      "line_side": "A line names an account, a category or a conversion - exactly one of them.",
+      "line_zero": "A line of zero records nothing.",
+      "unbalanced": "The entry does not balance in {{currency}}: the lines sum to {{sum}}.",
+      "rule_broken": "The books refused the entry: {{message}}",
+      "not_yours": "The entry names a counterparty or a category that is not yours.",
+      "unknown_reference": "The entry names an account or a category that does not exist.",
+      "side_gone": "The entry moved money on an account or under a category that no longer exists, so it cannot come back as it was.",
+      "posted_again": "The module that posted this entry has posted it again since; the newer one stands.",
+      "posts_before_made": "A payment posts on or after the day it was made, {{day}}.",
+      "already_posted": "This entry was posted on {{day}} already.",
+      "repost_accounts": "This entry moves {{count}} accounts, so which of them posted for another amount is not said; record it again instead.",
+      "repost_split": "A split entry does not say which of its parts posted for another amount; record it again instead.",
+      "repost_not_payment": "Only a payment to a category posts for another amount; record a transfer again instead.",
+      "repost_currencies": "This conversion's categories are not in one other currency; record it again instead.",
+      "between_accounts": "This entry moves money between accounts, so it is not one payment.",
+      "no_account": "This entry moves no account, so it is not one payment.",
+      "split": "This entry is split across categories, so it is not one payment.",
+      "no_category": "This entry is on no category, so it is not one payment."
     },
     "line": {
       "empty": "There is nothing here to record.",
@@ -298,18 +319,33 @@
       "worthless": "{{amount}} {{currency}} is worth nothing in {{account_currency}}."
     },
     "template": {
-      "name_taken": "There is already a button by that name."
+      "name_taken": "There is already a button by that name.",
+      "not_found": "There is no such button.",
+      "name_required": "A button needs a name.",
+      "order_incomplete": "An order names every button of yours, each once.",
+      "asks_amount": "“{{name}}” asks for the amount each time; say how much."
     },
     "attachment": {
       "too_large": "A file can be up to {{limit_mb}} MB.",
       "unsupported": "Only a picture (JPEG, PNG, WebP, HEIC), a PDF or an XML receipt can be kept.",
-      "already_attached": "This file is on the entry already."
+      "already_attached": "This file is on the entry already.",
+      "name_required": "A file needs a name.",
+      "empty": "That file is empty.",
+      "not_found": "There is no such file.",
+      "not_in_trash": "There is no such file in the trash.",
+      "entry_in_trash": "The entry this file was on is in the trash; restore the entry and its files come back with it."
     },
     "request": {
-      "too_large": "That is more than {{limit_mb}} MB - too large to send."
+      "too_large": "That is more than {{limit_mb}} MB - too large to send.",
+      "malformed": "The server could not read that request: {{why}}",
+      "not_json": "That request was not sent as JSON.",
+      "no_such_endpoint": "Nothing answers at that address.",
+      "rate_limited": "Too many requests; wait a moment and try again.",
+      "backwards_window": "The window ends on {{to}}, before it starts on {{from}}."
     },
     "module": {
-      "switched_off": "This part of austeris is switched off on this installation."
+      "switched_off": "This part of austeris is switched off on this installation.",
+      "not_answering": "The {{module}} module is not answering. Try again in a moment."
     },
     "document": {
       "unsupported": "Only a receipt's XML is read into the books; a photo or a PDF is attached to its entry instead.",
@@ -323,7 +359,10 @@
       "closed_account": "{{name}} is closed; choose another account.",
       "no_rate": "The account is in {{to}}, the receipt in {{from}}, and no rate is known on or before {{day}}.",
       "ledger_unavailable": "The books could not be reached; book it again in a moment.",
-      "refused_by_ledger": "The books refused it: {{message}}"
+      "refused_by_ledger": "The books refused it: {{message}}",
+      "name_required": "A file needs a name.",
+      "empty": "That file is empty.",
+      "not_found": "There is no such document."
     },
     "slip": {
       "ocr_unavailable": "This installation cannot read photos: it has no OCR.",
@@ -339,11 +378,104 @@
       "nothing_moved": "This trade moves less than one unit of {{currency}}.",
       "oversold": "That would leave {{short}} {{symbol}} fewer than were held at the time.",
       "receive_unpriced": "Say what a unit of {{symbol}} was worth when it arrived - 0 if nothing: prices have none for that moment.",
-      "refused_by_ledger": "The books refused the trade's money: {{message}}"
+      "refused_by_ledger": "The books refused the trade's money: {{message}}",
+      "not_found": "There is no such trade.",
+      "nothing_traded": "A trade is of more than nothing.",
+      "negative_fee": "A fee is not negative.",
+      "price_required": "A buy or a sale has a price, of more than nothing.",
+      "one_account": "Only a transfer goes to another account; a buy, a sale or a receipt happens on one.",
+      "negative_worth": "What a unit was worth is not below nothing.",
+      "receive_fee": "Units received cost nothing to receive; a fee belongs to a buy or a transfer.",
+      "transfer_priced": "A transfer has no price; nothing was paid.",
+      "transfer_target": "A transfer goes to another account; choose which.",
+      "transfer_to_self": "A transfer goes to another account than it left.",
+      "in_future": "A trade is of a moment that has happened.",
+      "key_empty": "An idempotency key cannot be empty.",
+      "key_too_long": "An idempotency key is {{limit}} characters at most."
     },
     "portfolio": {
       "ledger_unavailable": "The books are not answering; nothing was changed. Try again in a moment.",
-      "market_unavailable": "Prices are not answering; nothing was changed. Try again in a moment."
+      "market_unavailable": "Prices are not answering; nothing was changed. Try again in a moment.",
+      "future_day": "A day that has not happened has no value yet."
+    },
+    "server": {
+      "internal": "Something went wrong on the server. Try again in a moment."
+    },
+    "auth": {
+      "signed_out": "You are signed out. Sign in again.",
+      "wrong_password": "The email or the password is wrong.",
+      "locked_out": "Too many wrong passwords in a row. Try again in {{minutes}} minutes."
+    },
+    "currency": {
+      "not_a_code": "“{{currency}}” is not a currency code; three letters, as in USD, or an exchange's ticker, as in USDT."
+    },
+    "amount": {
+      "not_positive": "An amount has to be more than nothing.",
+      "too_precise": "{{amount}} has more decimal places than {{currency}} has.",
+      "not_a_number": "“{{text}}” is not an amount."
+    },
+    "account": {
+      "not_found": "There is no such account.",
+      "name_required": "An account needs a name.",
+      "name_taken": "You already have an account by that name."
+    },
+    "category": {
+      "not_found": "You have no such category.",
+      "name_required": "A category needs a name.",
+      "parent_not_found": "The parent category is not one of yours.",
+      "name_taken": "A category by that name is already there.",
+      "fee_blocked": "Exchange fees have no category to go in: the one by that name is money coming in."
+    },
+    "counterparty": {
+      "not_found": "There is no such counterparty.",
+      "name_required": "A counterparty needs a name.",
+      "in_use": "Entries name this counterparty; change them first.",
+      "bad_tax_id": "“{{tax_id}}” is not a tax number; letters and digits, as in 80012345-6.",
+      "tax_id_taken": "Another of your counterparties has that tax number.",
+      "name_taken": "You have a counterparty typed the same way as “{{name}}”.",
+      "untypeable": "“{{name}}” has no letter or digit in it, so it could never be typed."
+    },
+    "place": {
+      "bad_country": "“{{country}}” is not a country code; two letters, as in PY or BR (the United Kingdom is GB).",
+      "not_found": "There is no such place.",
+      "already": "You have that place already."
+    },
+    "tag": {
+      "bad_name": "“{{tag}}” is not a tag; a tag is one word starting with a letter, as in holiday-2027.",
+      "not_found": "There is no such tag.",
+      "name_required": "A tag needs a name.",
+      "name_taken": "You have a tag by that name."
+    },
+    "exchange": {
+      "not_positive": "An exchange gives something and gets something; both amounts are more than nothing.",
+      "same_currency": "Both sides are in {{currency}}; money that stays in one currency is a transfer.",
+      "too_small": "{{amount}} is too small to be worth anything in {{currency}}.",
+      "wrong_reference": "A {{base}} to {{quote}} rate cannot measure a conversion from {{given}} into {{got}}."
+    },
+    "rate": {
+      "same_currency": "A currency is worth one of itself.",
+      "not_positive": "A rate is a positive number.",
+      "not_found": "No {{from}} to {{to}} rate is known on or before {{day}}.",
+      "future_day": "No source publishes a rate for a day that has not happened."
+    },
+    "instrument": {
+      "not_found": "There is no such instrument.",
+      "symbol_required": "An instrument needs a symbol.",
+      "bad_id": "“{{id}}” is not an instrument id."
+    },
+    "price": {
+      "not_positive": "A price has to be more than nothing.",
+      "in_future": "A price is of a moment that has happened.",
+      "bad_source": "“{{source}}” is not a source's name; lowercase letters, digits and dashes, as in austeris-2025.",
+      "live_source": "{{source}} is a source this installation asks itself; record prices brought from elsewhere under another name.",
+      "none_given": "There are no prices to record.",
+      "too_many": "{{count}} prices in one call; {{limit}} at most."
+    },
+    "source": {
+      "switched_off": "The {{source}} source is switched off on this installation."
+    },
+    "snapshot": {
+      "not_found": "There is no such snapshot."
     }
   },
   "files": {

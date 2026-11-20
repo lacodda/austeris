@@ -1,10 +1,9 @@
 //! Changing an entry after it was recorded: what it says about itself, and
 //! posting it when it was held.
 
-use austeris_common::{AppError, AppResult, Caller};
-use axum::Json;
-use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use austeris_common::extract::{Json, Path};
+use austeris_common::{AppError, AppResult, Caller, Code};
+use axum::extract::State;
 use chrono::NaiveDate;
 use rust_decimal::Decimal;
 use serde::Deserialize;
@@ -68,7 +67,7 @@ pub async fn change_entry(State(pool): State<PgPool>, caller: Caller, Path(id): 
         .await
         .map_err(refused_or_missing)?
         .map(Json)
-        .ok_or_else(|| AppError::not_found(anyhow::anyhow!("no such entry")))
+        .ok_or_else(|| AppError::not_found(Code::EntryNotFound, anyhow::anyhow!("no such entry")))
 }
 
 /// What posting a held entry carries.
@@ -109,17 +108,18 @@ pub async fn clear_entry(State(pool): State<PgPool>, caller: Caller, Path(id): P
     let owner_id = caller.id();
     let entry = repository::entry(&pool, owner_id, id)
         .await?
-        .ok_or_else(|| AppError::not_found(anyhow::anyhow!("no such entry")))?;
+        .ok_or_else(|| AppError::not_found(Code::EntryNotFound, anyhow::anyhow!("no such entry")))?;
     if let (EntryStatus::Cleared, Some(day)) = (entry.status, entry.cleared_on) {
         return Err(already_posted(day));
     }
 
     let on = body.on.unwrap_or_else(today);
     if on < entry.occurred_on {
-        return Err(AppError::bad_request(anyhow::anyhow!(
-            "a payment posts on or after the day it was made, {}",
-            entry.occurred_on
-        )));
+        return Err(AppError::bad_request(
+            Code::EntryPostsBeforeMade,
+            anyhow::anyhow!("a payment posts on or after the day it was made, {}", entry.occurred_on),
+        )
+        .with_params(serde_json::json!({ "day": entry.occurred_on.to_string() })));
     }
 
     let (lines, conversion) = match body.amount {
@@ -142,12 +142,13 @@ pub async fn clear_entry(State(pool): State<PgPool>, caller: Caller, Path(id): P
         })),
         // Posted by another request since it was read.
         Cleared::Already(day) => Err(already_posted(day)),
-        Cleared::Missing => Err(AppError::not_found(anyhow::anyhow!("no such entry"))),
+        Cleared::Missing => Err(AppError::not_found(Code::EntryNotFound, anyhow::anyhow!("no such entry"))),
     }
 }
 
 fn already_posted(day: NaiveDate) -> AppError {
-    AppError::new(StatusCode::CONFLICT, anyhow::anyhow!("this entry was posted on {day} already"))
+    AppError::conflict(Code::EntryAlreadyPosted, anyhow::anyhow!("this entry was posted on {day} already"))
+        .with_params(serde_json::json!({ "day": day.to_string() }))
 }
 
 /// The lines of a held entry posted for `amount` rather than what was held.
@@ -158,26 +159,33 @@ fn already_posted(day: NaiveDate) -> AppError {
 /// which of its parts changed.
 async fn reposted(pool: &PgPool, owner_id: Uuid, entry: &Entry, amount: Decimal, on: NaiveDate) -> AppResult<(Vec<NewLine>, Option<Summary>)> {
     if !amount.is_sign_positive() || amount.is_zero() {
-        return Err(AppError::bad_request(anyhow::anyhow!(
-            "the amount posted is positive, like an amount typed in a line"
-        )));
+        return Err(AppError::bad_request(
+            Code::AmountNotPositive,
+            anyhow::anyhow!("the amount posted is positive, like an amount typed in a line"),
+        ));
     }
 
     let accounts: Vec<_> = entry.lines.iter().filter(|line| line.side == LineSide::Account).collect();
     let [account_line] = accounts.as_slice() else {
-        return Err(AppError::bad_request(anyhow::anyhow!(
-            "this entry moves {} accounts, so which of them posted for another amount is not said; record it again instead",
-            accounts.len()
-        )));
+        return Err(AppError::bad_request(
+            Code::EntryRepostAccounts,
+            anyhow::anyhow!(
+                "this entry moves {} accounts, so which of them posted for another amount is not said; record it again instead",
+                accounts.len()
+            ),
+        )
+        .with_params(serde_json::json!({ "count": accounts.len() })));
     };
     let account = account_line
         .account_id
         .ok_or_else(|| AppError::internal(anyhow::anyhow!("an account line without an account")))?;
     let held_in = account_line.currency.clone();
     if currency::round(amount, &held_in) != amount {
-        return Err(AppError::bad_request(anyhow::anyhow!(
-            "{amount} is not an amount of {held_in}: it has more decimal places than {held_in} does"
-        )));
+        return Err(AppError::bad_request(
+            Code::AmountTooPrecise,
+            anyhow::anyhow!("{amount} is not an amount of {held_in}: it has more decimal places than {held_in} does"),
+        )
+        .with_params(serde_json::json!({ "amount": amount.to_string(), "currency": held_in })));
     }
     // The account moves the way it was held to: out for a payment, in for a
     // refund.
@@ -193,16 +201,18 @@ async fn reposted(pool: &PgPool, owner_id: Uuid, entry: &Entry, amount: Decimal,
     if !converts {
         let others: Vec<_> = entry.lines.iter().filter(|line| line.side != LineSide::Account).collect();
         let [other] = others.as_slice() else {
-            return Err(AppError::bad_request(anyhow::anyhow!(
-                "a split entry does not say which of its parts posted for another amount; record it again instead"
-            )));
+            return Err(AppError::bad_request(
+                Code::EntryRepostSplit,
+                anyhow::anyhow!("a split entry does not say which of its parts posted for another amount; record it again instead"),
+            ));
         };
         let other_side = match (other.side, other.category_id) {
             (LineSide::Category, Some(category)) => Side::Category(category),
             _ => {
-                return Err(AppError::bad_request(anyhow::anyhow!(
-                    "only a payment to a category posts for another amount; record a transfer again instead"
-                )));
+                return Err(AppError::bad_request(
+                    Code::EntryRepostNotPayment,
+                    anyhow::anyhow!("only a payment to a category posts for another amount; record a transfer again instead"),
+                ));
             }
         };
         let lines = vec![
@@ -254,9 +264,10 @@ async fn reconverted(
     let other_currency = match kept.first() {
         Some(line) if kept.iter().all(|other| other.currency == line.currency) && line.currency != held_in => line.currency.clone(),
         _ => {
-            return Err(AppError::bad_request(anyhow::anyhow!(
-                "this conversion's categories are not in one other currency; record it again instead"
-            )));
+            return Err(AppError::bad_request(
+                Code::EntryRepostCurrencies,
+                anyhow::anyhow!("this conversion's categories are not in one other currency; record it again instead"),
+            ));
         }
     };
     let cost: Decimal = kept.iter().map(|line| line.amount).sum::<Decimal>().abs();
@@ -285,12 +296,12 @@ async fn reconverted(
         )
     };
     let reference = repository::rate_in_force(pool, &got.currency, &given.currency, on).await?;
-    let plan = exchange::plan(given, got, reference).map_err(AppError::bad_request)?;
+    let plan = exchange::plan(given, got, reference).map_err(super::exchange_refused)?;
     let fees = if plan.has_fee() {
         Some(
             repository::purpose_category(pool, owner_id, Purpose::ExchangeFees)
                 .await
-                .map_err(AppError::bad_request)?
+                .map_err(super::fee_category_blocked)?
                 .id,
         )
     } else {

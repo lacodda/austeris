@@ -4,13 +4,14 @@
 //! here (ADR 0001), and every handler is scoped by the [`Caller`] it vouched
 //! for.
 
+use austeris_common::extract::{Json, Path, Query};
 use austeris_common::{AppError, AppResult, Caller, Code, health};
 use austeris_ledger::attachment::{self, BODY_LIMIT, MAX_BYTES};
+use axum::Router;
 use axum::body::Bytes;
-use axum::extract::{DefaultBodyLimit, Path, Query, State};
+use axum::extract::{DefaultBodyLimit, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
-use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -95,9 +96,9 @@ async fn upload<B: Books + Clone + 'static>(
     Query(query): Query<UploadQuery>,
     content: Bytes,
 ) -> AppResult<(StatusCode, Json<Upload>)> {
-    let name = attachment::file_name(&query.name).ok_or_else(|| AppError::bad_request(anyhow::anyhow!("a file needs a name")))?;
+    let name = attachment::file_name(&query.name).ok_or_else(|| AppError::bad_request(Code::DocumentNameRequired, anyhow::anyhow!("a file needs a name")))?;
     if content.is_empty() {
-        return Err(AppError::bad_request(anyhow::anyhow!("the file is empty")));
+        return Err(AppError::bad_request(Code::DocumentEmpty, anyhow::anyhow!("the file is empty")));
     }
     if content.len() > MAX_BYTES {
         return Err(too_large(Code::DocumentTooLarge));
@@ -158,7 +159,7 @@ async fn read_document<B: Books + Clone + 'static>(State(state): State<Imports<B
     repository::document(&state.pool, caller.id(), id)
         .await?
         .map(|stored| Json(stored.document()))
-        .ok_or_else(|| AppError::not_found(anyhow::anyhow!("no such document")))
+        .ok_or_else(|| AppError::not_found(Code::DocumentNotFound, anyhow::anyhow!("no such document")))
 }
 
 /// What booking a waiting document carries: what it waits for.
@@ -201,7 +202,7 @@ async fn book<B: Books + Clone + 'static>(
     receive::book_again(&state.pool, &state.books, caller.id(), id, said)
         .await?
         .map(Json)
-        .ok_or_else(|| AppError::not_found(anyhow::anyhow!("no such document")))
+        .ok_or_else(|| AppError::not_found(Code::DocumentNotFound, anyhow::anyhow!("no such document")))
 }
 
 /// Dismisses a document: it leaves the list, with its file. An entry it
@@ -220,7 +221,7 @@ async fn dismiss<B: Books + Clone + 'static>(State(state): State<Imports<B>>, ca
     if repository::dismiss(&state.pool, caller.id(), id).await? {
         Ok(StatusCode::NO_CONTENT)
     } else {
-        Err(AppError::not_found(anyhow::anyhow!("no such document")))
+        Err(AppError::not_found(Code::DocumentNotFound, anyhow::anyhow!("no such document")))
     }
 }
 
@@ -249,11 +250,11 @@ async fn read_slip<B: Books + Clone + 'static>(State(_state): State<Imports<B>>,
     match attachment::media_type(&content) {
         Some("image/jpeg" | "image/png" | "image/webp") => {}
         _ => {
-            return Err(AppError::new(
+            return Err(AppError::refused(
                 StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                Code::SlipUnsupported,
                 anyhow::anyhow!("a slip is read from a JPEG, PNG or WebP photo"),
-            )
-            .with_code(Code::SlipUnsupported, serde_json::json!({})));
+            ));
         }
     }
     let ocr = Ocr::find().ok_or_else(ocr_unavailable)?;
@@ -267,13 +268,16 @@ async fn read_slip<B: Books + Clone + 'static>(State(_state): State<Imports<B>>,
 /// Refused for size, the way a file kept with an entry is.
 fn too_large(code: Code) -> AppError {
     let limit = MAX_BYTES / (1024 * 1024);
-    AppError::new(StatusCode::PAYLOAD_TOO_LARGE, anyhow::anyhow!("a file can be {limit} MB at most")).with_code(code, serde_json::json!({ "limit_mb": limit }))
+    AppError::refused(StatusCode::PAYLOAD_TOO_LARGE, code, anyhow::anyhow!("a file can be {limit} MB at most"))
+        .with_params(serde_json::json!({ "limit_mb": limit }))
 }
 
 /// No OCR on this installation.
 fn ocr_unavailable() -> AppError {
-    AppError::unavailable(anyhow::anyhow!("this installation has no OCR; Tesseract is not installed"))
-        .with_code(Code::SlipOcrUnavailable, serde_json::json!({}))
+    AppError::unavailable(
+        Code::SlipOcrUnavailable,
+        anyhow::anyhow!("this installation has no OCR; Tesseract is not installed"),
+    )
 }
 
 /// This service's share of the platform's `OpenAPI` document.
