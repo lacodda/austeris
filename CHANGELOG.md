@@ -2,6 +2,43 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.17.0] - 2026-11-20
+
+### Breaking Changes
+- ErrorBody.code and ErrorBody.params are always present;
+params is an object, empty when there are none.
+- A typed line that names nothing it was for, or only a
+counterparty with no usual category, records a draft instead of being
+refused; line.no_category, line.no_usual_category and
+line.unknown_counterparty are no longer answered.
+
+### Bug Fixes
+- Read a currency word that leaves a line saying nothing as the category
+- Close the connection a failed migration ran on
+- Give every form's cancel the type of a button
+- Name the batch actions with verbs in Russian
+- Keep the batch actions together on a phone
+
+### Build
+- Name the docs site as the crates' homepage
+- Accept chrono being unmaintained until the move to jiff
+
+### Dependencies
+- Update the stack and take dowel-ui 1.0
+
+### Documentation
+- Describe drafts, batches, merging, the trade trash and error codes
+- Show an error with its code, and say what v0.17 adds
+
+### Features
+- Answer every error with a code a client can translate
+- Record drafts, change many entries at once, merge counterparties
+- Bring a deleted trade back from the trash
+- Sort entries in batches and by keyboard, and bring trades back
+
+### Refactoring
+- Read a rejection's reason by reference
+
 ## [0.16.0] - 2026-11-11
 
 ### Bug Fixes
