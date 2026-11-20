@@ -165,6 +165,11 @@ export function Chip(props: ChipProps) {
   const content = (
     <>
       {children}
+      {/* A space before the count, for whoever reads the name rather than the
+        * picture: the two spans otherwise run together as "Needs a look1".
+        * The chip is a flex row, which draws a space-only run as nothing, so
+        * the gap on screen is still the row's. */}
+      {count !== undefined && ' '}
       {count !== undefined && <span className="font-normal text-faint tabular-nums">{count}</span>}
     </>
   )
