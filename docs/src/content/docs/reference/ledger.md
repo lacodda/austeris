@@ -179,7 +179,8 @@ with the currency and the gap named:
 
 ```json
 { "status": 400, "error": "Bad Request",
-  "message": "the entry does not balance in PYG: the lines sum to -100" }
+  "message": "the entry does not balance in PYG: the lines sum to -100",
+  "code": "entry.unbalanced", "params": { "currency": "PYG", "sum": "-100" } }
 ```
 
 An entry also says who, where and which labels, all optional:

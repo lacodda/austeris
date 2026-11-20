@@ -113,7 +113,8 @@ the gap named:
 
 ```console
 {"status":400,"error":"Bad Request",
- "message":"the entry does not balance in PYG: the lines sum to -100"}
+ "message":"the entry does not balance in PYG: the lines sum to -100",
+ "code":"entry.unbalanced","params":{"currency":"PYG","sum":"-100"}}
 ```
 
 Every endpoint, with its shape: **[the ledger reference](https://lacodda.github.io/austeris/reference/ledger/)**.
@@ -124,7 +125,9 @@ v0.16.0, early, with the books open: accounts, entries, holds and exchanges
 in several currencies, receipts read from their files, a portfolio of trades
 valued and snapshotted, with its lots, what each sale gained and what trading
 fees took - the 2025 crypto tracker's records brought in by one command - each
-entry's history and a trash, from the command line, the API or a phone.
+entry's history and a trash for entries and trades, drafts sorted later and
+many entries sorted at once, from the command line, the API, a keyboard or a
+phone.
 Each version: [CHANGELOG](https://github.com/lacodda/austeris/blob/main/CHANGELOG.md).
 
 ## Documentation
