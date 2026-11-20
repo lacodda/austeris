@@ -29,7 +29,7 @@ use uuid::Uuid;
 use crate::model::{Trade, TradeBody, TradeKind};
 use crate::repository::{self, NewTrade};
 use crate::services::{Account, Books, Instrument, Market};
-use crate::value;
+use crate::{trash, value};
 
 /// Why a trade was not recorded, changed or deleted.
 #[derive(Debug, thiserror::Error)]
@@ -105,6 +105,17 @@ pub enum Refused {
     /// The ledger refused the money.
     #[error("the ledger refused the trade's money: {0}")]
     RefusedByLedger(String),
+    /// The person's trash has no such trade: it was never deleted, it came
+    /// back already, or it has been erased.
+    #[error("no such trade in the trash")]
+    NotInTrash,
+    /// A trade recorded since the deletion has the key this one was recorded
+    /// under - an import read again - and stands for it.
+    #[error("a trade recorded since under the same key, {key}, stands for this one")]
+    KeyTaken {
+        /// The key.
+        key: String,
+    },
     /// Anything else: a fault, not the caller's.
     #[error(transparent)]
     Failed(#[from] anyhow::Error),
@@ -218,8 +229,10 @@ struct Checked {
     instrument: Instrument,
 }
 
-/// Checks what a person says a trade is.
-async fn check<B: Books, M: Market>(books: &B, market: &M, owner: Uuid, body: &TradeBody) -> Result<Checked, Refused> {
+/// What a trade says about itself holds together, before anything is asked
+/// of the books or the market: a buy has a price, a transfer goes somewhere
+/// else, a fee is not below nothing. Answers the fee, nothing when unsaid.
+fn shape(body: &TradeBody) -> Result<Decimal, Refused> {
     if body.quantity <= Decimal::ZERO {
         return Err(Refused::Malformed(austeris_common::Code::TradeNothingTraded, "a trade is of more than nothing"));
     }
@@ -289,6 +302,12 @@ async fn check<B: Books, M: Market>(books: &B, market: &M, owner: Uuid, body: &T
             }
         }
     }
+    Ok(fee)
+}
+
+/// Checks what a person says a trade is.
+async fn check<B: Books, M: Market>(books: &B, market: &M, owner: Uuid, body: &TradeBody) -> Result<Checked, Refused> {
+    let fee = shape(body)?;
     let occurred_at = body.occurred_at.with_timezone(&Utc);
     // A minute of grace for a clock on the person's side running ahead.
     if occurred_at > Utc::now() + Duration::minutes(1) {
@@ -538,6 +557,63 @@ pub async fn delete<B: Books, M: Market>(pool: &PgPool, books: &B, market: &M, o
         return Err(anyhow::Error::new(error).context("deleting a trade").into());
     }
     Ok(())
+}
+
+/// Brings a trade back from the trash: written back under its own id, as it
+/// was, and its money booked again under the key it was booked under - the
+/// entry the ledger let go of when the trade was deleted.
+///
+/// Checked as a trade being recorded is: an account closed since, or a sale
+/// whose units a later sale has taken meanwhile, is refused rather than
+/// brought back into books it no longer fits.
+///
+/// # Errors
+///
+/// Returns [`Refused::NotInTrash`] when the person's trash has no such trade,
+/// [`Refused::KeyTaken`] when another trade has its key since, and otherwise
+/// what [`record`] refuses.
+pub async fn restore<B: Books, M: Market>(pool: &PgPool, books: &B, market: &M, owner: Uuid, id: Uuid) -> Result<Trade, Refused> {
+    let mut transaction = Actor::Person(owner).begin(pool).await?;
+    trash::lock(&mut transaction, owner).await?;
+    let trashed = trash::trashed_for_update(&mut transaction, owner, id).await?.ok_or(Refused::NotInTrash)?;
+    let was = trashed.trade;
+
+    let body = TradeBody {
+        kind: was.kind,
+        account_id: was.account_id,
+        to_account_id: was.to_account_id,
+        instrument_id: was.instrument_id,
+        quantity: was.quantity,
+        price: was.price,
+        fee: Some(was.fee),
+        occurred_at: was.occurred_at.fixed_offset(),
+        note: was.note.clone(),
+    };
+    let Checked { instrument, .. } = check(books, market, owner, &body).await?;
+    let mut trade = match trash::write_back(&mut transaction, owner, &was).await {
+        Ok(trade) => trade,
+        Err(error) if repository::key_taken(&error, repository::TRADE_KEY_TAKEN) => {
+            return Err(Refused::KeyTaken {
+                key: was.idempotency_key.unwrap_or_default(),
+            });
+        }
+        Err(error) => return Err(oversold_or(error, &instrument.symbol)),
+    };
+
+    let leg = Leg::of(&trade, &instrument.symbol);
+    if let Some(leg) = &leg {
+        let entry = books.post(posting(owner, id, leg)).await.map_err(|status| refused_by_ledger(&status))?;
+        repository::set_entry(&mut transaction, id, Some(entry)).await?;
+        trade.entry_id = Some(entry);
+    }
+
+    if let Err(error) = transaction.commit().await {
+        if leg.is_some() {
+            undo(books.withdraw(owner, &key(id)).await.map(|_| ()), id);
+        }
+        return Err(anyhow::Error::new(error).context("restoring a trade").into());
+    }
+    Ok(with_money(trade))
 }
 
 /// How many trades are booked anew in one go.

@@ -341,8 +341,10 @@ pub enum RevisionAction {
     Created,
     /// Changed.
     Changed,
-    /// Deleted.
+    /// Deleted, and put in the trash.
     Deleted,
+    /// Back from the trash, under its own id.
+    Restored,
 }
 
 /// Who wrote something.
@@ -416,6 +418,30 @@ pub struct TradeRevision {
     pub before: Option<TradeState>,
     /// The trade after; absent for its deletion.
     pub after: Option<TradeState>,
+}
+
+/// A trade in the trash: what it was when it was deleted.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct TrashedTrade {
+    /// The trade as it was, under the id it comes back with. It has no entry:
+    /// its money left the books with it, and comes back with it.
+    pub trade: Trade,
+    /// When it was deleted.
+    pub deleted_at: DateTime<Utc>,
+    /// Who deleted it.
+    pub who: Who,
+    /// When it is erased for good, with its history, unless it is restored
+    /// first.
+    pub erased_after: DateTime<Utc>,
+}
+
+/// What is in the portfolio's trash.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct TradeTrash {
+    /// How many days the trash keeps a trade before erasing it.
+    pub keep_days: i32,
+    /// Deleted trades, the most recently deleted first.
+    pub trades: Vec<TrashedTrade>,
 }
 
 /// A broker's or a wallet's account, as the portfolio counts what is on it.

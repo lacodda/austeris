@@ -1130,3 +1130,150 @@ async fn trades_booked_before_fees_were_spending_are_booked_anew_once() {
         .expect("asked again");
     assert_eq!(again, 0, "nothing is booked twice");
 }
+
+#[tokio::test]
+async fn a_deleted_trade_comes_back_from_the_trash_with_its_money() {
+    let Some(world) = World::new("portfolio_trash").await else { return };
+    let bought = world.trade(keyed(buy(world.exchange, world.btc, "0.01", "60000", "1", 10), "import:7")).await;
+    let id = bought["id"].as_str().expect("an id").to_owned();
+    let (status, _) = world.call("DELETE", &format!("/portfolio/trades/{id}"), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(world.cash().await, decimal("1000"), "the money left with the trade");
+
+    // In the trash as it was, with what its money was, for the days the trash
+    // keeps anything.
+    let (status, trash) = world.call("GET", "/portfolio/trash", None).await;
+    assert_eq!(status, StatusCode::OK, "{trash}");
+    assert_eq!(trash["keep_days"], 30);
+    let trashed = &trash["trades"][0];
+    assert_eq!(trashed["trade"]["id"], id.as_str());
+    assert_eq!(number(&trashed["trade"]["money"]), decimal("-601"));
+    assert_eq!(trashed["trade"]["idempotency_key"], "import:7");
+    assert_eq!(
+        trashed["trade"]["entry_id"],
+        Value::Null,
+        "its money is not in the books while it is in the trash"
+    );
+    assert_eq!(trashed["who"]["kind"], "person");
+
+    // Back under its own id, its money booked again under the trade's key.
+    let (status, restored) = world.call("POST", &format!("/portfolio/trash/trades/{id}/restore"), None).await;
+    assert_eq!(status, StatusCode::OK, "{restored}");
+    assert_eq!(restored["id"], id.as_str());
+    assert_eq!(restored["occurred_on"], "2026-10-20", "it came back on its own day");
+    assert_eq!(world.cash().await, decimal("399"));
+    let entry_id: Uuid = restored["entry_id"].as_str().expect("an entry").parse().expect("an id");
+    let entry = austeris_ledger::repository::entry(&world.ledger_pool, world.owner, entry_id)
+        .await
+        .expect("reading")
+        .expect("the entry");
+    assert!(entry.kept, "the money is the trade's to keep again");
+    let (_, trash) = world.call("GET", "/portfolio/trash", None).await;
+    assert_eq!(trash["trades"].as_array().expect("trades").len(), 0, "{trash}");
+
+    // Its history goes on rather than starting again.
+    let (_, history) = world.call("GET", &format!("/portfolio/trades/{id}/history"), None).await;
+    let actions: Vec<&str> = history
+        .as_array()
+        .expect("a history")
+        .iter()
+        .map(|revision| revision["action"].as_str().expect("an action"))
+        .collect();
+    assert_eq!(actions, ["created", "deleted", "restored"]);
+    assert_eq!(history[2]["before"], Value::Null);
+    assert_eq!(history[2]["after"]["quantity"], "0.01");
+
+    // It is the trade its key names: an import read again finds it.
+    let (status, again) = world
+        .call(
+            "POST",
+            "/portfolio/trades",
+            Some(keyed(buy(world.exchange, world.btc, "0.01", "60000", "1", 10), "import:7")),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(again["id"], id.as_str());
+
+    // Not in the trash any more, it cannot come back twice.
+    let (status, body) = world.call("POST", &format!("/portfolio/trash/trades/{id}/restore"), None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["code"], "trade.not_in_trash");
+}
+
+#[tokio::test]
+async fn a_trade_comes_back_only_where_it_still_fits() {
+    let Some(world) = World::new("portfolio_trash_fits").await else { return };
+    world.trade(buy(world.exchange, world.btc, "0.01", "60000", "0", 10)).await;
+    let sold = world.trade(sell(world.exchange, world.btc, "0.01", "65000", "0", 20)).await;
+    let sale = sold["id"].as_str().expect("an id").to_owned();
+    let (status, _) = world.call("DELETE", &format!("/portfolio/trades/{sale}"), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    // The units it sold were sold again meanwhile: back, it would sell what
+    // was no longer held, and it stays in the trash.
+    world.trade(sell(world.exchange, world.btc, "0.01", "66000", "0", 30)).await;
+    let (status, body) = world.call("POST", &format!("/portfolio/trash/trades/{sale}/restore"), None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["code"], "trade.oversold");
+    let (_, trash) = world.call("GET", "/portfolio/trash", None).await;
+    assert_eq!(trash["trades"].as_array().expect("trades").len(), 1, "{trash}");
+
+    // Erased, it is gone with its history.
+    let (status, _) = world.call("DELETE", &format!("/portfolio/trash/trades/{sale}"), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, body) = world.call("POST", &format!("/portfolio/trash/trades/{sale}/restore"), None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    let (status, _) = world.call("GET", &format!("/portfolio/trades/{sale}/history"), None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // A trade recorded since under its key stands for it.
+    let first = world.trade(keyed(buy(world.exchange, world.btc, "0.02", "60000", "0", 40), "import:9")).await;
+    let first = first["id"].as_str().expect("an id").to_owned();
+    world.call("DELETE", &format!("/portfolio/trades/{first}"), None).await;
+    world.trade(keyed(buy(world.exchange, world.btc, "0.02", "60000", "0", 40), "import:9")).await;
+    let (status, body) = world.call("POST", &format!("/portfolio/trash/trades/{first}/restore"), None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["code"], "trade.key_taken");
+    assert_eq!(body["params"]["key"], "import:9");
+
+    // Emptied, nothing is left to bring back.
+    let (status, _) = world.call("DELETE", "/portfolio/trash", None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, trash) = world.call("GET", "/portfolio/trash", None).await;
+    assert_eq!(trash["trades"].as_array().expect("trades").len(), 0, "{trash}");
+}
+
+#[tokio::test]
+async fn the_trash_erases_a_trade_once_it_has_kept_it_long_enough() {
+    let Some(world) = World::new("portfolio_trash_sweep").await else { return };
+    let kept = world.trade(buy(world.exchange, world.btc, "0.01", "60000", "0", 10)).await;
+    let old = world.trade(buy(world.exchange, world.btc, "0.02", "60000", "0", 11)).await;
+    let recent = world.trade(buy(world.exchange, world.btc, "0.03", "60000", "0", 12)).await;
+    for trade in [&old, &recent] {
+        world
+            .call("DELETE", &format!("/portfolio/trades/{}", trade["id"].as_str().expect("an id")), None)
+            .await;
+    }
+    // One deletion a month old, as an operator's clock would leave it.
+    sqlx::query("UPDATE trade_revisions SET at = now() - interval '31 days' WHERE trade_id = $1 AND action = 'deleted'")
+        .bind(old["id"].as_str().expect("an id").parse::<Uuid>().expect("an id"))
+        .execute(&world.pool)
+        .await
+        .expect("ageing a deletion");
+
+    assert_eq!(austeris_portfolio::trash::sweep(&world.pool).await.expect("sweeping"), 1);
+    let (_, trash) = world.call("GET", "/portfolio/trash", None).await;
+    let left: Vec<&str> = trash["trades"]
+        .as_array()
+        .expect("trades")
+        .iter()
+        .map(|trashed| trashed["trade"]["id"].as_str().expect("an id"))
+        .collect();
+    assert_eq!(left, [recent["id"].as_str().expect("an id")], "{trash}");
+    // A live trade's history is not the sweep's to touch.
+    let (status, history) = world
+        .call("GET", &format!("/portfolio/trades/{}/history", kept["id"].as_str().expect("an id")), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{history}");
+    assert_eq!(austeris_portfolio::trash::sweep(&world.pool).await.expect("sweeping again"), 0);
+}

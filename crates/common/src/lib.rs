@@ -16,6 +16,7 @@ pub mod health;
 pub mod http;
 pub mod migrate;
 pub mod telemetry;
+pub mod trash;
 
 pub use actor::Actor;
 pub use caller::{Caller, USER_HEADER};

@@ -42,7 +42,7 @@ pub struct NewTrade {
 }
 
 /// The columns a trade is read with.
-const TRADE_COLUMNS: &str = "id, kind, account_id, to_account_id, instrument_id, quantity, price, currency, fee, occurred_at, occurred_on, note, entry_id, \
+pub(crate) const TRADE_COLUMNS: &str = "id, kind, account_id, to_account_id, instrument_id, quantity, price, currency, fee, occurred_at, occurred_on, note, entry_id, \
                              idempotency_key, created_at, updated_at";
 
 /// The constraint that says a trade's idempotency key is taken.

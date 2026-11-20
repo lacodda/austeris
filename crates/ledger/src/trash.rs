@@ -9,7 +9,7 @@ use crate::repository;
 
 /// How many days a deleted entry, or a file taken off one, can still come
 /// back. Then it is erased for good: the entry with its history and its files.
-pub const KEEP_DAYS: i32 = 30;
+pub use austeris_common::trash::KEEP_DAYS;
 
 /// How often the trash is looked through.
 const EVERY: Duration = Duration::from_hours(1);

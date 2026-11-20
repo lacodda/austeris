@@ -20,6 +20,7 @@ pub mod routes;
 pub mod services;
 pub mod snapshot;
 pub mod trade;
+pub mod trash;
 pub mod value;
 
 use sqlx::migrate::Migrator;

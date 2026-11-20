@@ -327,6 +327,8 @@ fn start_portfolio(pool: sqlx::PgPool, peers: &Peers) -> Result<Router> {
     // once, in the background: it ends when they are done, and the module
     // serves meanwhile - so it is not one of the tasks that stop the process.
     tokio::spawn(austeris_portfolio::trade::book_fees_apart_in_time(pool.clone(), books.clone(), market.clone()));
+    // Erases, every hour, the trades the trash has kept long enough.
+    tokio::spawn(austeris_portfolio::trash::every_hour(pool.clone()));
     Ok(austeris_portfolio::routes::router(pool, books, market))
 }
 

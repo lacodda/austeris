@@ -9,7 +9,7 @@ use austeris_common::{AppError, AppResult, Caller, Code, health};
 use axum::Router;
 use axum::extract::State;
 use axum::http::StatusCode;
-use axum::routing::{get, put};
+use axum::routing::{delete, get, post, put};
 use chrono::{Datelike, Days, NaiveDate, Utc};
 use serde::Deserialize;
 use sqlx::PgPool;
@@ -19,13 +19,16 @@ use crate::MIGRATOR;
 use crate::gains;
 use crate::model::{
     AccountBody, AccountValue, ClosedLot, Comparison, Difference, Gain, Gains, Holding, LineKind, Method, NewTradeBody, OpenLot, PortfolioAccount, Position,
-    PositionLots, RevisionAction, Snapshot, SnapshotSummary, Trade, TradeBody, TradeKind, TradeRevision, TradeState, Valuation, Who, WhoKind,
+    PositionLots, RevisionAction, Snapshot, SnapshotSummary, Trade, TradeBody, TradeKind, TradeRevision, TradeState, TradeTrash, TrashedTrade, Valuation, Who,
+    WhoKind,
 };
 use crate::repository::{self, TradeFilter};
 use crate::services::{Books, Market};
 use crate::snapshot;
 use crate::trade::{self, Recorded, Refused};
 use crate::value::{self, Unvalued};
+
+mod trash;
 
 /// What every handler is handed: this service's pool, the ledger and the
 /// market.
@@ -46,6 +49,9 @@ pub fn router<B: Books + Clone + 'static, M: Market + Clone + 'static>(pool: PgP
             get(read_trade::<B, M>).put(replace_trade::<B, M>).delete(delete_trade::<B, M>),
         )
         .route("/portfolio/trades/{id}/history", get(trade_history::<B, M>))
+        .route("/portfolio/trash", get(trash::list::<B, M>).delete(trash::empty::<B, M>))
+        .route("/portfolio/trash/trades/{id}", delete(trash::erase::<B, M>))
+        .route("/portfolio/trash/trades/{id}/restore", post(trash::restore::<B, M>))
         .route("/portfolio/positions", get(positions::<B, M>))
         .route("/portfolio/accounts", get(list_accounts::<B, M>))
         .route("/portfolio/accounts/{id}", put(set_account::<B, M>))
@@ -646,6 +652,8 @@ fn refused(refusal: Refused) -> AppError {
             AppError::conflict(Code::TradeOversold, message).with_params(serde_json::json!({ "symbol": symbol, "short": short, "at": at }))
         }
         Refused::RefusedByLedger(said) => AppError::bad_request(Code::TradeRefusedByLedger, message).with_params(serde_json::json!({ "message": said })),
+        Refused::NotInTrash => AppError::not_found(Code::TradeNotInTrash, message),
+        Refused::KeyTaken { key } => AppError::conflict(Code::TradeKeyTaken, message).with_params(serde_json::json!({ "key": key })),
         Refused::LedgerUnavailable => AppError::unavailable(Code::PortfolioLedgerUnavailable, message),
         Refused::MarketUnavailable => AppError::unavailable(Code::PortfolioMarketUnavailable, message),
         Refused::Failed(error) => AppError::internal(error),
@@ -677,6 +685,10 @@ fn unvalued(error: Unvalued) -> AppError {
         replace_trade,
         delete_trade,
         trade_history,
+        trash::list,
+        trash::restore,
+        trash::erase,
+        trash::empty,
         positions,
         list_accounts,
         set_account,
@@ -695,6 +707,8 @@ fn unvalued(error: Unvalued) -> AppError {
         NewTradeBody,
         TradeRevision,
         TradeState,
+        TradeTrash,
+        TrashedTrade,
         RevisionAction,
         Who,
         WhoKind,
