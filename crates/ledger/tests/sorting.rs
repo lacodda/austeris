@@ -131,6 +131,29 @@ fn spend(account: Uuid, on: Side, amount: &str, day: NaiveDate) -> NewEntry {
     }
 }
 
+/// Money moved between two of the person's accounts.
+fn transfer(from: Uuid, to: Uuid, amount: &str, day: NaiveDate) -> NewEntry {
+    NewEntry {
+        occurred_on: day,
+        lines: vec![
+            NewLine {
+                side: Side::Account(from),
+                amount: -decimal(amount),
+                currency: "PYG".to_owned(),
+                note: String::new(),
+            },
+            NewLine {
+                side: Side::Account(to),
+                amount: decimal(amount),
+                currency: "PYG".to_owned(),
+                note: String::new(),
+            },
+        ],
+        allow_duplicate: true,
+        ..NewEntry::default()
+    }
+}
+
 async fn post(pool: &PgPool, books: &Books, entry: &NewEntry) -> Uuid {
     repository::post_entry(pool, books.owner, &Actor::Person(books.owner), entry)
         .await
@@ -240,30 +263,7 @@ async fn a_batch_files_drafts_and_the_persons_own_lines_and_leaves_the_rest() {
     let books = books(&pool).await;
     let draft = post(&pool, &books, &spend(books.wallet, Side::Unsorted, "10000", day(18))).await;
     let filed = post(&pool, &books, &spend(books.wallet, Side::Category(books.food), "15000", day(18))).await;
-    let transfer = post(
-        &pool,
-        &books,
-        &NewEntry {
-            occurred_on: day(18),
-            lines: vec![
-                NewLine {
-                    side: Side::Account(books.wallet),
-                    amount: decimal("-5000"),
-                    currency: "PYG".to_owned(),
-                    note: String::new(),
-                },
-                NewLine {
-                    side: Side::Account(books.card),
-                    amount: decimal("5000"),
-                    currency: "PYG".to_owned(),
-                    note: String::new(),
-                },
-            ],
-            allow_duplicate: true,
-            ..NewEntry::default()
-        },
-    )
-    .await;
+    let transfer = post(&pool, &books, &transfer(books.wallet, books.card, "5000", day(18))).await;
     // An exchange's fee is filed under the ledger's own category, which a
     // batch leaves where it is.
     let fees = repository::purpose_category(&pool, books.owner, austeris_ledger::model::Purpose::ExchangeFees)
@@ -375,30 +375,7 @@ async fn a_batch_moves_money_to_another_account_of_the_same_currency() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["code"], "batch.same_account");
     // A transfer between the two would become one from an account to itself.
-    let transfer = post(
-        &pool,
-        &books,
-        &NewEntry {
-            occurred_on: day(20),
-            lines: vec![
-                NewLine {
-                    side: Side::Account(books.wallet),
-                    amount: decimal("-5000"),
-                    currency: "PYG".to_owned(),
-                    note: String::new(),
-                },
-                NewLine {
-                    side: Side::Account(books.card),
-                    amount: decimal("5000"),
-                    currency: "PYG".to_owned(),
-                    note: String::new(),
-                },
-            ],
-            allow_duplicate: true,
-            ..NewEntry::default()
-        },
-    )
-    .await;
+    let transfer = post(&pool, &books, &transfer(books.wallet, books.card, "5000", day(20))).await;
     let (status, body) = refused(json!({ "ids": [transfer], "move": { "from": books.wallet, "to": books.card } })).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["code"], "batch.onto_itself");

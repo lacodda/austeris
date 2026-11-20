@@ -150,12 +150,14 @@ pub fn line(input: &str) -> Result<Spoken, ParseError> {
     let plain = || read(&head, None, &rest);
     match rest.split_first() {
         Some((word, tail)) if is_currency_code(word) && !tail.is_empty() => match read(&head, Some(word.to_uppercase()), tail) {
+            // `45000 cup #home` says nothing it was for once `cup` is taken
+            // as the currency, so it was the category all along - not a
+            // draft of 45 000 Cuban pesos.
+            Ok(spoken) if spoken.category.is_none() && spoken.counterparty.is_none() => plain(),
             Ok(mut spoken) => {
                 spoken.if_not_a_currency = plain().ok().map(Box::new);
                 Ok(spoken)
             }
-            // `45000 cup #home` says nothing it was for once `cup` is taken
-            // as the currency, so it was the category all along.
             Err(_) => plain(),
         },
         _ => plain(),
