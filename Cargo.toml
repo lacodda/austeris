@@ -10,7 +10,7 @@ edition = "2024"
 rust-version = "1.94"
 license = "MIT"
 repository = "https://github.com/lacodda/austeris"
-homepage = "https://github.com/lacodda/austeris"
+homepage = "https://lacodda.github.io/austeris/"
 authors = ["Kirill Lakhtachev <lahtachev@gmail.com>"]
 
 [workspace.dependencies]
