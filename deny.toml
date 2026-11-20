@@ -10,7 +10,13 @@ unmaintained = "workspace"
 yanked = "deny"
 # An advisory accepted on purpose goes here, with the reason next to it:
 # { id = "RUSTSEC-0000-0000", reason = "no fixed release yet; the affected function is never called" },
-ignore = []
+ignore = [
+    # chrono is declared unmaintained, with no release to move to: the way out
+    # is jiff or time, and every date in the workspace - models, sqlx columns,
+    # serde - goes with it. A stage of its own, planned; chrono keeps working
+    # meanwhile, and no vulnerability is known in it.
+    { id = "RUSTSEC-2026-0543", reason = "unmaintained, not vulnerable; the move to jiff is planned as a stage of its own" },
+]
 
 [licenses]
 # Permissive licenses, and MPL-2.0, whose copyleft stops at the file it is in.
